@@ -1,4 +1,5 @@
 let portfolioChart = null;
+let debtChart = null;
 
 // Helper to show toast messages
 function showToast(message, isError = false) {
@@ -48,8 +49,8 @@ async function fetchStatus() {
             badge.classList.remove('critical-mode');
         }
 
-        // Update last check stat card
-        document.getElementById('statLastCheck').textContent = data.last_checked || 'Yapılmadı';
+        // Update last check subtext
+        document.getElementById('lastCheckSubtext').textContent = 'Son sorgu: ' + (data.last_checked || 'Yapılmadı');
 
     } catch (error) {
         console.error('Status fetch error:', error);
@@ -70,6 +71,7 @@ async function fetchHistory() {
         document.getElementById('statTotalHoldings').textContent = Number(latest.total_holdings.replace(/,/g, '')).toLocaleString('tr-TR') + ' BTC';
         document.getElementById('statTotalCost').textContent = latest.total_cost;
         document.getElementById('statAvgCost').textContent = latest.avg_cost;
+        document.getElementById('statTotalDebt').textContent = latest.total_debt || '-';
 
         // Populate Table
         const tbody = document.getElementById('historyTableBody');
@@ -86,7 +88,6 @@ async function fetchHistory() {
                 acquiredBadgeHtml = `<span class="badge-acquired">+${Number(item.btc_acquired.replace(/,/g, '')).toLocaleString('tr-TR')} BTC</span>`;
             }
 
-            // Shorten URL display
             const shortLinkHtml = `<a href="${item.url}" target="_blank" class="table-link"><i class="fa-solid fa-arrow-up-right-from-square"></i> Form 8-K</a>`;
 
             tr.innerHTML = `
@@ -99,8 +100,10 @@ async function fetchHistory() {
             tbody.appendChild(tr);
         });
 
-        // Initialize / Update Chart
-        renderChart(data);
+        // Initialize / Update Charts
+        const chartData = [...data].reverse(); // Chronological order
+        renderPortfolioChart(chartData);
+        renderDebtChart(chartData);
 
     } catch (error) {
         console.error('History fetch error:', error);
@@ -109,14 +112,10 @@ async function fetchHistory() {
 }
 
 // Render Portfolio Growth Chart using Chart.js
-function renderChart(data) {
-    // Reverse data to chronological order (oldest to newest) for chart
-    const chartData = [...data].reverse();
-
+function renderPortfolioChart(chartData) {
     const labels = chartData.map(d => d.filing_date);
     const holdings = chartData.map(d => Number(d.total_holdings.replace(/,/g, '')));
     const costs = chartData.map(d => {
-        // Parse float from cost string like "$64.10B" -> 64.10
         const raw = d.total_cost.replace(/[$,B,M]/g, '').strip();
         return parseFloat(raw) || 0;
     });
@@ -145,8 +144,8 @@ function renderChart(data) {
                 {
                     label: 'Toplam Kümülatif Maliyet ($ Milyar)',
                     data: costs,
-                    borderColor: '#7c4dff',
-                    backgroundColor: 'rgba(124, 77, 255, 0.04)',
+                    borderColor: '#2979ff',
+                    backgroundColor: 'rgba(41, 121, 255, 0.02)',
                     borderWidth: 2,
                     borderDash: [5, 5],
                     fill: false,
@@ -189,11 +188,74 @@ function renderChart(data) {
                     position: 'right',
                     grid: { drawOnChartArea: false },
                     ticks: {
+                        color: '#2979ff',
+                        font: { family: 'Inter', size: 10 },
+                        callback: function(value) { return '$' + value + 'B'; }
+                    },
+                    title: { display: true, text: 'Maliyet ($ Milyar)', color: '#2979ff' }
+                }
+            }
+        }
+    });
+}
+
+// Render Outstanding Debt Bar Chart using Chart.js
+function renderDebtChart(chartData) {
+    const labels = chartData.map(d => d.filing_date);
+    const debts = chartData.map(d => {
+        const raw = (d.total_debt || "").replace(/[$,B,M]/g, '').strip();
+        return parseFloat(raw) || 0;
+    });
+
+    const ctx = document.getElementById('debtChart').getContext('2d');
+
+    if (debtChart) {
+        debtChart.destroy();
+    }
+
+    const gradient = ctx.createLinearGradient(0, 0, 0, 250);
+    gradient.addColorStop(0, 'rgba(124, 77, 255, 0.45)');
+    gradient.addColorStop(1, 'rgba(124, 77, 255, 0.02)');
+
+    debtChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Toplam Borç (Tahvil)',
+                data: debts,
+                backgroundColor: gradient,
+                borderColor: '#7c4dff',
+                borderWidth: 2,
+                borderRadius: 6,
+                barThickness: 'flex',
+                maxBarThickness: 45
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    labels: {
+                        color: '#9ca3af',
+                        font: { family: 'Inter', size: 11 }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    grid: { color: 'rgba(255,255,255,0.03)' },
+                    ticks: { color: '#9ca3af', font: { family: 'Inter', size: 10 } }
+                },
+                y: {
+                    grid: { color: 'rgba(255,255,255,0.05)' },
+                    ticks: {
                         color: '#7c4dff',
                         font: { family: 'Inter', size: 10 },
                         callback: function(value) { return '$' + value + 'B'; }
                     },
-                    title: { display: true, text: 'Maliyet ($ Milyar)', color: '#7c4dff' }
+                    title: { display: true, text: 'Tahvil Borç Miktarı ($ Milyar)', color: '#7c4dff' }
                 }
             }
         }
@@ -214,7 +276,6 @@ function setupActions() {
             if (data.status === 'success') {
                 writeConsole(`Sorgulama tamamlandı: ${data.message}`);
                 showToast(data.message);
-                // Refresh data
                 fetchStatus();
                 fetchHistory();
             } else {
@@ -249,7 +310,6 @@ function setupActions() {
 
 // Initial initialization
 document.addEventListener('DOMContentLoaded', () => {
-    // String.prototype.strip helper
     if (typeof String.prototype.strip === 'undefined') {
         String.prototype.strip = function() {
             return this.trim();
@@ -260,7 +320,7 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchHistory();
     setupActions();
 
-    // Auto-refresh status and history every 30 seconds
+    // Auto-refresh status and history every 20 seconds
     setInterval(() => {
         fetchStatus();
     }, 20000);

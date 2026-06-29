@@ -74,9 +74,17 @@ def init_db():
         total_cost TEXT,
         avg_cost TEXT,
         url TEXT,
+        total_debt TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
+    
+    # Alter table to add total_debt in case it was created in previous runs without it
+    try:
+        cursor.execute("ALTER TABLE purchase_history ADD COLUMN total_debt TEXT")
+    except sqlite3.OperationalError:
+        pass
+        
     conn.commit()
     
     # Seed database if empty
@@ -90,28 +98,28 @@ def seed_database(conn):
     if count == 0:
         print("Seeding database with historical purchase data...")
         history = [
-            ("2026-06-22", "June 15, 2026 to June 21, 2026", "520", "$34.9M", "$67,068", "847,363", "$64.10B", "$75,651", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526276717/mstr-20260504.htm"),
-            ("2026-06-15", "June 8, 2026 to June 14, 2026", "1,587", "$100.0M", "$63,024", "846,842", "$64.07B", "$75,656", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526270311/mstr-20260504.htm"),
-            ("2026-06-08", "June 1, 2026 to June 7, 2026", "1,550", "$101.3M", "$65,332", "845,256", "$63.97B", "$75,680", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526260709/mstr-20260504.htm"),
-            ("2026-05-18", "May 11, 2026 to May 17, 2026", "24,869", "$2.01B", "$80,985", "843,738", "$63.87B", "$75,700", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526227918/mstr-20260504.htm"),
-            ("2026-05-11", "May 4, 2026 to May 10, 2026", "535", "$43.0M", "$80,340", "818,869", "$61.86B", "$75,540", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526215754/mstr-20260504.htm"),
-            ("2026-05-04", "April 27, 2026 to May 3, 2026", "0", "$0M", "$0", "818,334", "$61.81B", "$75,537", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526202611/mstr-20260504.htm"),
-            ("2026-04-27", "April 20, 2026 to April 26, 2026", "3,273", "$255.0M", "$77,906", "818,334", "$61.81B", "$75,537", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526178994/mstr-20260223.htm"),
-            ("2026-04-20", "April 13, 2026 to April 19, 2026", "34,164", "$2.54B", "$74,395", "815,061", "$61.56B", "$75,527", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526162756/mstr-20260223.htm"),
-            ("2026-04-13", "April 6, 2026 to April 12, 2026", "13,927", "$1.00B", "$71,902", "780,897", "$59.02B", "$75,577", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526152015/mstr-20260223.htm"),
-            ("2026-04-06", "March 30, 2026 to March 31, 2026", "0", "$0M", "$0", "762,099", "$57.69B", "$75,694", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526142925/mstr-20260406.htm"),
-            ("2026-03-23", "March 16, 2026 to March 22, 2026", "1,031", "$76.6M", "$74,326", "762,099", "$57.69B", "$75,694", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526118584/mstr-20260223.htm"),
-            ("2026-03-16", "March 9, 2026 to March 15, 2026", "22,337", "$1.57B", "$70,194", "761,068", "$57.61B", "$75,696", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526107263/mstr-20260223.htm"),
-            ("2026-03-02", "February 23, 2026 to March 1, 2026", "3,015", "$204.1M", "$67,700", "720,737", "$54.77B", "$75,985", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526084264/mstr-20260228.htm"),
-            ("2026-02-23", "February 17, 2026 to February 22, 2026", "592", "$39.8M", "$67,286", "717,722", "$54.56B", "$76,020", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526062489/mstr-20260223.htm"),
-            ("2026-02-17", "February 9, 2026 to February 16, 2026", "2,486", "$168.4M", "$67,710", "717,131", "$54.52B", "$76,027", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526053105/mstr-20260105.htm"),
-            ("2026-02-09", "February 2, 2026 to February 8, 2026", "1,142", "$90.0M", "$78,815", "714,644", "$54.35B", "$76,056", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526041944/mstr-20260105.htm")
+            ("2026-06-22", "June 15, 2026 to June 21, 2026", "520", "$34.9M", "$67,068", "847,363", "$64.10B", "$75,651", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526276717/mstr-20260504.htm", "$6.7B"),
+            ("2026-06-15", "June 8, 2026 to June 14, 2026", "1,587", "$100.0M", "$63,024", "846,842", "$64.07B", "$75,656", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526270311/mstr-20260504.htm", "$6.7B"),
+            ("2026-06-08", "June 1, 2026 to June 7, 2026", "1,550", "$101.3M", "$65,332", "845,256", "$63.97B", "$75,680", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526260709/mstr-20260504.htm", "$6.7B"),
+            ("2026-05-18", "May 11, 2026 to May 17, 2026", "24,869", "$2.01B", "$80,985", "843,738", "$63.87B", "$75,700", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526227918/mstr-20260504.htm", "$6.7B"),
+            ("2026-05-11", "May 4, 2026 to May 10, 2026", "535", "$43.0M", "$80,340", "818,869", "$61.86B", "$75,540", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526215754/mstr-20260504.htm", "$8.2B"),
+            ("2026-05-04", "April 27, 2026 to May 3, 2026", "0", "$0M", "$0", "818,334", "$61.81B", "$75,537", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526202611/mstr-20260504.htm", "$8.2B"),
+            ("2026-04-27", "April 20, 2026 to April 26, 2026", "3,273", "$255.0M", "$77,906", "818,334", "$61.81B", "$75,537", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526178994/mstr-20260223.htm", "$8.2B"),
+            ("2026-04-20", "April 13, 2026 to April 19, 2026", "34,164", "$2.54B", "$74,395", "815,061", "$61.56B", "$75,527", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526162756/mstr-20260223.htm", "$8.2B"),
+            ("2026-04-13", "April 6, 2026 to April 12, 2026", "13,927", "$1.00B", "$71,902", "780,897", "$59.02B", "$75,577", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526152015/mstr-20260223.htm", "$8.2B"),
+            ("2026-04-06", "March 30, 2026 to March 31, 2026", "0", "$0M", "$0", "762,099", "$57.69B", "$75,694", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526142925/mstr-20260406.htm", "$8.2B"),
+            ("2026-03-23", "March 16, 2026 to March 22, 2026", "1,031", "$76.6M", "$74,326", "762,099", "$57.69B", "$75,694", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526118584/mstr-20260223.htm", "$8.2B"),
+            ("2026-03-16", "March 9, 2026 to March 15, 2026", "22,337", "$1.57B", "$70,194", "761,068", "$57.61B", "$75,696", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526107263/mstr-20260223.htm", "$8.2B"),
+            ("2026-03-02", "February 23, 2026 to March 1, 2026", "3,015", "$204.1M", "$67,700", "720,737", "$54.77B", "$75,985", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526084264/mstr-20260228.htm", "$8.2B"),
+            ("2026-02-23", "February 17, 2026 to February 22, 2026", "592", "$39.8M", "$67,286", "717,722", "$54.56B", "$76,020", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526062489/mstr-20260223.htm", "$8.2B"),
+            ("2026-02-17", "February 9, 2026 to February 16, 2026", "2,486", "$168.4M", "$67,710", "717,131", "$54.52B", "$76,027", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526053105/mstr-20260105.htm", "$8.2B"),
+            ("2026-02-09", "February 2, 2026 to February 8, 2026", "1,142", "$90.0M", "$78,815", "714,644", "$54.35B", "$76,056", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526041944/mstr-20260105.htm", "$8.2B")
         ]
         for item in reversed(history):
             cursor.execute(
                 """INSERT INTO purchase_history 
-                   (filing_date, period, btc_acquired, purchase_price, avg_price, total_holdings, total_cost, avg_cost, url) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (filing_date, period, btc_acquired, purchase_price, avg_price, total_holdings, total_cost, avg_cost, url, total_debt) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 item
             )
             
@@ -128,7 +136,7 @@ def seed_database(conn):
                 (acc_dashed, item[0], url)
             )
         conn.commit()
-        print("Database seeded successfully with 16 records.")
+        print("Database seeded successfully with 16 records containing debt data.")
 
 # ----------------- PARSING & SEC SCRAPING -----------------
 
@@ -239,6 +247,14 @@ def parse_table_fallback(html_content):
                         
                     avg_cost = cleaned_values[5]
                     
+                    # Try to fetch last known debt as fallback value
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT total_debt FROM purchase_history ORDER BY id DESC LIMIT 1")
+                    last_row = cursor.fetchone()
+                    conn.close()
+                    last_debt = last_row["total_debt"] if last_row else "$6.7B"
+                    
                     return {
                         "event_type": "btc_purchase" if btc_acquired != '0' and btc_acquired != '-' else "no_purchase",
                         "purchase_period": period_text,
@@ -248,6 +264,7 @@ def parse_table_fallback(html_content):
                         "total_holdings": total_holdings,
                         "total_cost": total_cost,
                         "avg_cost": avg_cost,
+                        "total_debt": last_debt,
                         "financing_details": None,
                         "summary_turkish": None
                     }
@@ -265,6 +282,17 @@ def analyze_filing_with_groq(text, url):
         
     truncated_text = text[:15000]
     
+    # Get last known debt to help Llama 3 contextually
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT total_debt FROM purchase_history ORDER BY id DESC LIMIT 1")
+        last_row = cursor.fetchone()
+        conn.close()
+        last_debt = last_row["total_debt"] if last_row else "$6.7B"
+    except Exception:
+        last_debt = "$6.7B"
+    
     prompt = f"""You are an expert financial analyst. Analyze the following SEC Form 8-K filing from MicroStrategy (Strategy Inc.).
 Extract the Bitcoin purchase or sale details, financing details (ATM share sales, convertible debt, STRC/STRF preferred stock issuance), or corporate updates.
 
@@ -277,6 +305,7 @@ Return a JSON object with the following fields:
 - "total_btc_holdings": (string, total cumulative BTC holdings after this filing, e.g., "847,363", or null)
 - "total_cost_usd": (string, cumulative cost of all BTC, e.g., "$64.10B", or null)
 - "avg_cost_per_btc": (string, cumulative average cost per BTC, e.g., "$75,651", or null)
+- "total_debt_usd": (string, total outstanding convertible debt principal in billions of USD, e.g., "$6.7B". Note: If no new convertible debt offering is announced in this filing, keep it at the previous value: "{last_debt}")
 - "financing_details": (string, details of cash raised, notes issued, ATM sales, STRC/STRF preferred stock pricing/issuance, or null)
 - "summary_turkish": (string, 2-3 sentences in Turkish summarizing the event/corporate action)
 
@@ -353,6 +382,7 @@ MicroStrategy, yeni SEC bildirimine göre Bitcoin alımı gerçekleştirdi.
 - 📊 **Toplam Portföy**: {parsed_data.get('total_holdings') or parsed_data.get('total_btc_holdings') or 'Belirtilmemiş'} BTC
 - 📉 **Toplam Maliyet**: {parsed_data.get('total_cost') or parsed_data.get('total_cost_usd') or 'Belirtilmemiş'}
 - 🎯 **Ortalama Maliyet**: {parsed_data.get('avg_cost') or parsed_data.get('avg_cost_per_btc') or 'Belirtilmemiş'}
+- 🏦 **Toplam Borç (Tahvil)**: {parsed_data.get('total_debt') or parsed_data.get('total_debt_usd') or 'Belirtilmemiş'}
 - 💸 **Nakit Kaynağı / Seyreltme**: {parsed_data.get('financing_details') or 'Belirtilmemiş'}
 
 🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
@@ -367,6 +397,7 @@ MicroStrategy, yeni SEC bildirimine göre bu hafta Bitcoin alımı gerçekleşti
 - 📊 **Toplam Portföy**: {parsed_data.get('total_holdings') or parsed_data.get('total_btc_holdings') or 'Belirtilmemiş'} BTC
 - 📉 **Toplam Maliyet**: {parsed_data.get('total_cost') or parsed_data.get('total_cost_usd') or 'Belirtilmemiş'}
 - 🎯 **Ortalama Maliyet**: {parsed_data.get('avg_cost') or parsed_data.get('avg_cost_per_btc') or 'Belirtilmemiş'}
+- 🏦 **Toplam Borç (Tahvil)**: {parsed_data.get('total_debt') or parsed_data.get('total_debt_usd') or 'Belirtilmemiş'}
 - 💸 **Nakit Kaynağı / Seyreltme**: {parsed_data.get('financing_details') or 'Belirtilmemiş'}
 
 🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
@@ -427,9 +458,21 @@ def process_filing(accession, date, form, url):
             print("Local HTML parser succeeded:", parsed_data)
             
     if not parsed_data:
+        # Get last known debt as absolute fallback
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT total_debt FROM purchase_history ORDER BY id DESC LIMIT 1")
+            last_row = cursor.fetchone()
+            conn.close()
+            last_debt = last_row["total_debt"] if last_row else "$6.7B"
+        except Exception:
+            last_debt = "$6.7B"
+            
         parsed_data = {
             "event_type": "corporate_update",
-            "summary_turkish": "Filtrelenemeyen veya tablo içermeyen yeni 8-K bildirimi."
+            "summary_turkish": "Filtrelenemeyen veya tablo içermeyen yeni 8-K bildirimi.",
+            "total_debt_usd": last_debt
         }
         
     conn = get_db_connection()
@@ -440,23 +483,23 @@ def process_filing(accession, date, form, url):
         (accession, date, form, url)
     )
     
-    if parsed_data.get("event_type") in ["btc_purchase", "no_purchase"]:
-        cursor.execute(
-            """INSERT INTO purchase_history 
-               (filing_date, period, btc_acquired, purchase_price, avg_price, total_holdings, total_cost, avg_cost, url)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                date,
-                parsed_data.get("purchase_period"),
-                str(parsed_data.get("btc_acquired") or parsed_data.get("btc_acquired_count") or "-"),
-                str(parsed_data.get("purchase_price") or parsed_data.get("purchase_price_usd") or "-"),
-                str(parsed_data.get("avg_price") or parsed_data.get("avg_purchase_price") or "-"),
-                str(parsed_data.get("total_holdings") or parsed_data.get("total_btc_holdings") or "-"),
-                str(parsed_data.get("total_cost") or parsed_data.get("total_cost_usd") or "-"),
-                str(parsed_data.get("avg_cost") or parsed_data.get("avg_cost_per_btc") or "-"),
-                url
-            )
+    cursor.execute(
+        """INSERT INTO purchase_history 
+           (filing_date, period, btc_acquired, purchase_price, avg_price, total_holdings, total_cost, avg_cost, url, total_debt)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            date,
+            parsed_data.get("purchase_period"),
+            str(parsed_data.get("btc_acquired") or parsed_data.get("btc_acquired_count") or "-"),
+            str(parsed_data.get("purchase_price") or parsed_data.get("purchase_price_usd") or "-"),
+            str(parsed_data.get("avg_price") or parsed_data.get("avg_purchase_price") or "-"),
+            str(parsed_data.get("total_holdings") or parsed_data.get("total_btc_holdings") or "-"),
+            str(parsed_data.get("total_cost") or parsed_data.get("total_cost_usd") or "-"),
+            str(parsed_data.get("avg_cost") or parsed_data.get("avg_cost_per_btc") or "-"),
+            url,
+            str(parsed_data.get("total_debt") or parsed_data.get("total_debt_usd") or "-")
         )
+    )
     conn.commit()
     conn.close()
     
@@ -465,6 +508,7 @@ def process_filing(accession, date, form, url):
 
 def check_for_new_filings():
     global last_checked_time
+    last_checked_time = datetime.now().strftime("d.m.Y H:M:S")
     last_checked_time = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
     
     data = fetch_mstr_filings()
@@ -573,6 +617,7 @@ def get_purchase_history():
             "total_holdings": r["total_holdings"],
             "total_cost": r["total_cost"],
             "avg_cost": r["avg_cost"],
+            "total_debt": r["total_debt"] if "total_debt" in r.keys() else "$6.7B",
             "url": r["url"]
         })
     return jsonify(history_list)
@@ -582,7 +627,6 @@ def force_trigger():
     trigger_type = request.args.get("type", "poll")
     
     if trigger_type == "poll":
-        # Force a poll check immediately
         try:
             new_count = check_for_new_filings()
             return jsonify({
@@ -596,7 +640,6 @@ def force_trigger():
             }), 500
             
     elif trigger_type == "test":
-        # Mock test of the latest filing (June 22 report)
         test_url = "https://www.sec.gov/Archives/edgar/data/1050446/000119312526276717/mstr-20260504.htm"
         try:
             html_content = fetch_html(test_url)
@@ -613,8 +656,11 @@ def force_trigger():
                 parsed_data = parse_table_fallback(html_content)
                 
             if parsed_data:
+                # Add test debt value if not present
+                if "total_debt" not in parsed_data and "total_debt_usd" not in parsed_data:
+                    parsed_data["total_debt"] = "$6.7B"
+                    
                 alert_text = format_alert(parsed_data, test_url)
-                # Send test alert to Telegram with TEST prefix
                 test_alert_text = f"🧪 **[TEST BİLDİRİMİ]**\n\n{alert_text}"
                 send_telegram_alert(test_alert_text)
                 
@@ -691,6 +737,9 @@ if bot:
                     parsed_data = parse_table_fallback(html_content)
                     
                 if parsed_data:
+                    if "total_debt" not in parsed_data and "total_debt_usd" not in parsed_data:
+                        parsed_data["total_debt"] = "$6.7B"
+                        
                     alert_text = format_alert(parsed_data, test_url)
                     test_alert_text = f"🧪 **[TEST BİLDİRİMİ]**\n\n{alert_text}"
                     send_telegram_alert(test_alert_text)
@@ -723,6 +772,7 @@ if bot:
             f"🪙 **Toplam BTC Varlığı**: {latest['total_holdings']} BTC\n"
             f"📉 **Toplam Kümülatif Maliyet**: {latest['total_cost']}\n"
             f"🎯 **Ortalama Maliyet**: {latest['avg_cost']}\n"
+            f"🏦 **Toplam Borç (Tahvil)**: {latest['total_debt']}\n"
             f"📅 **Son Güncelleme**: {latest['filing_date']}\n\n"
             f"📜 **Son Alım/İşlem Geçmişi (Son 6 Bildirim):**\n"
         )

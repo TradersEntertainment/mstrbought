@@ -48,8 +48,6 @@
                     <div class="stat-info">
                         <h3>Toplam BTC Portföyü</h3>
                         <p class="value" id="statTotalHoldings">-</p>
-                    </div>
-                </div>
             </div>
             <div class="stat-card">
                 <div class="card-inner">
@@ -76,11 +74,11 @@
             <div class="stat-card">
                 <div class="card-inner">
                     <div class="icon-box blue">
-                        <i class="fa-solid fa-clock-rotate-left"></i>
+                        <i class="fa-solid fa-building-columns"></i>
                     </div>
                     <div class="stat-info">
-                        <h3>Son SEC Kontrolü</h3>
-                        <p class="value" id="statLastCheck">-</p>
+                        <h3>Toplam Borç (Tahvil)</h3>
+                        <p class="value" id="statTotalDebt">-</p>
                     </div>
                 </div>
             </div>
@@ -90,7 +88,7 @@
         <div class="actions-panel glass-panel">
             <div class="panel-header">
                 <h2><i class="fa-solid fa-gears"></i> Yönetim & Manuel Test Paneli</h2>
-                <p>Botu zorla tetikleyin veya en son bildirimi test edin.</p>
+                <p>Botu zorla tetikleyin veya en son bildirimi test edin. <span id="lastCheckSubtext" style="color: var(--text-secondary); font-size: 0.8rem; margin-left: 10px;">Son sorgu: -</span></p>
             </div>
             <div class="buttons-row">
                 <button class="btn btn-primary" id="btnForceCheck">
@@ -107,14 +105,25 @@
 
         <!-- Main Dashboard Content -->
         <div class="dashboard-main">
-            <!-- Left Panel: Chart -->
-            <div class="chart-panel glass-panel">
-                <div class="panel-header">
-                    <h2><i class="fa-solid fa-chart-line"></i> BTC Portföy Büyümesi</h2>
-                    <p>MicroStrategy kümülatif Bitcoin birikimi ve maliyet grafiği.</p>
+            <!-- Left Panel: Charts -->
+            <div class="charts-column">
+                <div class="chart-panel glass-panel">
+                    <div class="panel-header">
+                        <h2><i class="fa-solid fa-chart-line"></i> BTC Portföy Büyümesi</h2>
+                        <p>MicroStrategy kümülatif Bitcoin birikimi ve maliyet grafiği.</p>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="portfolioChart"></canvas>
+                    </div>
                 </div>
-                <div class="chart-container">
-                    <canvas id="portfolioChart"></canvas>
+                <div class="chart-panel glass-panel" style="margin-top: 1.5rem;">
+                    <div class="panel-header">
+                        <h2><i class="fa-solid fa-building-columns"></i> MSTR Toplam Borç Değişimi</h2>
+                        <p>MicroStrategy ihraç ettiği güncel tahvil borçlarının zaman serisi ($ Milyar).</p>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="debtChart"></canvas>
+                    </div>
                 </div>
             </div>
 
