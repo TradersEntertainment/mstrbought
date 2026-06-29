@@ -955,14 +955,26 @@ def force_trigger():
                 return jsonify({"status": "error", "message": "Test HTML'i SEC EDGAR'dan çekilemedi."}), 500
                 
             cleaned_text = clean_html(html_content)
+            fallback_data = parse_table_fallback(html_content)
             parsed_data = None
             
-            if GROQ_API_KEY:
+            if groq_keys:
                 parsed_data = analyze_filing_with_groq(cleaned_text, test_url)
                 
-            if not parsed_data:
-                parsed_data = parse_table_fallback(html_content)
-                
+            if fallback_data:
+                if parsed_data:
+                    if parsed_data.get("event_type") in ["corporate_update", "financing", None]:
+                        parsed_data["event_type"] = fallback_data["event_type"]
+                    parsed_data["purchase_period"] = fallback_data.get("purchase_period") or parsed_data.get("purchase_period")
+                    parsed_data["btc_acquired"] = fallback_data.get("btc_acquired") or parsed_data.get("btc_acquired")
+                    parsed_data["purchase_price"] = fallback_data.get("purchase_price") or fallback_data.get("purchase_price_usd") or parsed_data.get("purchase_price")
+                    parsed_data["avg_price"] = fallback_data.get("avg_price") or fallback_data.get("avg_purchase_price") or parsed_data.get("avg_price")
+                    parsed_data["total_holdings"] = fallback_data.get("total_holdings") or fallback_data.get("total_btc_holdings") or parsed_data.get("total_holdings")
+                    parsed_data["total_cost"] = fallback_data.get("total_cost") or fallback_data.get("total_cost_usd") or parsed_data.get("total_cost")
+                    parsed_data["avg_cost"] = fallback_data.get("avg_cost") or fallback_data.get("avg_cost_per_btc") or parsed_data.get("avg_cost")
+                else:
+                    parsed_data = fallback_data
+                    
             if parsed_data:
                 if "total_debt" not in parsed_data and "total_debt_usd" not in parsed_data:
                     parsed_data["total_debt"] = "$6.7B"
