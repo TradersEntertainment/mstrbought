@@ -88,6 +88,20 @@ async function fetchHistory() {
                 acquiredBadgeHtml = `<span class="badge-acquired">+${Number(item.btc_acquired.replace(/,/g, '')).toLocaleString('tr-TR')} BTC</span>`;
             }
 
+            // Format financing badge
+            const fSource = item.financing_source || '-';
+            let fBadgeClass = 'badge-source-none';
+            if (fSource.includes('&') || (fSource.includes('ATM') && fSource.includes('Tahvil')) || fSource.includes('Nakit')) {
+                fBadgeClass = 'badge-source-mixed';
+            } else if (fSource.includes('ATM') || fSource.includes('Hisse')) {
+                fBadgeClass = 'badge-source-atm';
+            } else if (fSource.includes('Tahvil') || fSource.includes('Notes') || fSource.includes('Debt')) {
+                fBadgeClass = 'badge-source-debt';
+            } else {
+                fBadgeClass = 'badge-source-none';
+            }
+            const financingBadgeHtml = `<span class="badge-source ${fBadgeClass}">${fSource}</span>`;
+
             const shortLinkHtml = `<a href="${item.url}" target="_blank" class="table-link"><i class="fa-solid fa-arrow-up-right-from-square"></i> Form 8-K</a>`;
 
             tr.innerHTML = `
@@ -95,6 +109,7 @@ async function fetchHistory() {
                 <td>${acquiredBadgeHtml}</td>
                 <td>${item.avg_price === '$0' ? '-' : item.avg_price}</td>
                 <td>${Number(item.total_holdings.replace(/,/g, '')).toLocaleString('tr-TR')} BTC</td>
+                <td>${financingBadgeHtml}</td>
                 <td>${shortLinkHtml}</td>
             `;
             tbody.appendChild(tr);
@@ -268,11 +283,20 @@ function setupActions() {
     const btnSimulateAlert = document.getElementById('btnSimulateAlert');
 
     btnForceCheck.addEventListener('click', async () => {
+        const password = prompt('Lütfen yönetici şifresini girin (Zorla Sorgu):');
+        if (password === null) return;
+        
         writeConsole('Zorla SEC kontrolü sorgusu gönderiliyor...');
         try {
-            const resp = await fetch('/api/trigger?type=poll', { method: 'POST' });
-            const data = await resp.json();
+            const resp = await fetch(`/api/trigger?type=poll&password=${encodeURIComponent(password)}`, { method: 'POST' });
             
+            if (resp.status === 401) {
+                writeConsole('Hata: Yetkisiz işlem. Şifre hatalı.');
+                showToast('Hatalı Şifre!', true);
+                return;
+            }
+            
+            const data = await resp.json();
             if (data.status === 'success') {
                 writeConsole(`Sorgulama tamamlandı: ${data.message}`);
                 showToast(data.message);
@@ -289,11 +313,20 @@ function setupActions() {
     });
 
     btnSimulateAlert.addEventListener('click', async () => {
+        const password = prompt('Lütfen yönetici şifresini girin (Test Alımı):');
+        if (password === null) return;
+        
         writeConsole('Groq ve Telegram entegrasyonu test ediliyor. Son SEC bildirimi okunuyor...');
         try {
-            const resp = await fetch('/api/trigger?type=test', { method: 'POST' });
-            const data = await resp.json();
+            const resp = await fetch(`/api/trigger?type=test&password=${encodeURIComponent(password)}`, { method: 'POST' });
             
+            if (resp.status === 401) {
+                writeConsole('Hata: Yetkisiz işlem. Şifre hatalı.');
+                showToast('Hatalı Şifre!', true);
+                return;
+            }
+            
+            const data = await resp.json();
             if (data.status === 'success') {
                 writeConsole(`Test Başarılı! Rapor Analizi:\n\n${data.preview}`);
                 showToast('Test alım bildirimi Telegram\'a atıldı!');

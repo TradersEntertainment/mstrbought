@@ -435,6 +435,39 @@ body {
     border-radius: 4px;
 }
 
+/* FINANCING SOURCE BADGES */
+.badge-source {
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    display: inline-block;
+}
+
+.badge-source-atm {
+    background: rgba(41, 121, 255, 0.1);
+    border: 1px solid rgba(41, 121, 255, 0.25);
+    color: #2979ff;
+}
+
+.badge-source-debt {
+    background: rgba(124, 77, 255, 0.1);
+    border: 1px solid rgba(124, 77, 255, 0.25);
+    color: #7c4dff;
+}
+
+.badge-source-mixed {
+    background: rgba(0, 229, 255, 0.1);
+    border: 1px solid rgba(0, 229, 255, 0.25);
+    color: #00e5ff;
+}
+
+.badge-source-none {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--text-secondary);
+}
+
 .table-link {
     color: #38bdf8;
     text-decoration: none;

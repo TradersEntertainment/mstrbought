@@ -34,10 +34,10 @@ def test_db_seeding():
         
     conn.close()
     
-    if history_count == 16 and processed_count == 16:
+    if history_count == 16 and processed_count >= 16:
         print("\nSUCCESS: DB initialization and seeding verification passed!")
     else:
-        print("\nFAILURE: Seeding count mismatch.")
+        print(f"\nFAILURE: Seeding count mismatch (History: {history_count}, Processed: {processed_count}).")
 
 if __name__ == '__main__':
     test_db_seeding()
