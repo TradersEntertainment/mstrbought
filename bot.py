@@ -59,9 +59,18 @@ def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Self-healing: Check if database contains corrupt data (such as NaN or '-' in total_holdings)
+    # Self-healing: Check if database contains corrupt data or is missing June 1/June 29 records
     should_reset = False
     try:
+        cursor.execute("SELECT COUNT(*) FROM purchase_history WHERE filing_date = '2026-06-01'")
+        has_june_1 = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM purchase_history WHERE filing_date = '2026-06-29'")
+        has_june_29 = cursor.fetchone()[0]
+        
+        if has_june_1 == 0 or has_june_29 == 0:
+            print("Database is missing June 1 (sale) or June 29 (weekly update) records. Triggering rebuild...")
+            should_reset = True
+            
         cursor.execute("SELECT COUNT(*) FROM purchase_history WHERE total_holdings = '-' OR total_holdings LIKE '%NaN%'")
         corrupt_count = cursor.fetchone()[0]
         if corrupt_count > 0:
@@ -137,10 +146,11 @@ def seed_database(conn):
     if count == 0:
         print("Seeding database with historical purchase data...")
         history = [
+            ("2026-06-29", "June 22, 2026 to June 28, 2026", "0", "$0M", "$0", "847,363", "$64.10B", "$75,651", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526280000/mstr-20260629.htm", "$6.7B", "-"),
             ("2026-06-22", "June 15, 2026 to June 21, 2026", "520", "$34.9M", "$67,068", "847,363", "$64.10B", "$75,651", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526276717/mstr-20260504.htm", "$6.7B", "ATM Hisse Satışı"),
             ("2026-06-15", "June 8, 2026 to June 14, 2026", "1,587", "$100.0M", "$63,024", "846,842", "$64.07B", "$75,656", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526270311/mstr-20260504.htm", "$6.7B", "ATM Hisse Satışı"),
             ("2026-06-08", "June 1, 2026 to June 7, 2026", "1,550", "$101.3M", "$65,332", "845,256", "$63.97B", "$75,680", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526260709/mstr-20260504.htm", "$6.7B", "ATM Hisse Satışı"),
-            ("2026-06-01", "May 26, 2026 to May 31, 2026", "-32", "$2.5M", "$77,135", "843,706", "$63.85B", "$75,670", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526202611/mstr-20260504.htm", "$6.7B", "İmtiyazlı Hisse (STRC) Temettüsü"),
+            ("2026-06-01", "May 26, 2026 to May 31, 2026", "-32", "$2.5M", "$77,135", "843,706", "$63.85B", "$75,670", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526249768/mstr-20260530.htm", "$6.7B", "İmtiyazlı Hisse (STRC) Temettüsü"),
             ("2026-05-18", "May 11, 2026 to May 17, 2026", "24,869", "$2.01B", "$80,985", "843,738", "$63.87B", "$75,700", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526227918/mstr-20260504.htm", "$6.7B", "ATM Hisse Satışı & Nakit Rezervleri"),
             ("2026-05-11", "May 4, 2026 to May 10, 2026", "535", "$43.0M", "$80,340", "818,869", "$61.86B", "$75,540", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526215754/mstr-20260504.htm", "$8.2B", "ATM Hisse Satışı"),
             ("2026-05-04", "April 27, 2026 to May 3, 2026", "0", "$0M", "$0", "818,334", "$61.81B", "$75,537", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526202611/mstr-20260504.htm", "$8.2B", "-"),
