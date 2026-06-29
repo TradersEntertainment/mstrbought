@@ -398,8 +398,7 @@ You must return ONLY the raw JSON object. Do not include markdown code block mar
 def send_telegram_alert(message_text):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram bot not configured.")
-        print(f"Alert text:\n{message_text}")
-        return
+        return False
         
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -410,10 +409,28 @@ def send_telegram_alert(message_text):
     }
     try:
         resp = requests.post(url, json=payload, timeout=10)
-        if resp.status_code != 200:
-            print(f"Failed to send Telegram alert: {resp.text}")
+        if resp.status_code == 200:
+            return True
+        else:
+            print(f"Telegram Markdown send failed (Status {resp.status_code}): {resp.text}. Retrying as plain text...")
+            # Fallback: strip markdown formatting to guarantee delivery
+            plain_text = message_text.replace("**", "").replace("`", "").replace("🔗 ", "").replace("[", "").replace("]", "")
+            plain_text = re.sub(r'\((https?://.*?)\)', r': \1', plain_text)
+            
+            payload_plain = {
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": plain_text
+            }
+            resp_plain = requests.post(url, json=payload_plain, timeout=10)
+            if resp_plain.status_code == 200:
+                print("Fallback plain text send succeeded.")
+                return True
+            else:
+                print(f"Telegram fallback send failed (Status {resp_plain.status_code}): {resp_plain.text}")
+                return False
     except Exception as e:
         print(f"Error sending Telegram alert: {e}")
+        return False
 
 def format_alert(parsed_data, url):
     event_type = parsed_data.get("event_type")
@@ -721,7 +738,14 @@ def force_trigger():
                     
                 alert_text = format_alert(parsed_data, test_url)
                 test_alert_text = f"🧪 **[TEST BİLDİRİMİ]**\n\n{alert_text}"
-                send_telegram_alert(test_alert_text)
+                
+                # Verify Telegram Alert Sending
+                sent_successfully = send_telegram_alert(test_alert_text)
+                if not sent_successfully:
+                    return jsonify({
+                        "status": "error",
+                        "message": "Analiz başarılı fakat Telegram'a bildirim gönderilemedi. Bot token ve chat ID ayarlarınızı veya botun grup yetkisini kontrol edin."
+                    }), 500
                 
                 return jsonify({
                     "status": "success",

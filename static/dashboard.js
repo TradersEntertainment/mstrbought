@@ -68,7 +68,15 @@ async function fetchHistory() {
 
         // Update Stat Cards (with latest record)
         const latest = data[0];
-        document.getElementById('statTotalHoldings').textContent = Number(latest.total_holdings.replace(/,/g, '')).toLocaleString('tr-TR') + ' BTC';
+        const rawHoldings = latest.total_holdings || '-';
+        const cleanHoldings = rawHoldings.replace(/,/g, '');
+        const holdingsNum = parseFloat(cleanHoldings);
+        if (!isNaN(holdingsNum)) {
+            document.getElementById('statTotalHoldings').textContent = holdingsNum.toLocaleString('tr-TR') + ' BTC';
+        } else {
+            document.getElementById('statTotalHoldings').textContent = rawHoldings + ' BTC';
+        }
+        
         document.getElementById('statTotalCost').textContent = latest.total_cost;
         document.getElementById('statAvgCost').textContent = latest.avg_cost;
         document.getElementById('statTotalDebt').textContent = latest.total_debt || '-';
