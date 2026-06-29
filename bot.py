@@ -571,6 +571,33 @@ def process_filing(accession, date, form, url):
         if parsed_data:
             print("Groq analysis succeeded:", parsed_data)
             
+            # CRITICAL SAFEGUARD: Prevent false panic alarms for BTC sales.
+            # LLMs can easily mistake stock ATM sales ("sold shares of common stock") for Bitcoin sales.
+            if parsed_data.get("event_type") == "btc_sale":
+                text_lower = cleaned_text.lower()
+                btc_sale_keywords = [
+                    "sold bitcoin", "sale of bitcoin", "sold approximately", "disposed of bitcoin",
+                    "disposition of bitcoin", "bitcoin sale", "sell bitcoin", "sale of any bitcoin"
+                ]
+                has_real_btc_sale = False
+                for kw in btc_sale_keywords:
+                    if kw in text_lower:
+                        if kw == "sold approximately":
+                            # Check if the word "approximately" is followed by shares or stock instead of BTC
+                            stock_match = re.search(r'sold approximately\s+[\d,]+\s*(shares|class a|common stock|preferred stock)', text_lower)
+                            if stock_match:
+                                continue
+                        has_real_btc_sale = True
+                        break
+                
+                if not has_real_btc_sale:
+                    print("CRITICAL SAFEGUARD TRIGGERED: Overriding false btc_sale event type.")
+                    # Override to financing if it mentions sales agreements or stock, else corporate_update
+                    if "sales agreement" in text_lower or "preferred stock" in text_lower or "notes" in text_lower:
+                        parsed_data["event_type"] = "financing"
+                    else:
+                        parsed_data["event_type"] = "corporate_update"
+            
     if not parsed_data:
         print("Falling back to local HTML parsing...")
         parsed_data = parse_table_fallback(html_content)
