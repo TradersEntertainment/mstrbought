@@ -650,7 +650,7 @@ def async_groq_analysis(cleaned_text, url, reply_to_id, table_data=None):
         event_type = (table_data or {}).get("event_type") or "no_purchase"
         
         if event_type == "btc_purchase":
-            title = "💡 **[AI Analizi & Detaylı Rapor - Alım Bildirimi]**"
+            title = f"💡 **[AI Analizi] MSTR BTC ALDI: +{acquired} BTC!**"
             stats_block = f"""**Finansal Detaylar:**
 - 📅 **Dönem**: {period}
 - 🪙 **Satın Alınan**: +{acquired} BTC
@@ -662,7 +662,7 @@ def async_groq_analysis(cleaned_text, url, reply_to_id, table_data=None):
 - 🏦 **Toplam Borç (Tahvil)**: {debt}
 - 💸 **Finansman Kaynağı**: {source}"""
         elif event_type == "btc_sale":
-            title = "💡 **[AI Analizi & Detaylı Rapor - Satış Bildirimi]**"
+            title = f"💡 **[AI Analizi] MSTR BTC SATTI: -{acquired} BTC!**"
             stats_block = f"""**Finansal Detaylar:**
 - 📅 **Dönem**: {period}
 - 🪙 **Satılan Miktar**: -{acquired} BTC
@@ -672,7 +672,7 @@ def async_groq_analysis(cleaned_text, url, reply_to_id, table_data=None):
 - 📉 **Kümülatif Maliyet**: {cost}
 - 🏦 **Toplam Borç (Tahvil)**: {debt}"""
         else:
-            title = "💡 **[AI Analizi & Detaylı Rapor - Alım Yapılmadı]**"
+            title = "💡 **[AI Analizi] MSTR Bu Hafta Alım Yapmadı**"
             stats_block = f"""**Finansal Detaylar:**
 - 📅 **Dönem**: {period}
 - 📊 **Toplam Portföy**: {holdings} BTC
