@@ -97,9 +97,17 @@ async function fetchHistory() {
                 const cleanAcq = rawAcq.replace(/,/g, '');
                 const acqNum = parseFloat(cleanAcq);
                 if (!isNaN(acqNum)) {
-                    acquiredBadgeHtml = `<span class="badge-acquired">+${acqNum.toLocaleString('tr-TR')} BTC</span>`;
+                    if (acqNum < 0) {
+                        acquiredBadgeHtml = `<span class="badge-sold">${acqNum.toLocaleString('tr-TR')} BTC</span>`;
+                    } else {
+                        acquiredBadgeHtml = `<span class="badge-acquired">+${acqNum.toLocaleString('tr-TR')} BTC</span>`;
+                    }
                 } else {
-                    acquiredBadgeHtml = `<span class="badge-acquired">+${rawAcq} BTC</span>`;
+                    if (rawAcq.startsWith('-')) {
+                        acquiredBadgeHtml = `<span class="badge-sold">${rawAcq} BTC</span>`;
+                    } else {
+                        acquiredBadgeHtml = `<span class="badge-acquired">+${rawAcq} BTC</span>`;
+                    }
                 }
             }
 
