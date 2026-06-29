@@ -1,0 +1,653 @@
+import os
+import time
+import json
+import sqlite3
+import threading
+import urllib.request
+import re
+from datetime import datetime, timezone, timedelta
+from bs4 import BeautifulSoup
+import telebot
+import requests
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+DB_PATH = os.getenv("DB_PATH", "mstr_state.db")
+
+POLL_INTERVAL_NORMAL = int(os.getenv("POLL_INTERVAL_NORMAL", "300"))
+POLL_INTERVAL_CRITICAL = int(os.getenv("POLL_INTERVAL_CRITICAL", "2"))
+
+# Global states
+current_mode = "Normal Mode"
+last_checked_time = None
+running = True
+
+# Initialize Telegram Bot
+bot = None
+if TELEGRAM_BOT_TOKEN:
+    bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
+
+# ----------------- DB MANAGEMENT -----------------
+
+def get_db_connection():
+    # Make sure parent directory of database exists
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Table for processed filings
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS processed_filings (
+        accession_number TEXT PRIMARY KEY,
+        filing_date TEXT,
+        form TEXT,
+        url TEXT,
+        parsed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    
+    # Table for purchase history
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS purchase_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        filing_date TEXT,
+        period TEXT,
+        btc_acquired TEXT,
+        purchase_price TEXT,
+        avg_price TEXT,
+        total_holdings TEXT,
+        total_cost TEXT,
+        avg_cost TEXT,
+        url TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    conn.commit()
+    
+    # Seed database if empty
+    seed_database(conn)
+    conn.close()
+
+def seed_database(conn):
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM purchase_history")
+    count = cursor.fetchone()[0]
+    if count == 0:
+        print("Seeding database with historical purchase data...")
+        history = [
+            ("2026-06-22", "June 15, 2026 to June 21, 2026", "520", "$34.9M", "$67,068", "847,363", "$64.10B", "$75,651", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526276717/mstr-20260504.htm"),
+            ("2026-06-15", "June 8, 2026 to June 14, 2026", "1,587", "$100.0M", "$63,024", "846,842", "$64.07B", "$75,656", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526270311/mstr-20260504.htm"),
+            ("2026-06-08", "June 1, 2026 to June 7, 2026", "1,550", "$101.3M", "$65,332", "845,256", "$63.97B", "$75,680", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526260709/mstr-20260504.htm"),
+            ("2026-05-18", "May 11, 2026 to May 17, 2026", "24,869", "$2.01B", "$80,985", "843,738", "$63.87B", "$75,700", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526227918/mstr-20260504.htm"),
+            ("2026-05-11", "May 4, 2026 to May 10, 2026", "535", "$43.0M", "$80,340", "818,869", "$61.86B", "$75,540", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526215754/mstr-20260504.htm"),
+            ("2026-05-04", "April 27, 2026 to May 3, 2026", "0", "$0M", "$0", "818,334", "$61.81B", "$75,537", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526202611/mstr-20260504.htm"),
+            ("2026-04-27", "April 20, 2026 to April 26, 2026", "3,273", "$255.0M", "$77,906", "818,334", "$61.81B", "$75,537", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526178994/mstr-20260223.htm"),
+            ("2026-04-20", "April 13, 2026 to April 19, 2026", "34,164", "$2.54B", "$74,395", "815,061", "$61.56B", "$75,527", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526162756/mstr-20260223.htm"),
+            ("2026-04-13", "April 6, 2026 to April 12, 2026", "13,927", "$1.00B", "$71,902", "780,897", "$59.02B", "$75,577", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526152015/mstr-20260223.htm"),
+            ("2026-04-06", "March 30, 2026 to March 31, 2026", "0", "$0M", "$0", "762,099", "$57.69B", "$75,694", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526142925/mstr-20260406.htm"),
+            ("2026-03-23", "March 16, 2026 to March 22, 2026", "1,031", "$76.6M", "$74,326", "762,099", "$57.69B", "$75,694", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526118584/mstr-20260223.htm"),
+            ("2026-03-16", "March 9, 2026 to March 15, 2026", "22,337", "$1.57B", "$70,194", "761,068", "$57.61B", "$75,696", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526107263/mstr-20260223.htm"),
+            ("2026-03-02", "February 23, 2026 to March 1, 2026", "3,015", "$204.1M", "$67,700", "720,737", "$54.77B", "$75,985", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526084264/mstr-20260228.htm"),
+            ("2026-02-23", "February 17, 2026 to February 22, 2026", "592", "$39.8M", "$67,286", "717,722", "$54.56B", "$76,020", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526062489/mstr-20260223.htm"),
+            ("2026-02-17", "February 9, 2026 to February 16, 2026", "2,486", "$168.4M", "$67,710", "717,131", "$54.52B", "$76,027", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526053105/mstr-20260105.htm"),
+            ("2026-02-09", "February 2, 2026 to February 8, 2026", "1,142", "$90.0M", "$78,815", "714,644", "$54.35B", "$76,056", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526041944/mstr-20260105.htm")
+        ]
+        for item in reversed(history):
+            cursor.execute(
+                """INSERT INTO purchase_history 
+                   (filing_date, period, btc_acquired, purchase_price, avg_price, total_holdings, total_cost, avg_cost, url) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                item
+            )
+            
+            # Extract mock dashed accession number from URL
+            url = item[8]
+            parts = url.split('/')
+            acc_no_dash = parts[-2]
+            if len(acc_no_dash) == 18:
+                acc_dashed = f"{acc_no_dash[:10]}-{acc_no_dash[10:12]}-{acc_no_dash[12:]}"
+            else:
+                acc_dashed = acc_no_dash
+            
+            cursor.execute(
+                "INSERT OR IGNORE INTO processed_filings (accession_number, filing_date, form, url) VALUES (?, ?, '8-K', ?)",
+                (acc_dashed, item[0], url)
+            )
+        conn.commit()
+        print("Database seeded successfully with 16 records.")
+
+# ----------------- PARSING & SEC scraping -----------------
+
+def clean_html(html_content):
+    clean = re.sub(r'<(script|style).*?>.*?</\1>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+    clean = re.sub(r'<[^>]+>', ' ', clean)
+    clean = re.sub(r'\s+', ' ', clean)
+    return clean.strip()
+
+def fetch_mstr_filings():
+    cik = "0001050446"
+    url = f"https://data.sec.gov/submissions/CIK{cik}.json"
+    headers = {
+        'User-Agent': 'Antigravity Telegram Bot antigravity@tradersentertainment.com',
+    }
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req) as response:
+            return json.loads(response.read().decode('utf-8'))
+    except Exception as e:
+        print(f"Error fetching SEC JSON: {e}")
+        return None
+
+def fetch_html(url):
+    headers = {
+        'User-Agent': 'Antigravity Telegram Bot antigravity@tradersentertainment.com',
+    }
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req) as response:
+            return response.read().decode('utf-8')
+    except Exception as e:
+        print(f"Error fetching filing HTML: {e}")
+        return ""
+
+def clean_row_values(row):
+    cleaned = []
+    i = 0
+    while i < len(row):
+        val = row[i].strip()
+        if not val:
+            i += 1
+            continue
+        if val == '$':
+            i += 1
+            if i < len(row):
+                next_val = row[i].strip()
+                cleaned.append(f"${next_val}")
+            else:
+                cleaned.append('$')
+        elif val == '-' or val == '—':
+            cleaned.append('-')
+        else:
+            cleaned.append(val)
+        i += 1
+    
+    final_cleaned = []
+    for item in cleaned:
+        if item == '$-' or item == '$':
+            final_cleaned.append('-')
+        else:
+            final_cleaned.append(item)
+    return final_cleaned
+
+def parse_table_fallback(html_content):
+    soup = BeautifulSoup(html_content, 'html.parser')
+    tables = soup.find_all('table')
+    
+    for table in tables:
+        text = table.get_text()
+        if "BTC Acquired" in text and ("BTC Holdings" in text or "Aggregate BTC Holdings" in text):
+            rows = table.find_all('tr')
+            row_data = []
+            for r in rows:
+                cols = [col.get_text().strip().replace('\n', ' ') for col in r.find_all(['td', 'th'])]
+                cols = [re.sub(r'\s+', ' ', c) for c in cols if c.strip()]
+                if cols:
+                    row_data.append(cols)
+            
+            if len(row_data) >= 3:
+                try:
+                    period_text = row_data[0][0].replace("During Period ", "").strip()
+                    headers = row_data[1]
+                    raw_values = row_data[2]
+                    cleaned_values = clean_row_values(raw_values)
+                    
+                    if len(cleaned_values) < 6:
+                        cleaned_values += ['-'] * (6 - len(cleaned_values))
+                        
+                    btc_acquired = cleaned_values[0]
+                    
+                    # Purchase Price
+                    price_header = headers[1].lower()
+                    unit = "M" if "millions" in price_header else ("B" if "billions" in price_header else "")
+                    purch_price = cleaned_values[1]
+                    if purch_price != '-' and unit and not purch_price.endswith(unit):
+                        purch_price = f"{purch_price}{unit}"
+                        
+                    avg_price = cleaned_values[2]
+                    total_holdings = cleaned_values[3]
+                    
+                    # Total Cost
+                    total_cost_header = headers[4].lower()
+                    total_cost_unit = "M" if "millions" in total_cost_header else ("B" if "billions" in total_cost_header else "")
+                    total_cost = cleaned_values[4]
+                    if total_cost != '-' and total_cost_unit and not total_cost.endswith(total_cost_unit):
+                        total_cost = f"{total_cost}{total_cost_unit}"
+                        
+                    avg_cost = cleaned_values[5]
+                    
+                    return {
+                        "event_type": "btc_purchase" if btc_acquired != '0' and btc_acquired != '-' else "no_purchase",
+                        "purchase_period": period_text,
+                        "btc_acquired": btc_acquired,
+                        "purchase_price": purch_price,
+                        "avg_price": avg_price,
+                        "total_holdings": total_holdings,
+                        "total_cost": total_cost,
+                        "avg_cost": avg_cost,
+                        "financing_details": None,
+                        "summary_turkish": None
+                    }
+                except Exception as e:
+                    print(f"Fallback table parsing exception: {e}")
+                    
+    return None
+
+# ----------------- GROQ API INTEGRATION -----------------
+
+def analyze_filing_with_groq(text, url):
+    if not GROQ_API_KEY:
+        print("Groq API Key is not configured.")
+        return None
+        
+    truncated_text = text[:15000]
+    
+    prompt = f"""You are an expert financial analyst. Analyze the following SEC Form 8-K filing from MicroStrategy (Strategy Inc.).
+Extract the Bitcoin purchase or sale details, financing details (ATM share sales, convertible debt, STRC/STRF preferred stock issuance), or corporate updates.
+
+Return a JSON object with the following fields:
+- "event_type": "btc_purchase", "no_purchase" (explicitly stated they didn't buy), "btc_sale", "financing" (raised cash, didn't buy BTC), or "corporate_update" (routine, meetings, dividends)
+- "purchase_period": (string, e.g., "June 15, 2026 to June 21, 2026" or null)
+- "btc_acquired": (string/integer, number of BTC bought/sold, e.g., "520", or null)
+- "purchase_price_usd": (string, total transaction amount, e.g., "$34.9M" or "$2.01B", or null)
+- "avg_purchase_price": (string, average price per BTC, e.g., "$67,068", or null)
+- "total_btc_holdings": (string, total cumulative BTC holdings after this filing, e.g., "847,363", or null)
+- "total_cost_usd": (string, cumulative cost of all BTC, e.g., "$64.10B", or null)
+- "avg_cost_per_btc": (string, cumulative average cost per BTC, e.g., "$75,651", or null)
+- "financing_details": (string, details of cash raised, notes issued, ATM sales, STRC/STRF preferred stock pricing/issuance, or null)
+- "summary_turkish": (string, 2-3 sentences in Turkish summarizing the event/corporate action)
+
+Filing URL: {url}
+
+Filing text:
+{truncated_text}
+
+You must return ONLY the raw JSON object. Do not include markdown code block markers or any preamble.
+"""
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "model": "llama3-70b-8192",
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.1
+    }
+    
+    try:
+        response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=30)
+        if response.status_code == 200:
+            result = response.json()
+            content = result['choices'][0]['message']['content'].strip()
+            return json.loads(content)
+        else:
+            print(f"Groq API error status {response.status_code}: {response.text}")
+            return None
+    except Exception as e:
+        print(f"Groq API exception: {e}")
+        return None
+
+# ----------------- TELEGRAM ALERTS -----------------
+
+def send_telegram_alert(message_text):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram bot not configured.")
+        print(f"Alert text:\n{message_text}")
+        return
+        
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message_text,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": False
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code != 200:
+            print(f"Failed to send Telegram alert: {resp.text}")
+    except Exception as e:
+        print(f"Error sending Telegram alert: {e}")
+
+def format_alert(parsed_data, url):
+    event_type = parsed_data.get("event_type")
+    
+    if event_type == "btc_purchase":
+        return f"""🚀 **MSTR BTC ALDI!**
+
+MicroStrategy, yeni SEC bildirimine göre Bitcoin alımı gerçekleştirdi.
+
+**Detaylar:**
+- 📅 **Dönem**: {parsed_data.get('purchase_period') or 'Belirtilmemiş'}
+- 🪙 **Miktar**: {parsed_data.get('btc_acquired')} BTC
+- 💰 **Ödenen Tutar**: {parsed_data.get('purchase_price') or parsed_data.get('purchase_price_usd') or 'Belirtilmemiş'}
+- 🏷️ **Ortalama Fiyat**: {parsed_data.get('avg_price') or parsed_data.get('avg_purchase_price') or 'Belirtilmemiş'}
+- 📊 **Toplam Portföy**: {parsed_data.get('total_holdings') or parsed_data.get('total_btc_holdings') or 'Belirtilmemiş'} BTC
+- 📉 **Toplam Maliyet**: {parsed_data.get('total_cost') or parsed_data.get('total_cost_usd') or 'Belirtilmemiş'}
+- 🎯 **Ortalama Maliyet**: {parsed_data.get('avg_cost') or parsed_data.get('avg_cost_per_btc') or 'Belirtilmemiş'}
+- 💸 **Nakit Kaynağı / Seyreltme**: {parsed_data.get('financing_details') or 'Belirtilmemiş'}
+
+🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
+
+    elif event_type == "no_purchase":
+        return f"""ℹ️ **MSTR Bu Hafta Alım Yapmadı**
+
+MicroStrategy, yeni SEC bildirimine göre bu hafta Bitcoin alımı gerçekleştirmedi.
+
+**Detaylar:**
+- 📅 **Dönem**: {parsed_data.get('purchase_period') or 'Belirtilmemiş'}
+- 📊 **Toplam Portföy**: {parsed_data.get('total_holdings') or parsed_data.get('total_btc_holdings') or 'Belirtilmemiş'} BTC
+- 📉 **Toplam Maliyet**: {parsed_data.get('total_cost') or parsed_data.get('total_cost_usd') or 'Belirtilmemiş'}
+- 🎯 **Ortalama Maliyet**: {parsed_data.get('avg_cost') or parsed_data.get('avg_cost_per_btc') or 'Belirtilmemiş'}
+- 💸 **Nakit Kaynağı / Seyreltme**: {parsed_data.get('financing_details') or 'Belirtilmemiş'}
+
+🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
+
+    elif event_type == "financing":
+        return f"""💵 **MSTR Yeni Finansman / Hisse İhraç Bildirimi**
+
+MicroStrategy, yeni bir finansman veya hisse satışı (ATM / Tahvil / STRC / STRF Preferred Stock vb.) bildirimi yayınladı.
+
+**Özet (Analist Yorumu):**
+{parsed_data.get('summary_turkish') or parsed_data.get('financing_details') or 'Ayrıntı belirtilmemiş.'}
+
+🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
+
+    elif event_type == "corporate_update":
+        return f"""ℹ️ **MSTR Kurumsal Güncelleme Yayınladı**
+
+MicroStrategy (Strategy Inc.) yeni bir SEC kurumsal güncelleme bildirimi yayınladı.
+
+**Detaylar:**
+{parsed_data.get('summary_turkish') or 'Rutin kurumsal güncelleme.'}
+
+🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
+
+    else:
+        # Fallback raw description
+        return f"""ℹ️ **MSTR Yeni SEC Bildirimi (Form 8-K)**
+
+MicroStrategy yeni bir Form 8-K bildiriminde bulundu.
+
+**Özet:**
+{parsed_data.get('summary_turkish') or 'Detaylar için bildirimi inceleyin.'}
+
+🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
+
+# ----------------- MONITORS ENGINE -----------------
+
+def process_filing(accession, date, form, url):
+    print(f"Processing new filing: {accession} | Date: {date} | Form: {form}")
+    
+    html_content = fetch_html(url)
+    if not html_content:
+        print(f"Could not load HTML for {url}")
+        return
+        
+    cleaned_text = clean_html(html_content)
+    parsed_data = None
+    
+    # 1. Try Groq analysis first
+    if GROQ_API_KEY:
+        print("Calling Groq API for analysis...")
+        parsed_data = analyze_filing_with_groq(cleaned_text, url)
+        if parsed_data:
+            print("Groq analysis succeeded:", parsed_data)
+            
+    # 2. Fallback to HTML table parser
+    if not parsed_data:
+        print("Falling back to local HTML parsing...")
+        parsed_data = parse_table_fallback(html_content)
+        if parsed_data:
+            print("Local HTML parser succeeded:", parsed_data)
+            
+    # 3. Fallback raw dictionary
+    if not parsed_data:
+        parsed_data = {
+            "event_type": "corporate_update",
+            "summary_turkish": "Filtrelenemeyen veya tablo içermeyen yeni 8-K bildirimi."
+        }
+        
+    # Write to DB history table if purchase/no_purchase event
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Save the filing to processed list
+    cursor.execute(
+        "INSERT OR IGNORE INTO processed_filings (accession_number, filing_date, form, url) VALUES (?, ?, ?, ?)",
+        (accession, date, form, url)
+    )
+    
+    # If it contains purchase details, insert into history table
+    if parsed_data.get("event_type") in ["btc_purchase", "no_purchase"]:
+        cursor.execute(
+            """INSERT INTO purchase_history 
+               (filing_date, period, btc_acquired, purchase_price, avg_price, total_holdings, total_cost, avg_cost, url)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                date,
+                parsed_data.get("purchase_period"),
+                str(parsed_data.get("btc_acquired") or parsed_data.get("btc_acquired_count") or "-"),
+                str(parsed_data.get("purchase_price") or parsed_data.get("purchase_price_usd") or "-"),
+                str(parsed_data.get("avg_price") or parsed_data.get("avg_purchase_price") or "-"),
+                str(parsed_data.get("total_holdings") or parsed_data.get("total_btc_holdings") or "-"),
+                str(parsed_data.get("total_cost") or parsed_data.get("total_cost_usd") or "-"),
+                str(parsed_data.get("avg_cost") or parsed_data.get("avg_cost_per_btc") or "-"),
+                url
+            )
+        )
+    conn.commit()
+    conn.close()
+    
+    # Format and Send Telegram alert
+    alert_text = format_alert(parsed_data, url)
+    send_telegram_alert(alert_text)
+
+def check_for_new_filings():
+    global last_checked_time
+    last_checked_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    data = fetch_mstr_filings()
+    if not data:
+        return
+        
+    recent = data.get('filings', {}).get('recent', {})
+    if not recent:
+        return
+        
+    forms = recent.get('form', [])
+    accession_numbers = recent.get('accessionNumber', [])
+    filing_dates = recent.get('filingDate', [])
+    primary_docs = recent.get('primaryDocument', [])
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Read already processed accession numbers
+    cursor.execute("SELECT accession_number FROM processed_filings")
+    processed = set(row['accession_number'] for row in cursor.fetchall())
+    conn.close()
+    
+    # Process only 8-K filings
+    new_filings_found = []
+    for idx, form in enumerate(forms):
+        if form == '8-K':
+            acc_num = accession_numbers[idx]
+            if acc_num not in processed:
+                filing_date = filing_dates[idx]
+                doc = primary_docs[idx]
+                acc_num_no_dash = acc_num.replace('-', '')
+                url = f"https://www.sec.gov/Archives/edgar/data/1050446/{acc_num_no_dash}/{doc}"
+                new_filings_found.append((acc_num, filing_date, form, url))
+                
+    # Process new filings starting from the oldest to maintain chronological order in DB
+    for acc, date, form, url in reversed(new_filings_found):
+        process_filing(acc, date, form, url)
+        # Sleep slightly between filings
+        time.sleep(1)
+
+def polling_loop():
+    global current_mode, running
+    print("Starting SEC Polling Loop...")
+    
+    # Turkey timezone (UTC+3)
+    trt_tz = timezone(timedelta(hours=3))
+    
+    while running:
+        try:
+            now_trt = datetime.now(timezone.utc).astimezone(trt_tz)
+            
+            # Check if we are in the critical window (14:59 to 15:10, Mon-Fri)
+            is_weekday = now_trt.weekday() < 5  # Monday is 0, Friday is 4
+            is_critical_time = (
+                (now_trt.hour == 14 and now_trt.minute >= 59) or
+                (now_trt.hour == 15 and now_trt.minute <= 10)
+            )
+            
+            if is_weekday and is_critical_time:
+                # High-Speed Mode
+                if current_mode != "High-Speed Mode":
+                    print(f"Entering HIGH-SPEED POLLING MODE at {now_trt.strftime('%H:%M:%S')} TRT")
+                    current_mode = "High-Speed Mode"
+                interval = POLL_INTERVAL_CRITICAL
+            else:
+                # Normal Mode
+                if current_mode != "Normal Mode":
+                    print(f"Entering NORMAL POLLING MODE at {now_trt.strftime('%H:%M:%S')} TRT")
+                    current_mode = "Normal Mode"
+                interval = POLL_INTERVAL_NORMAL
+                
+            check_for_new_filings()
+            
+        except Exception as e:
+            print(f"Exception in polling loop: {e}")
+            interval = POLL_INTERVAL_NORMAL
+            
+        time.sleep(interval)
+
+# ----------------- TELEGRAM BOT COMMANDS -----------------
+
+if bot:
+    @bot.message_handler(commands=['start', 'help'])
+    def send_welcome(message):
+        bot.reply_to(
+            message,
+            "📊 **MSTR SEC Filings Monitor Bot**\n\n"
+            "Bu bot MicroStrategy SEC bildirimlerini (Form 8-K) gerçek zamanlı takip eder. "
+            "TR Saatiyle 14:59 - 15:10 arasında 2 saniyede bir yüksek hızlı sorgulama yapar.\n\n"
+            "**Komutlar:**\n"
+            "/data veya /history - Son BTC alım geçmişini ve toplam portföy durumunu gösterir.\n"
+            "/status - Botun çalışma durumunu ve anlık modunu gösterir.",
+            parse_mode="Markdown"
+        )
+
+    @bot.message_handler(commands=['status'])
+    def send_status(message):
+        trt_tz = timezone(timedelta(hours=3))
+        now_trt = datetime.now(timezone.utc).astimezone(trt_tz)
+        
+        bot.reply_to(
+            message,
+            f"🤖 **Bot Durum Raporu**\n\n"
+            f"🟢 **Durum**: Çalışıyor\n"
+            f"⚡ **Aktif Mod**: {current_mode}\n"
+            f"⏰ **Sunucu Saati (TR)**: {now_trt.strftime('%d.%m.%Y %H:%M:%S')}\n"
+            f"🔄 **Son SEC Kontrolü**: {last_checked_time or 'Yapılmadı'}\n"
+            f"📁 **Veritabanı Yolu**: `{DB_PATH}`",
+            parse_mode="Markdown"
+        )
+
+    @bot.message_handler(commands=['data', 'history'])
+    def send_history(message):
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Get latest purchase for summary
+        cursor.execute("SELECT * FROM purchase_history ORDER BY id DESC LIMIT 1")
+        latest = cursor.fetchone()
+        
+        # Get recent 6 purchases
+        cursor.execute("SELECT * FROM purchase_history ORDER BY id DESC LIMIT 6")
+        recent_purchases = cursor.fetchall()
+        conn.close()
+        
+        if not latest:
+            bot.reply_to(message, "Veritabanında kayıtlı alım geçmişi bulunamadı.")
+            return
+            
+        # Format summary
+        summary = (
+            f"📊 **MSTR Güncel Portföy Özeti**\n"
+            f"🪙 **Toplam BTC Varlığı**: {latest['total_holdings']} BTC\n"
+            f"📉 **Toplam Kümülatif Maliyet**: {latest['total_cost']}\n"
+            f"🎯 **Ortalama Maliyet**: {latest['avg_cost']}\n"
+            f"📅 **Son Güncelleme**: {latest['filing_date']}\n\n"
+            f"📜 **Son Alım/İşlem Geçmişi (Son 6 Bildirim):**\n"
+        )
+        
+        for idx, item in enumerate(recent_purchases):
+            date = item['filing_date']
+            acquired = item['btc_acquired']
+            avg_price = item['avg_price']
+            
+            if acquired == '0' or acquired == '-':
+                summary += f"{idx+1}. 📅 {date} | Alım yapılmadı ℹ️\n"
+            else:
+                summary += f"{idx+1}. 📅 {date} | **+{acquired} BTC** (Ort. {avg_price}) 🚀\n"
+                
+        bot.reply_to(message, summary, parse_mode="Markdown")
+
+    def run_telegram_bot():
+        print("Starting Telegram Bot listener thread...")
+        while running:
+            try:
+                bot.infinity_polling()
+            except Exception as e:
+                print(f"Telegram Bot polling error: {e}")
+                time.sleep(5)
+
+# ----------------- MAIN RUNNER -----------------
+
+if __name__ == '__main__':
+    print("Initializing MSTR SEC Filings Monitor Bot...")
+    init_db()
+    
+    # Start Telegram Listener Thread
+    if bot:
+        telegram_thread = threading.Thread(target=run_telegram_bot, daemon=True)
+        telegram_thread.start()
+    else:
+        print("WARNING: TELEGRAM_BOT_TOKEN is not configured. Telegram commands will not work.")
+        
+    # Run Polling Loop in main thread
+    try:
+        polling_loop()
+    except KeyboardInterrupt:
+        print("Shutting down bot...")
+        running = False
