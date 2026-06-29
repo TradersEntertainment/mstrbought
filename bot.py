@@ -59,6 +59,23 @@ def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
     
+    # Self-healing: Check if database contains corrupt data (such as NaN or '-' in total_holdings)
+    should_reset = False
+    try:
+        cursor.execute("SELECT COUNT(*) FROM purchase_history WHERE total_holdings = '-' OR total_holdings LIKE '%NaN%'")
+        corrupt_count = cursor.fetchone()[0]
+        if corrupt_count > 0:
+            print(f"Database corruption detected: {corrupt_count} records have NaN/invalid holdings. Triggering reset...")
+            should_reset = True
+    except sqlite3.OperationalError:
+        pass
+        
+    if should_reset:
+        print("Self-healing: Dropping tables to rebuild a clean state...")
+        cursor.execute("DROP TABLE IF EXISTS purchase_history")
+        cursor.execute("DROP TABLE IF EXISTS processed_filings")
+        conn.commit()
+    
     # Table for processed filings
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS processed_filings (
@@ -102,8 +119,15 @@ def init_db():
         
     conn.commit()
     
+    # Seed database
     seed_database(conn)
-    mark_current_filings_processed(conn)
+    
+    # If the processed filings table is fresh (e.g. less than 100 entries), mark all current Edgar index filings as processed
+    cursor.execute("SELECT COUNT(*) FROM processed_filings")
+    proc_count = cursor.fetchone()[0]
+    if proc_count < 100:
+        mark_current_filings_processed(conn)
+        
     conn.close()
 
 def seed_database(conn):

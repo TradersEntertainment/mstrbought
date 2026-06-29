@@ -88,15 +88,22 @@ async function fetchHistory() {
         data.forEach(item => {
             const tr = document.createElement('tr');
             
-            // Format acquired badge
+            // Format acquired badge safely
             let acquiredBadgeHtml = '';
-            if (item.btc_acquired === '0' || item.btc_acquired === '-') {
+            const rawAcq = item.btc_acquired || '-';
+            if (rawAcq === '0' || rawAcq === '-') {
                 acquiredBadgeHtml = `<span class="badge-no-acquired">0 BTC</span>`;
             } else {
-                acquiredBadgeHtml = `<span class="badge-acquired">+${Number(item.btc_acquired.replace(/,/g, '')).toLocaleString('tr-TR')} BTC</span>`;
+                const cleanAcq = rawAcq.replace(/,/g, '');
+                const acqNum = parseFloat(cleanAcq);
+                if (!isNaN(acqNum)) {
+                    acquiredBadgeHtml = `<span class="badge-acquired">+${acqNum.toLocaleString('tr-TR')} BTC</span>`;
+                } else {
+                    acquiredBadgeHtml = `<span class="badge-acquired">+${rawAcq} BTC</span>`;
+                }
             }
 
-            // Format financing badge
+            // Format financing badge safely
             const fSource = item.financing_source || '-';
             let fBadgeClass = 'badge-source-none';
             if (fSource.includes('&') || (fSource.includes('ATM') && fSource.includes('Tahvil')) || fSource.includes('Nakit')) {
@@ -110,13 +117,19 @@ async function fetchHistory() {
             }
             const financingBadgeHtml = `<span class="badge-source ${fBadgeClass}">${fSource}</span>`;
 
+            // Format total holdings safely
+            const rawTot = item.total_holdings || '-';
+            const cleanTot = rawTot.replace(/,/g, '');
+            const totNum = parseFloat(cleanTot);
+            const totText = !isNaN(totNum) ? totNum.toLocaleString('tr-TR') + ' BTC' : rawTot + ' BTC';
+
             const shortLinkHtml = `<a href="${item.url}" target="_blank" class="table-link"><i class="fa-solid fa-arrow-up-right-from-square"></i> Form 8-K</a>`;
 
             tr.innerHTML = `
                 <td><strong>${item.filing_date}</strong></td>
                 <td>${acquiredBadgeHtml}</td>
                 <td>${item.avg_price === '$0' ? '-' : item.avg_price}</td>
-                <td>${Number(item.total_holdings.replace(/,/g, '')).toLocaleString('tr-TR')} BTC</td>
+                <td>${totText}</td>
                 <td>${financingBadgeHtml}</td>
                 <td>${shortLinkHtml}</td>
             `;
