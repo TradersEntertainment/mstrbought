@@ -190,35 +190,31 @@ def seed_database(conn):
 
 def mark_current_filings_processed(conn):
     cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM processed_filings")
-    count = cursor.fetchone()[0]
-    
-    if count <= 16:
-        print("Marking all existing SEC filings in EDGAR index as processed to prevent backfilling...")
-        data = fetch_mstr_filings()
-        if data:
-            recent = data.get('filings', {}).get('recent', {})
-            forms = recent.get('form', [])
-            accession_numbers = recent.get('accessionNumber', [])
-            filing_dates = recent.get('filingDate', [])
-            primary_docs = recent.get('primaryDocument', [])
-            
-            count_marked = 0
-            for idx, form in enumerate(forms):
-                if form == '8-K':
-                    acc_num = accession_numbers[idx]
-                    date = filing_dates[idx]
-                    doc = primary_docs[idx]
-                    acc_num_no_dash = acc_num.replace('-', '')
-                    url = f"https://www.sec.gov/Archives/edgar/data/1050446/{acc_num_no_dash}/{doc}"
-                    
-                    cursor.execute(
-                        "INSERT OR IGNORE INTO processed_filings (accession_number, filing_date, form, url) VALUES (?, ?, '8-K', ?)",
-                        (acc_num, date, url)
-                    )
-                    count_marked += 1
-            conn.commit()
-            print(f"Successfully marked {count_marked} existing filings in EDGAR as processed.")
+    print("Marking all existing SEC filings in EDGAR index as processed to prevent backfilling...")
+    data = fetch_mstr_filings()
+    if data:
+        recent = data.get('filings', {}).get('recent', {})
+        forms = recent.get('form', [])
+        accession_numbers = recent.get('accessionNumber', [])
+        filing_dates = recent.get('filingDate', [])
+        primary_docs = recent.get('primaryDocument', [])
+        
+        count_marked = 0
+        for idx, form in enumerate(forms):
+            if form == '8-K':
+                acc_num = accession_numbers[idx]
+                date = filing_dates[idx]
+                doc = primary_docs[idx]
+                acc_num_no_dash = acc_num.replace('-', '')
+                url = f"https://www.sec.gov/Archives/edgar/data/1050446/{acc_num_no_dash}/{doc}"
+                
+                cursor.execute(
+                    "INSERT OR IGNORE INTO processed_filings (accession_number, filing_date, form, url) VALUES (?, ?, '8-K', ?)",
+                    (acc_num, date, url)
+                )
+                count_marked += 1
+        conn.commit()
+        print(f"Successfully marked {count_marked} existing filings in EDGAR as processed.")
 
 # ----------------- PARSING & SEC SCRAPING -----------------
 
