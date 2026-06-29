@@ -564,9 +564,22 @@ MicroStrategy, yeni SEC bildirimine göre bu hafta Bitcoin alımı gerçekleşti
 def process_filing(accession, date, form, url):
     print(f"Processing new filing: {accession} | Date: {date} | Form: {form}")
     
-    # Optimization: Instant notification on filing detection
-    preliminary_text = f"⚠️ **MSTR Yeni SEC Bildirimi (Form 8-K) Yayınlandı!**\n\nFiling analiz ediliyor...\n🔗 [Filing Linki]({url})"
-    send_telegram_alert(preliminary_text)
+    # Anti-Spam Safeguard: Only send Telegram alerts for filings from today or yesterday
+    should_alert = True
+    try:
+        filing_dt = datetime.strptime(date, "%Y-%m-%d").date()
+        today = datetime.now().date()
+        if filing_dt < today - timedelta(days=1):
+            print(f"Filing date {date} is older than yesterday. Suppressing Telegram alert to prevent spam.")
+            should_alert = False
+    except Exception as e:
+        print(f"Error parsing filing date for spam check: {e}")
+        should_alert = False
+        
+    if should_alert:
+        # Optimization: Instant notification on filing detection
+        preliminary_text = f"⚠️ **MSTR Yeni SEC Bildirimi (Form 8-K) Yayınlandı!**\n\nFiling analiz ediliyor...\n🔗 [Filing Linki]({url})"
+        send_telegram_alert(preliminary_text)
     
     html_content = fetch_html(url)
     if not html_content:
@@ -624,11 +637,11 @@ def process_filing(accession, date, form, url):
             # Merge deterministic stats to ensure 100% accuracy in the alert message
             parsed_data["purchase_period"] = fallback_data.get("purchase_period") or parsed_data.get("purchase_period")
             parsed_data["btc_acquired"] = fallback_data.get("btc_acquired") or parsed_data.get("btc_acquired")
-            parsed_data["purchase_price"] = fallback_data.get("purchase_price") or parsed_data.get("purchase_price_usd") or parsed_data.get("purchase_price")
-            parsed_data["avg_price"] = fallback_data.get("avg_price") or parsed_data.get("avg_purchase_price") or parsed_data.get("avg_price")
-            parsed_data["total_holdings"] = fallback_data.get("total_holdings") or parsed_data.get("total_btc_holdings") or parsed_data.get("total_holdings")
-            parsed_data["total_cost"] = fallback_data.get("total_cost") or parsed_data.get("total_cost_usd") or parsed_data.get("total_cost")
-            parsed_data["avg_cost"] = fallback_data.get("avg_cost") or parsed_data.get("avg_cost_per_btc") or parsed_data.get("avg_cost")
+            parsed_data["purchase_price"] = fallback_data.get("purchase_price") or fallback_data.get("purchase_price_usd") or parsed_data.get("purchase_price")
+            parsed_data["avg_price"] = fallback_data.get("avg_price") or fallback_data.get("avg_purchase_price") or parsed_data.get("avg_price")
+            parsed_data["total_holdings"] = fallback_data.get("total_holdings") or fallback_data.get("total_btc_holdings") or parsed_data.get("total_holdings")
+            parsed_data["total_cost"] = fallback_data.get("total_cost") or fallback_data.get("total_cost_usd") or parsed_data.get("total_cost")
+            parsed_data["avg_cost"] = fallback_data.get("avg_cost") or fallback_data.get("avg_cost_per_btc") or parsed_data.get("avg_cost")
         else:
             parsed_data = fallback_data
             
@@ -682,7 +695,8 @@ def process_filing(accession, date, form, url):
     conn.close()
     
     alert_text = format_alert(parsed_data, url)
-    send_telegram_alert(alert_text)
+    if should_alert:
+        send_telegram_alert(alert_text)
 
 def check_for_new_filings():
     global last_checked_time
