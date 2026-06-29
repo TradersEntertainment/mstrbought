@@ -481,6 +481,26 @@ def format_alert(parsed_data, url):
 
 🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
 
+    elif event_type == "btc_sale":
+        acquired = parsed_data.get('btc_acquired') or '-'
+        price = parsed_data.get('purchase_price') or parsed_data.get('purchase_price_usd') or '-'
+        avg = parsed_data.get('avg_price') or parsed_data.get('avg_purchase_price') or '-'
+        holdings = parsed_data.get('total_holdings') or parsed_data.get('total_btc_holdings') or '-'
+        
+        return f"""🚨 **MSTR BITCOIN SATTI: -{acquired} BTC!** (Tutar: {price} | Ort: {avg})
+ℹ️ Kalan Toplam Portföy: {holdings} BTC.
+
+**Detaylı Rapor:**
+- 📅 **Dönem**: {parsed_data.get('purchase_period') or 'Belirtilmemiş'}
+- 🪙 **Satılan Miktar**: {acquired} BTC
+- 💰 **Elde Edilen Tutar**: {price}
+- 🏷️ **Ortalama Satış Fiyatı**: {avg}
+- 📊 **Kalan Toplam Portföy**: {holdings} BTC
+- 📉 **Toplam Kümülatif Maliyet**: {parsed_data.get('total_cost') or parsed_data.get('total_cost_usd') or 'Belirtilmemiş'}
+- 🏦 **Toplam Borç (Tahvil)**: {parsed_data.get('total_debt') or parsed_data.get('total_debt_usd') or 'Belirtilmemiş'}
+
+🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
+
     elif event_type == "no_purchase":
         holdings = parsed_data.get('total_holdings') or parsed_data.get('total_btc_holdings') or '-'
         return f"""ℹ️ **MSTR Bu Hafta Alım Yapmadı.** (Toplam Portföy: {holdings} BTC)
