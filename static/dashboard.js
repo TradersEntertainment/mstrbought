@@ -1,0 +1,267 @@
+let portfolioChart = null;
+
+// Helper to show toast messages
+function showToast(message, isError = false) {
+    const toast = document.getElementById('notificationToast');
+    const toastIcon = toast.querySelector('i');
+    const toastMsg = toast.querySelector('.toast-message');
+
+    toastMsg.textContent = message;
+    if (isError) {
+        toast.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+        toastIcon.className = 'fa-solid fa-circle-xmark';
+        toastIcon.style.color = '#ef4444';
+    } else {
+        toast.style.borderColor = 'rgba(0, 229, 255, 0.3)';
+        toastIcon.className = 'fa-solid fa-circle-check';
+        toastIcon.style.color = '#00e5ff';
+    }
+
+    toast.classList.add('show');
+    setTimeout(() => {
+        toast.classList.remove('show');
+    }, 3500);
+}
+
+// Write message to dashboard console box
+function writeConsole(message, isPrompt = true) {
+    const consoleBox = document.getElementById('consoleOutput');
+    const msgSpan = consoleBox.querySelector('.message');
+    msgSpan.textContent = message;
+}
+
+// Fetch bot status from API
+async function fetchStatus() {
+    try {
+        const response = await fetch('/api/status');
+        if (!response.ok) throw new Error('API hatası');
+        const data = await response.json();
+
+        // Update mode badge
+        const badge = document.getElementById('botStatusBadge');
+        const modeText = document.getElementById('botModeText');
+        modeText.textContent = data.mode;
+
+        if (data.mode === 'High-Speed Mode') {
+            badge.classList.add('critical-mode');
+        } else {
+            badge.classList.remove('critical-mode');
+        }
+
+        // Update last check stat card
+        document.getElementById('statLastCheck').textContent = data.last_checked || 'Yapılmadı';
+
+    } catch (error) {
+        console.error('Status fetch error:', error);
+    }
+}
+
+// Fetch historical filings & purchases from API
+async function fetchHistory() {
+    try {
+        const response = await fetch('/api/history');
+        if (!response.ok) throw new Error('API hatası');
+        const data = await response.json();
+
+        if (data.length === 0) return;
+
+        // Update Stat Cards (with latest record)
+        const latest = data[0];
+        document.getElementById('statTotalHoldings').textContent = Number(latest.total_holdings.replace(/,/g, '')).toLocaleString('tr-TR') + ' BTC';
+        document.getElementById('statTotalCost').textContent = latest.total_cost;
+        document.getElementById('statAvgCost').textContent = latest.avg_cost;
+
+        // Populate Table
+        const tbody = document.getElementById('historyTableBody');
+        tbody.innerHTML = '';
+
+        data.forEach(item => {
+            const tr = document.createElement('tr');
+            
+            // Format acquired badge
+            let acquiredBadgeHtml = '';
+            if (item.btc_acquired === '0' || item.btc_acquired === '-') {
+                acquiredBadgeHtml = `<span class="badge-no-acquired">0 BTC</span>`;
+            } else {
+                acquiredBadgeHtml = `<span class="badge-acquired">+${Number(item.btc_acquired.replace(/,/g, '')).toLocaleString('tr-TR')} BTC</span>`;
+            }
+
+            // Shorten URL display
+            const shortLinkHtml = `<a href="${item.url}" target="_blank" class="table-link"><i class="fa-solid fa-arrow-up-right-from-square"></i> Form 8-K</a>`;
+
+            tr.innerHTML = `
+                <td><strong>${item.filing_date}</strong></td>
+                <td>${acquiredBadgeHtml}</td>
+                <td>${item.avg_price === '$0' ? '-' : item.avg_price}</td>
+                <td>${Number(item.total_holdings.replace(/,/g, '')).toLocaleString('tr-TR')} BTC</td>
+                <td>${shortLinkHtml}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+
+        // Initialize / Update Chart
+        renderChart(data);
+
+    } catch (error) {
+        console.error('History fetch error:', error);
+        document.getElementById('historyTableBody').innerHTML = `<tr><td colspan="5" class="loading-cell" style="color: #ef4444;">Veriler yüklenirken hata oluştu!</td></tr>`;
+    }
+}
+
+// Render Portfolio Growth Chart using Chart.js
+function renderChart(data) {
+    // Reverse data to chronological order (oldest to newest) for chart
+    const chartData = [...data].reverse();
+
+    const labels = chartData.map(d => d.filing_date);
+    const holdings = chartData.map(d => Number(d.total_holdings.replace(/,/g, '')));
+    const costs = chartData.map(d => {
+        // Parse float from cost string like "$64.10B" -> 64.10
+        const raw = d.total_cost.replace(/[$,B,M]/g, '').strip();
+        return parseFloat(raw) || 0;
+    });
+
+    const ctx = document.getElementById('portfolioChart').getContext('2d');
+
+    if (portfolioChart) {
+        portfolioChart.destroy();
+    }
+
+    portfolioChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: 'Toplam BTC Varlığı',
+                    data: holdings,
+                    borderColor: '#00e5ff',
+                    backgroundColor: 'rgba(0, 229, 255, 0.04)',
+                    borderWidth: 3,
+                    fill: true,
+                    tension: 0.3,
+                    yAxisID: 'y'
+                },
+                {
+                    label: 'Toplam Kümülatif Maliyet ($ Milyar)',
+                    data: costs,
+                    borderColor: '#7c4dff',
+                    backgroundColor: 'rgba(124, 77, 255, 0.04)',
+                    borderWidth: 2,
+                    borderDash: [5, 5],
+                    fill: false,
+                    tension: 0.3,
+                    yAxisID: 'y1'
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    labels: {
+                        color: '#9ca3af',
+                        font: { family: 'Inter', size: 11 }
+                    }
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                }
+            },
+            scales: {
+                x: {
+                    grid: { color: 'rgba(255,255,255,0.03)' },
+                    ticks: { color: '#9ca3af', font: { family: 'Inter', size: 10 } }
+                },
+                y: {
+                    position: 'left',
+                    grid: { color: 'rgba(255,255,255,0.05)' },
+                    ticks: {
+                        color: '#00e5ff',
+                        font: { family: 'Inter', size: 10 },
+                        callback: function(value) { return value.toLocaleString('tr-TR'); }
+                    },
+                    title: { display: true, text: 'BTC Miktarı', color: '#00e5ff' }
+                },
+                y1: {
+                    position: 'right',
+                    grid: { drawOnChartArea: false },
+                    ticks: {
+                        color: '#7c4dff',
+                        font: { family: 'Inter', size: 10 },
+                        callback: function(value) { return '$' + value + 'B'; }
+                    },
+                    title: { display: true, text: 'Maliyet ($ Milyar)', color: '#7c4dff' }
+                }
+            }
+        }
+    });
+}
+
+// Setup Event Listeners for actions
+function setupActions() {
+    const btnForceCheck = document.getElementById('btnForceCheck');
+    const btnSimulateAlert = document.getElementById('btnSimulateAlert');
+
+    btnForceCheck.addEventListener('click', async () => {
+        writeConsole('Zorla SEC kontrolü sorgusu gönderiliyor...');
+        try {
+            const resp = await fetch('/api/trigger?type=poll', { method: 'POST' });
+            const data = await resp.json();
+            
+            if (data.status === 'success') {
+                writeConsole(`Sorgulama tamamlandı: ${data.message}`);
+                showToast(data.message);
+                // Refresh data
+                fetchStatus();
+                fetchHistory();
+            } else {
+                writeConsole(`Hata: ${data.message}`);
+                showToast(data.message, true);
+            }
+        } catch (e) {
+            writeConsole(`Hata: Sunucuya bağlanılamadı (${e.message})`);
+            showToast('Sunucu hatası', true);
+        }
+    });
+
+    btnSimulateAlert.addEventListener('click', async () => {
+        writeConsole('Groq ve Telegram entegrasyonu test ediliyor. Son SEC bildirimi okunuyor...');
+        try {
+            const resp = await fetch('/api/trigger?type=test', { method: 'POST' });
+            const data = await resp.json();
+            
+            if (data.status === 'success') {
+                writeConsole(`Test Başarılı! Rapor Analizi:\n\n${data.preview}`);
+                showToast('Test alım bildirimi Telegram\'a atıldı!');
+            } else {
+                writeConsole(`Test Hatası: ${data.message}`);
+                showToast(data.message, true);
+            }
+        } catch (e) {
+            writeConsole(`Hata: Sunucuya bağlanılamadı (${e.message})`);
+            showToast('Sunucu hatası', true);
+        }
+    });
+}
+
+// Initial initialization
+document.addEventListener('DOMContentLoaded', () => {
+    // String.prototype.strip helper
+    if (typeof String.prototype.strip === 'undefined') {
+        String.prototype.strip = function() {
+            return this.trim();
+        };
+    }
+
+    fetchStatus();
+    fetchHistory();
+    setupActions();
+
+    // Auto-refresh status and history every 30 seconds
+    setInterval(() => {
+        fetchStatus();
+    }, 20000);
+});

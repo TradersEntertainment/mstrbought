@@ -4,6 +4,7 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV DB_PATH=/data/mstr_state.db
+ENV PORT=8080
 
 WORKDIR /app
 
@@ -17,6 +18,7 @@ RUN mkdir -p /data
 # Copy project files
 COPY . /app/
 
-# Expose port (if Railway requires a port, though workers don't need one. 
-# We'll just run it as a service)
+# Expose port (Railway routes external traffic to the port the server listens on)
+EXPOSE 8080
+
 CMD ["python", "bot.py"]

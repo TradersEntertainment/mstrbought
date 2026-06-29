@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 import telebot
 import requests
 from dotenv import load_dotenv
+from flask import Flask, jsonify, render_template, request
 
 # Load environment variables
 load_dotenv()
@@ -32,10 +33,12 @@ bot = None
 if TELEGRAM_BOT_TOKEN:
     bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
+# Initialize Flask App
+app = Flask(__name__)
+
 # ----------------- DB MANAGEMENT -----------------
 
 def get_db_connection():
-    # Make sure parent directory of database exists
     db_dir = os.path.dirname(DB_PATH)
     if db_dir and not os.path.exists(db_dir):
         os.makedirs(db_dir, exist_ok=True)
@@ -112,7 +115,6 @@ def seed_database(conn):
                 item
             )
             
-            # Extract mock dashed accession number from URL
             url = item[8]
             parts = url.split('/')
             acc_no_dash = parts[-2]
@@ -128,7 +130,7 @@ def seed_database(conn):
         conn.commit()
         print("Database seeded successfully with 16 records.")
 
-# ----------------- PARSING & SEC scraping -----------------
+# ----------------- PARSING & SEC SCRAPING -----------------
 
 def clean_html(html_content):
     clean = re.sub(r'<(script|style).*?>.*?</\1>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
@@ -390,7 +392,6 @@ MicroStrategy (Strategy Inc.) yeni bir SEC kurumsal güncelleme bildirimi yayın
 🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
 
     else:
-        # Fallback raw description
         return f"""ℹ️ **MSTR Yeni SEC Bildirimi (Form 8-K)**
 
 MicroStrategy yeni bir Form 8-K bildiriminde bulundu.
@@ -413,38 +414,32 @@ def process_filing(accession, date, form, url):
     cleaned_text = clean_html(html_content)
     parsed_data = None
     
-    # 1. Try Groq analysis first
     if GROQ_API_KEY:
         print("Calling Groq API for analysis...")
         parsed_data = analyze_filing_with_groq(cleaned_text, url)
         if parsed_data:
             print("Groq analysis succeeded:", parsed_data)
             
-    # 2. Fallback to HTML table parser
     if not parsed_data:
         print("Falling back to local HTML parsing...")
         parsed_data = parse_table_fallback(html_content)
         if parsed_data:
             print("Local HTML parser succeeded:", parsed_data)
             
-    # 3. Fallback raw dictionary
     if not parsed_data:
         parsed_data = {
             "event_type": "corporate_update",
             "summary_turkish": "Filtrelenemeyen veya tablo içermeyen yeni 8-K bildirimi."
         }
         
-    # Write to DB history table if purchase/no_purchase event
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Save the filing to processed list
     cursor.execute(
         "INSERT OR IGNORE INTO processed_filings (accession_number, filing_date, form, url) VALUES (?, ?, ?, ?)",
         (accession, date, form, url)
     )
     
-    # If it contains purchase details, insert into history table
     if parsed_data.get("event_type") in ["btc_purchase", "no_purchase"]:
         cursor.execute(
             """INSERT INTO purchase_history 
@@ -465,21 +460,20 @@ def process_filing(accession, date, form, url):
     conn.commit()
     conn.close()
     
-    # Format and Send Telegram alert
     alert_text = format_alert(parsed_data, url)
     send_telegram_alert(alert_text)
 
 def check_for_new_filings():
     global last_checked_time
-    last_checked_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    last_checked_time = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
     
     data = fetch_mstr_filings()
     if not data:
-        return
+        return 0
         
     recent = data.get('filings', {}).get('recent', {})
     if not recent:
-        return
+        return 0
         
     forms = recent.get('form', [])
     accession_numbers = recent.get('accessionNumber', [])
@@ -489,12 +483,10 @@ def check_for_new_filings():
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Read already processed accession numbers
     cursor.execute("SELECT accession_number FROM processed_filings")
     processed = set(row['accession_number'] for row in cursor.fetchall())
     conn.close()
     
-    # Process only 8-K filings
     new_filings_found = []
     for idx, form in enumerate(forms):
         if form == '8-K':
@@ -506,38 +498,34 @@ def check_for_new_filings():
                 url = f"https://www.sec.gov/Archives/edgar/data/1050446/{acc_num_no_dash}/{doc}"
                 new_filings_found.append((acc_num, filing_date, form, url))
                 
-    # Process new filings starting from the oldest to maintain chronological order in DB
     for acc, date, form, url in reversed(new_filings_found):
         process_filing(acc, date, form, url)
-        # Sleep slightly between filings
         time.sleep(1)
+        
+    return len(new_filings_found)
 
 def polling_loop():
     global current_mode, running
     print("Starting SEC Polling Loop...")
     
-    # Turkey timezone (UTC+3)
     trt_tz = timezone(timedelta(hours=3))
     
     while running:
         try:
             now_trt = datetime.now(timezone.utc).astimezone(trt_tz)
             
-            # Check if we are in the critical window (14:59 to 15:10, Mon-Fri)
-            is_weekday = now_trt.weekday() < 5  # Monday is 0, Friday is 4
+            is_weekday = now_trt.weekday() < 5
             is_critical_time = (
                 (now_trt.hour == 14 and now_trt.minute >= 59) or
                 (now_trt.hour == 15 and now_trt.minute <= 10)
             )
             
             if is_weekday and is_critical_time:
-                # High-Speed Mode
                 if current_mode != "High-Speed Mode":
                     print(f"Entering HIGH-SPEED POLLING MODE at {now_trt.strftime('%H:%M:%S')} TRT")
                     current_mode = "High-Speed Mode"
                 interval = POLL_INTERVAL_CRITICAL
             else:
-                # Normal Mode
                 if current_mode != "Normal Mode":
                     print(f"Entering NORMAL POLLING MODE at {now_trt.strftime('%H:%M:%S')} TRT")
                     current_mode = "Normal Mode"
@@ -551,6 +539,100 @@ def polling_loop():
             
         time.sleep(interval)
 
+# ----------------- FLASK WEB ROUTES & APIS -----------------
+
+@app.route('/')
+def dashboard_index():
+    return render_template('index.html')
+
+@app.route('/api/status')
+def get_bot_status():
+    return jsonify({
+        "mode": current_mode,
+        "last_checked": last_checked_time,
+        "db_path": DB_PATH
+    })
+
+@app.route('/api/history')
+def get_purchase_history():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM purchase_history ORDER BY id DESC")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    history_list = []
+    for r in rows:
+        history_list.append({
+            "id": r["id"],
+            "filing_date": r["filing_date"],
+            "period": r["period"],
+            "btc_acquired": r["btc_acquired"],
+            "purchase_price": r["purchase_price"],
+            "avg_price": r["avg_price"],
+            "total_holdings": r["total_holdings"],
+            "total_cost": r["total_cost"],
+            "avg_cost": r["avg_cost"],
+            "url": r["url"]
+        })
+    return jsonify(history_list)
+
+@app.route('/api/trigger', methods=['POST'])
+def force_trigger():
+    trigger_type = request.args.get("type", "poll")
+    
+    if trigger_type == "poll":
+        # Force a poll check immediately
+        try:
+            new_count = check_for_new_filings()
+            return jsonify({
+                "status": "success",
+                "message": f"SEC Edgar API sorgulandı. {new_count} adet yeni bildirim bulundu."
+            })
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "message": f"Sorgulama hatası: {str(e)}"
+            }), 500
+            
+    elif trigger_type == "test":
+        # Mock test of the latest filing (June 22 report)
+        test_url = "https://www.sec.gov/Archives/edgar/data/1050446/000119312526276717/mstr-20260504.htm"
+        try:
+            html_content = fetch_html(test_url)
+            if not html_content:
+                return jsonify({"status": "error", "message": "Test HTML'i SEC EDGAR'dan çekilemedi."}), 500
+                
+            cleaned_text = clean_html(html_content)
+            parsed_data = None
+            
+            if GROQ_API_KEY:
+                parsed_data = analyze_filing_with_groq(cleaned_text, test_url)
+                
+            if not parsed_data:
+                parsed_data = parse_table_fallback(html_content)
+                
+            if parsed_data:
+                alert_text = format_alert(parsed_data, test_url)
+                # Send test alert to Telegram with TEST prefix
+                test_alert_text = f"🧪 **[TEST BİLDİRİMİ]**\n\n{alert_text}"
+                send_telegram_alert(test_alert_text)
+                
+                return jsonify({
+                    "status": "success",
+                    "preview": test_alert_text
+                })
+            else:
+                return jsonify({"status": "error", "message": "Bildirim metni parse edilemedi."}), 500
+                
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "message": f"Test tetikleme hatası: {str(e)}"
+            }), 500
+            
+    return jsonify({"status": "error", "message": "Bilinmeyen tetikleyici tipi."}), 400
+
 # ----------------- TELEGRAM BOT COMMANDS -----------------
 
 if bot:
@@ -563,6 +645,8 @@ if bot:
             "TR Saatiyle 14:59 - 15:10 arasında 2 saniyede bir yüksek hızlı sorgulama yapar.\n\n"
             "**Komutlar:**\n"
             "/data veya /history - Son BTC alım geçmişini ve toplam portföy durumunu gösterir.\n"
+            "/check - Hemen şimdi zorla SEC EDGAR kontrolü yapar.\n"
+            "/test_integration - Son BTC alım raporunu (22 Haziran) okuyup analiz testi yapar.\n"
             "/status - Botun çalışma durumunu ve anlık modunu gösterir.",
             parse_mode="Markdown"
         )
@@ -583,16 +667,49 @@ if bot:
             parse_mode="Markdown"
         )
 
+    @bot.message_handler(commands=['check'])
+    def force_check_telegram(message):
+        bot.reply_to(message, "SEC EDGAR sorgulanıyor, lütfen bekleyin...")
+        try:
+            new_count = check_for_new_filings()
+            bot.reply_to(message, f"Sorgulama tamamlandı. {new_count} adet yeni bildirim bulundu.")
+        except Exception as e:
+            bot.reply_to(message, f"Sorgulama sırasında hata oluştu: {str(e)}")
+
+    @bot.message_handler(commands=['test_integration'])
+    def test_integration_telegram(message):
+        bot.reply_to(message, "22 Haziran alım raporu çekilip Groq/Telegram entegrasyonu test ediliyor...")
+        test_url = "https://www.sec.gov/Archives/edgar/data/1050446/000119312526276717/mstr-20260504.htm"
+        try:
+            html_content = fetch_html(test_url)
+            if html_content:
+                cleaned_text = clean_html(html_content)
+                parsed_data = None
+                if GROQ_API_KEY:
+                    parsed_data = analyze_filing_with_groq(cleaned_text, test_url)
+                if not parsed_data:
+                    parsed_data = parse_table_fallback(html_content)
+                    
+                if parsed_data:
+                    alert_text = format_alert(parsed_data, test_url)
+                    test_alert_text = f"🧪 **[TEST BİLDİRİMİ]**\n\n{alert_text}"
+                    send_telegram_alert(test_alert_text)
+                    bot.reply_to(message, f"Test alerti Telegram'a atıldı! Analiz Önizleme:\n\n{alert_text}", parse_mode="Markdown")
+                else:
+                    bot.reply_to(message, "Rapor parse edilemedi.")
+            else:
+                bot.reply_to(message, "SEC EDGAR'dan rapor çekilemedi.")
+        except Exception as e:
+            bot.reply_to(message, f"Test sırasında hata oluştu: {str(e)}")
+
     @bot.message_handler(commands=['data', 'history'])
     def send_history(message):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Get latest purchase for summary
         cursor.execute("SELECT * FROM purchase_history ORDER BY id DESC LIMIT 1")
         latest = cursor.fetchone()
         
-        # Get recent 6 purchases
         cursor.execute("SELECT * FROM purchase_history ORDER BY id DESC LIMIT 6")
         recent_purchases = cursor.fetchall()
         conn.close()
@@ -601,7 +718,6 @@ if bot:
             bot.reply_to(message, "Veritabanında kayıtlı alım geçmişi bulunamadı.")
             return
             
-        # Format summary
         summary = (
             f"📊 **MSTR Güncel Portföy Özeti**\n"
             f"🪙 **Toplam BTC Varlığı**: {latest['total_holdings']} BTC\n"
@@ -634,8 +750,13 @@ if bot:
 
 # ----------------- MAIN RUNNER -----------------
 
+def run_web_server():
+    port = int(os.getenv("PORT", 8080))
+    print(f"Starting Flask Web Server on port {port}...")
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+
 if __name__ == '__main__':
-    print("Initializing MSTR SEC Filings Monitor Bot...")
+    print("Initializing MSTR SEC Filings Monitor Bot & Dashboard...")
     init_db()
     
     # Start Telegram Listener Thread
@@ -644,6 +765,10 @@ if __name__ == '__main__':
         telegram_thread.start()
     else:
         print("WARNING: TELEGRAM_BOT_TOKEN is not configured. Telegram commands will not work.")
+        
+    # Start Flask Web Server Thread
+    web_thread = threading.Thread(target=run_web_server, daemon=True)
+    web_thread.start()
         
     # Run Polling Loop in main thread
     try:

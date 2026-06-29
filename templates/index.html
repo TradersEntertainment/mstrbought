@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MSTR SEC Filings Monitor & Portfolio Dashboard</title>
+    <!-- Google Fonts: Inter & Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="glow-container">
+        <div class="glow-sphere glow-sphere-1"></div>
+        <div class="glow-sphere glow-sphere-2"></div>
+    </div>
+
+    <div class="app-container">
+        <!-- Header -->
+        <header class="dashboard-header">
+            <div class="logo-area">
+                <i class="fa-brands fa-bitcoin logo-icon"></i>
+                <div class="logo-text">
+                    <h1>MSTR Monitor</h1>
+                    <p>SEC Edgar real-time tracker</p>
+                </div>
+            </div>
+            <div class="status-badge-container">
+                <div class="status-badge" id="botStatusBadge">
+                    <span class="pulse-dot"></span>
+                    <span id="botModeText">Normal Mod</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Stats Grid -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="card-inner">
+                    <div class="icon-box cyan">
+                        <i class="fa-solid fa-coins"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h3>Toplam BTC Portföyü</h3>
+                        <p class="value" id="statTotalHoldings">-</p>
+                    </div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="card-inner">
+                    <div class="icon-box green">
+                        <i class="fa-solid fa-money-bill-trend-up"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h3>Toplam Maliyet</h3>
+                        <p class="value" id="statTotalCost">-</p>
+                    </div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="card-inner">
+                    <div class="icon-box purple">
+                        <i class="fa-solid fa-tag"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h3>Ortalama Maliyet</h3>
+                        <p class="value" id="statAvgCost">-</p>
+                    </div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="card-inner">
+                    <div class="icon-box blue">
+                        <i class="fa-solid fa-clock-rotate-left"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h3>Son SEC Kontrolü</h3>
+                        <p class="value" id="statLastCheck">-</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Operations Area -->
+        <div class="actions-panel glass-panel">
+            <div class="panel-header">
+                <h2><i class="fa-solid fa-gears"></i> Yönetim & Manuel Test Paneli</h2>
+                <p>Botu zorla tetikleyin veya en son bildirimi test edin.</p>
+            </div>
+            <div class="buttons-row">
+                <button class="btn btn-primary" id="btnForceCheck">
+                    <i class="fa-solid fa-rotate"></i> Zorla SEC Kontrolü Yap
+                </button>
+                <button class="btn btn-secondary" id="btnSimulateAlert">
+                    <i class="fa-solid fa-vial"></i> Son Alım Bildirimini Test Et
+                </button>
+            </div>
+            <div class="console-box" id="consoleOutput">
+                <span class="prompt">$</span> <span class="message">Komut bekliyor...</span>
+            </div>
+        </div>
+
+        <!-- Main Dashboard Content -->
+        <div class="dashboard-main">
+            <!-- Left Panel: Chart -->
+            <div class="chart-panel glass-panel">
+                <div class="panel-header">
+                    <h2><i class="fa-solid fa-chart-line"></i> BTC Portföy Büyümesi</h2>
+                    <p>MicroStrategy kümülatif Bitcoin birikimi ve maliyet grafiği.</p>
+                </div>
+                <div class="chart-container">
+                    <canvas id="portfolioChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Right Panel: History Table -->
+            <div class="history-panel glass-panel">
+                <div class="panel-header">
+                    <h2><i class="fa-solid fa-list-check"></i> Son SEC Bildirim Logları</h2>
+                    <p>En son Form 8-K ve Bitcoin alım bildirimleri.</p>
+                </div>
+                <div class="table-container">
+                    <table class="history-table">
+                        <thead>
+                            <tr>
+                                <th>Tarih</th>
+                                <th>Alınan BTC</th>
+                                <th>Ort. Fiyat</th>
+                                <th>Toplam Portföy</th>
+                                <th>Filing</th>
+                            </tr>
+                        </thead>
+                        <tbody id="historyTableBody">
+                            <tr>
+                                <td colspan="5" class="loading-cell">Veriler yükleniyor...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div class="toast" id="notificationToast">
+        <i class="fa-solid fa-circle-check toast-icon"></i>
+        <span class="toast-message">İşlem Başarılı!</span>
+    </div>
+
+    <!-- Script file -->
+    <script src="/static/dashboard.js"></script>
+</body>
+</html>
