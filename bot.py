@@ -21,9 +21,9 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DB_PATH = os.getenv("DB_PATH", "mstr_state.db")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 
-# Optimization: critical poll interval is 1s by default now
-POLL_INTERVAL_NORMAL = int(os.getenv("POLL_INTERVAL_NORMAL", "300"))
-POLL_INTERVAL_CRITICAL = int(os.getenv("POLL_INTERVAL_CRITICAL", "1"))
+# Optimization: critical poll interval is 0.25s (250ms) by default now
+POLL_INTERVAL_NORMAL = float(os.getenv("POLL_INTERVAL_NORMAL", "300"))
+POLL_INTERVAL_CRITICAL = float(os.getenv("POLL_INTERVAL_CRITICAL", "0.25"))
 
 # Global states
 current_mode = "Normal Mode"
@@ -146,7 +146,7 @@ def seed_database(conn):
     if count == 0:
         print("Seeding database with historical purchase data...")
         history = [
-            ("2026-06-29", "June 22, 2026 to June 28, 2026", "0", "$0M", "$0", "847,363", "$64.10B", "$75,651", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526280000/mstr-20260629.htm", "$6.7B", "-"),
+            ("2026-06-29", "June 22, 2026 to June 28, 2026", "0", "$0M", "$0", "847,363", "$64.10B", "$75,651", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526286871/mstr-20260629.htm", "$6.7B", "-"),
             ("2026-06-22", "June 15, 2026 to June 21, 2026", "520", "$34.9M", "$67,068", "847,363", "$64.10B", "$75,651", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526276717/mstr-20260504.htm", "$6.7B", "ATM Hisse Satışı"),
             ("2026-06-15", "June 8, 2026 to June 14, 2026", "1,587", "$100.0M", "$63,024", "846,842", "$64.07B", "$75,656", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526270311/mstr-20260504.htm", "$6.7B", "ATM Hisse Satışı"),
             ("2026-06-08", "June 1, 2026 to June 7, 2026", "1,550", "$101.3M", "$65,332", "845,256", "$63.97B", "$75,680", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526260709/mstr-20260504.htm", "$6.7B", "ATM Hisse Satışı"),
@@ -630,12 +630,65 @@ def save_to_database(date, parsed_data, url, accession, form):
     except Exception as e:
         print(f"Error saving to database: {e}")
 
-def async_groq_analysis(cleaned_text, url, reply_to_id):
+def async_groq_analysis(cleaned_text, url, reply_to_id, table_data=None):
     print("Running async Groq analysis in background thread...")
     parsed_data = analyze_filing_with_groq(cleaned_text, url)
     if parsed_data and parsed_data.get("summary_turkish"):
         summary = parsed_data["summary_turkish"]
-        analysis_text = f"💡 **[Yapay Zeka Analizi & Özet]**\n\n{summary}"
+        
+        # Merge stats for the second detailed report
+        acquired = (table_data or {}).get("btc_acquired") or "-"
+        price = (table_data or {}).get("purchase_price") or "-"
+        avg = (table_data or {}).get("avg_price") or "-"
+        holdings = (table_data or {}).get("total_holdings") or "-"
+        cost = (table_data or {}).get("total_cost") or "-"
+        avg_cost = (table_data or {}).get("avg_cost") or "-"
+        debt = (table_data or {}).get("total_debt") or "-"
+        source = (table_data or {}).get("financing_source") or "-"
+        period = (table_data or {}).get("purchase_period") or "-"
+        
+        event_type = (table_data or {}).get("event_type") or "no_purchase"
+        
+        if event_type == "btc_purchase":
+            title = "💡 **[AI Analizi & Detaylı Rapor - Alım Bildirimi]**"
+            stats_block = f"""**Finansal Detaylar:**
+- 📅 **Dönem**: {period}
+- 🪙 **Satın Alınan**: +{acquired} BTC
+- 💰 **Ödenen Tutar**: {price}
+- 🏷️ **Ortalama Fiyat**: {avg}
+- 📊 **Toplam Portföy**: {holdings} BTC
+- 📉 **Kümülatif Maliyet**: {cost}
+- 🎯 **Ortalama Maliyet**: {avg_cost}
+- 🏦 **Toplam Borç (Tahvil)**: {debt}
+- 💸 **Finansman Kaynağı**: {source}"""
+        elif event_type == "btc_sale":
+            title = "💡 **[AI Analizi & Detaylı Rapor - Satış Bildirimi]**"
+            stats_block = f"""**Finansal Detaylar:**
+- 📅 **Dönem**: {period}
+- 🪙 **Satılan Miktar**: -{acquired} BTC
+- 💰 **Elde Edilen Tutar**: {price}
+- 🏷️ **Ortalama Satış Fiyatı**: {avg}
+- 📊 **Kalan Toplam Portföy**: {holdings} BTC
+- 📉 **Kümülatif Maliyet**: {cost}
+- 🏦 **Toplam Borç (Tahvil)**: {debt}"""
+        else:
+            title = "💡 **[AI Analizi & Detaylı Rapor - Alım Yapılmadı]**"
+            stats_block = f"""**Finansal Detaylar:**
+- 📅 **Dönem**: {period}
+- 📊 **Toplam Portföy**: {holdings} BTC
+- 📉 **Toplam Maliyet**: {cost}
+- 🎯 **Ortalama Maliyet**: {avg_cost}
+- 🏦 **Toplam Borç (Tahvil)**: {debt}
+- 💸 **Finansman Kaynağı**: {source}"""
+
+        analysis_text = f"""{title}
+
+{summary}
+
+{stats_block}
+
+🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
+        
         send_telegram_alert(analysis_text, reply_to_message_id=reply_to_id)
         print("Async Groq analysis completed and sent.")
     else:
@@ -679,7 +732,7 @@ def process_filing(accession, date, form, url):
             cleaned_text = clean_html(html_content)
             threading.Thread(
                 target=async_groq_analysis,
-                args=(cleaned_text, url, main_msg_id),
+                args=(cleaned_text, url, main_msg_id, fallback_data),
                 daemon=True
             ).start()
     else:
