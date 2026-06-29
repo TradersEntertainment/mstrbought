@@ -235,12 +235,39 @@ def fetch_mstr_filings():
     cik = "0001050446"
     url = f"https://data.sec.gov/submissions/CIK{cik}.json"
     try:
-        resp = http_session.get(url, timeout=5)
+        resp = http_session.get(url, timeout=3)
         if resp.status_code == 200:
             return resp.json()
     except Exception as e:
         print(f"Error fetching SEC JSON: {e}")
     return None
+
+def fetch_mstr_filings_efts():
+    """Query EDGAR Full-Text Search (EFTS) API — often indexes 30-60s before submissions API."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    url = f"https://efts.sec.gov/LATEST/search-index?q=%22bitcoin%22&dateRange=custom&startdt={today}&enddt={today}&forms=8-K&entities=0001050446"
+    try:
+        resp = http_session.get(url, timeout=3)
+        if resp.status_code == 200:
+            data = resp.json()
+            hits = data.get("hits", {}).get("hits", [])
+            results = []
+            for hit in hits:
+                source = hit.get("_source", {})
+                acc = source.get("file_num") or hit.get("_id", "")
+                # Extract accession number from the filing URL
+                filing_url = source.get("file_url", "")
+                filing_date = source.get("file_date", today)
+                if filing_url and acc:
+                    results.append({
+                        "accession": acc,
+                        "date": filing_date,
+                        "url": filing_url
+                    })
+            return results
+    except Exception as e:
+        print(f"EFTS query error (non-critical): {e}")
+    return []
 
 def fetch_html(url):
     try:
@@ -720,12 +747,19 @@ def process_filing(accession, date, form, url):
     if fallback_data:
         # Table is present! We can determine event and statistics instantly without Groq.
         print("BTC update table found in filing! Bypassing synchronous Groq call for instant alert.")
-        save_to_database(date, fallback_data, url, accession, form)
         
+        # SPEED: Send Telegram FIRST, then save to DB async
         main_msg_id = None
         if should_alert:
             alert_text = format_alert(fallback_data, url)
             main_msg_id = send_telegram_alert(alert_text)
+        
+        # Save to DB in background — don't block the alert pipeline
+        threading.Thread(
+            target=save_to_database,
+            args=(date, fallback_data, url, accession, form),
+            daemon=True
+        ).start()
             
         # Run Groq in the background asynchronously for the interpretation summary
         if groq_keys and should_alert:
@@ -774,40 +808,46 @@ def check_for_new_filings():
     global last_checked_time
     last_checked_time = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
     
-    data = fetch_mstr_filings()
-    if not data:
-        return 0
-        
-    recent = data.get('filings', {}).get('recent', {})
-    if not recent:
-        return 0
-        
-    forms = recent.get('form', [])
-    accession_numbers = recent.get('accessionNumber', [])
-    filing_dates = recent.get('filingDate', [])
-    primary_docs = recent.get('primaryDocument', [])
-    
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     cursor.execute("SELECT accession_number FROM processed_filings")
     processed = set(row['accession_number'] for row in cursor.fetchall())
     conn.close()
     
     new_filings_found = []
-    for idx, form in enumerate(forms):
-        if form == '8-K':
-            acc_num = accession_numbers[idx]
-            if acc_num not in processed:
-                filing_date = filing_dates[idx]
-                doc = primary_docs[idx]
-                acc_num_no_dash = acc_num.replace('-', '')
-                url = f"https://www.sec.gov/Archives/edgar/data/1050446/{acc_num_no_dash}/{doc}"
-                new_filings_found.append((acc_num, filing_date, form, url))
+    seen_accessions = set()
+    
+    # Source 1: Primary submissions API
+    data = fetch_mstr_filings()
+    if data:
+        recent = data.get('filings', {}).get('recent', {})
+        if recent:
+            forms = recent.get('form', [])
+            accession_numbers = recent.get('accessionNumber', [])
+            filing_dates = recent.get('filingDate', [])
+            primary_docs = recent.get('primaryDocument', [])
+            
+            for idx, form in enumerate(forms):
+                if form == '8-K':
+                    acc_num = accession_numbers[idx]
+                    if acc_num not in processed and acc_num not in seen_accessions:
+                        filing_date = filing_dates[idx]
+                        doc = primary_docs[idx]
+                        acc_num_no_dash = acc_num.replace('-', '')
+                        url = f"https://www.sec.gov/Archives/edgar/data/1050446/{acc_num_no_dash}/{doc}"
+                        new_filings_found.append((acc_num, filing_date, form, url))
+                        seen_accessions.add(acc_num)
+    
+    # Source 2: EFTS (Full-Text Search) — often indexes 30-60s before submissions API
+    efts_results = fetch_mstr_filings_efts()
+    for result in efts_results:
+        acc = result["accession"]
+        if acc not in processed and acc not in seen_accessions:
+            new_filings_found.append((acc, result["date"], "8-K", result["url"]))
+            seen_accessions.add(acc)
                 
     for acc, date, form, url in reversed(new_filings_found):
         process_filing(acc, date, form, url)
-        time.sleep(1)
         
     return len(new_filings_found)
 
@@ -823,7 +863,7 @@ def polling_loop():
             
             is_weekday = now_trt.weekday() < 5
             is_critical_time = (
-                (now_trt.hour == 14 and now_trt.minute >= 59) or
+                (now_trt.hour == 14 and now_trt.minute >= 55) or
                 (now_trt.hour == 15 and now_trt.minute <= 10)
             )
             
