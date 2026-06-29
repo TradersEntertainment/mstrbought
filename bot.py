@@ -460,16 +460,20 @@ def format_alert(parsed_data, url):
     event_type = parsed_data.get("event_type")
     
     if event_type == "btc_purchase":
-        return f"""🚀 **MSTR BTC ALDI!**
+        acquired = parsed_data.get('btc_acquired') or '-'
+        price = parsed_data.get('purchase_price') or parsed_data.get('purchase_price_usd') or '-'
+        avg = parsed_data.get('avg_price') or parsed_data.get('avg_purchase_price') or '-'
+        holdings = parsed_data.get('total_holdings') or parsed_data.get('total_btc_holdings') or '-'
+        
+        return f"""🚀 **MSTR BTC ALDI: +{acquired} BTC!** (Tutar: {price} | Ort: {avg})
+ℹ️ Toplam Portföy: {holdings} BTC'ye ulaştı.
 
-MicroStrategy, yeni SEC bildirimine göre Bitcoin alımı gerçekleştirdi.
-
-**Detaylar:**
+**Detaylı Rapor:**
 - 📅 **Dönem**: {parsed_data.get('purchase_period') or 'Belirtilmemiş'}
-- 🪙 **Miktar**: {parsed_data.get('btc_acquired')} BTC
-- 💰 **Ödenen Tutar**: {parsed_data.get('purchase_price') or parsed_data.get('purchase_price_usd') or 'Belirtilmemiş'}
-- 🏷️ **Ortalama Fiyat**: {parsed_data.get('avg_price') or parsed_data.get('avg_purchase_price') or 'Belirtilmemiş'}
-- 📊 **Toplam Portföy**: {parsed_data.get('total_holdings') or parsed_data.get('total_btc_holdings') or 'Belirtilmemiş'} BTC
+- 🪙 **Miktar**: {acquired} BTC
+- 💰 **Ödenen Tutar**: {price}
+- 🏷️ **Ortalama Fiyat**: {avg}
+- 📊 **Toplam Portföy**: {holdings} BTC
 - 📉 **Toplam Maliyet**: {parsed_data.get('total_cost') or parsed_data.get('total_cost_usd') or 'Belirtilmemiş'}
 - 🎯 **Ortalama Maliyet**: {parsed_data.get('avg_cost') or parsed_data.get('avg_cost_per_btc') or 'Belirtilmemiş'}
 - 🏦 **Toplam Borç (Tahvil)**: {parsed_data.get('total_debt') or parsed_data.get('total_debt_usd') or 'Belirtilmemiş'}
@@ -478,13 +482,13 @@ MicroStrategy, yeni SEC bildirimine göre Bitcoin alımı gerçekleştirdi.
 🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
 
     elif event_type == "no_purchase":
-        return f"""ℹ️ **MSTR Bu Hafta Alım Yapmadı**
-
+        holdings = parsed_data.get('total_holdings') or parsed_data.get('total_btc_holdings') or '-'
+        return f"""ℹ️ **MSTR Bu Hafta Alım Yapmadı.** (Toplam Portföy: {holdings} BTC)
 MicroStrategy, yeni SEC bildirimine göre bu hafta Bitcoin alımı gerçekleştirmedi.
 
-**Detaylar:**
+**Detaylı Rapor:**
 - 📅 **Dönem**: {parsed_data.get('purchase_period') or 'Belirtilmemiş'}
-- 📊 **Toplam Portföy**: {parsed_data.get('total_holdings') or parsed_data.get('total_btc_holdings') or 'Belirtilmemiş'} BTC
+- 📊 **Toplam Portföy**: {holdings} BTC
 - 📉 **Toplam Maliyet**: {parsed_data.get('total_cost') or parsed_data.get('total_cost_usd') or 'Belirtilmemiş'}
 - 🎯 **Ortalama Maliyet**: {parsed_data.get('avg_cost') or parsed_data.get('avg_cost_per_btc') or 'Belirtilmemiş'}
 - 🏦 **Toplam Borç (Tahvil)**: {parsed_data.get('total_debt') or parsed_data.get('total_debt_usd') or 'Belirtilmemiş'}
@@ -493,32 +497,34 @@ MicroStrategy, yeni SEC bildirimine göre bu hafta Bitcoin alımı gerçekleşti
 🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
 
     elif event_type == "financing":
-        return f"""💵 **MSTR Yeni Finansman / Hisse İhraç Bildirimi**
-
-MicroStrategy, yeni bir finansman veya hisse satışı (ATM / Tahvil / STRC / STRF Preferred Stock vb.) bildirimi yayınladı.
+        source = parsed_data.get('financing_source_turkish') or parsed_data.get('financing_details') or 'Finansman Bildirimi'
+        summary = parsed_data.get('summary_turkish') or 'Detaylar bildirilmeyi bekliyor.'
+        
+        return f"""💵 **MSTR Yeni Finansman/Hisse İhraç:** {source}
+ℹ️ Rapor Analizi: {summary[:120]}...
 
 **Özet (Analist Yorumu):**
-{parsed_data.get('summary_turkish') or parsed_data.get('financing_details') or 'Ayrıntı belirtilmemiş.'}
+{summary}
 
 🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
 
     elif event_type == "corporate_update":
-        return f"""ℹ️ **MSTR Kurumsal Güncelleme Yayınladı**
-
-MicroStrategy (Strategy Inc.) yeni bir SEC kurumsal güncelleme bildirimi yayınladı.
+        summary = parsed_data.get('summary_turkish') or 'Rutin kurumsal güncelleme.'
+        return f"""ℹ️ **MSTR Kurumsal Güncelleme (Form 8-K)**
+ℹ️ Analiz: {summary[:120]}...
 
 **Detaylar:**
-{parsed_data.get('summary_turkish') or 'Rutin kurumsal güncelleme.'}
+{summary}
 
 🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
 
     else:
+        summary = parsed_data.get('summary_turkish') or 'Detaylar için bildirimi inceleyin.'
         return f"""ℹ️ **MSTR Yeni SEC Bildirimi (Form 8-K)**
-
-MicroStrategy yeni bir Form 8-K bildiriminde bulundu.
+ℹ️ Analiz: {summary[:120]}...
 
 **Özet:**
-{parsed_data.get('summary_turkish') or 'Detaylar için bildirimi inceleyin.'}
+{summary}
 
 🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
 
