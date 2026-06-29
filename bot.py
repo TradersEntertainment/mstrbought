@@ -21,8 +21,9 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DB_PATH = os.getenv("DB_PATH", "mstr_state.db")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 
+# Optimization: critical poll interval is 1s by default now
 POLL_INTERVAL_NORMAL = int(os.getenv("POLL_INTERVAL_NORMAL", "300"))
-POLL_INTERVAL_CRITICAL = int(os.getenv("POLL_INTERVAL_CRITICAL", "2"))
+POLL_INTERVAL_CRITICAL = int(os.getenv("POLL_INTERVAL_CRITICAL", "1"))
 
 # Global states
 current_mode = "Normal Mode"
@@ -36,6 +37,13 @@ if TELEGRAM_BOT_TOKEN:
 
 # Initialize Flask App
 app = Flask(__name__)
+
+# Optimization: Keep-Alive Connection Pooling
+http_session = requests.Session()
+http_session.headers.update({
+    'User-Agent': 'Antigravity Telegram Bot antigravity@tradersentertainment.com',
+    'Accept-Encoding': 'gzip, deflate',
+})
 
 # ----------------- DB MANAGEMENT -----------------
 
@@ -81,13 +89,12 @@ def init_db():
     )
     """)
     
-    # Alter table to add total_debt in case it was created in previous runs without it
+    # Alter tables in case they already exist from older versions
     try:
         cursor.execute("ALTER TABLE purchase_history ADD COLUMN total_debt TEXT")
     except sqlite3.OperationalError:
         pass
         
-    # Alter table to add financing_source in case it was created in previous runs without it
     try:
         cursor.execute("ALTER TABLE purchase_history ADD COLUMN financing_source TEXT")
     except sqlite3.OperationalError:
@@ -95,12 +102,8 @@ def init_db():
         
     conn.commit()
     
-    # Seed database if empty
     seed_database(conn)
-    
-    # Mark all current filings in Edgar as processed to prevent backfilling 2024/2025 records
     mark_current_filings_processed(conn)
-    
     conn.close()
 
 def seed_database(conn):
@@ -148,16 +151,15 @@ def seed_database(conn):
                 (acc_dashed, item[0], url)
             )
         conn.commit()
-        print("Database seeded successfully with 16 records containing debt & financing data.")
+        print("Database seeded successfully.")
 
 def mark_current_filings_processed(conn):
     cursor = conn.cursor()
-    # Count how many we have. If it's <= 16, we should populate the rest of the SEC index.
     cursor.execute("SELECT COUNT(*) FROM processed_filings")
     count = cursor.fetchone()[0]
     
     if count <= 16:
-        print("Marking all existing SEC filings in EDGAR index as processed to prevent backfilling older 2024/2025 records...")
+        print("Marking all existing SEC filings in EDGAR index as processed to prevent backfilling...")
         data = fetch_mstr_filings()
         if data:
             recent = data.get('filings', {}).get('recent', {})
@@ -185,37 +187,34 @@ def mark_current_filings_processed(conn):
 
 # ----------------- PARSING & SEC SCRAPING -----------------
 
+# Optimization: Highly efficient text cleaning via BeautifulSoup tag decomposition
 def clean_html(html_content):
-    clean = re.sub(r'<(script|style).*?>.*?</\1>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
-    clean = re.sub(r'<[^>]+>', ' ', clean)
-    clean = re.sub(r'\s+', ' ', clean)
-    return clean.strip()
+    soup = BeautifulSoup(html_content, 'html.parser')
+    # Decompose script, style, xml, and head blocks
+    for element in soup(["script", "style", "xml", "head"]):
+        element.decompose()
+    text = soup.get_text(separator=' ')
+    return re.sub(r'\s+', ' ', text).strip()
 
 def fetch_mstr_filings():
     cik = "0001050446"
     url = f"https://data.sec.gov/submissions/CIK{cik}.json"
-    headers = {
-        'User-Agent': 'Antigravity Telegram Bot antigravity@tradersentertainment.com',
-    }
-    req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req) as response:
-            return json.loads(response.read().decode('utf-8'))
+        resp = http_session.get(url, timeout=5)
+        if resp.status_code == 200:
+            return resp.json()
     except Exception as e:
         print(f"Error fetching SEC JSON: {e}")
-        return None
+    return None
 
 def fetch_html(url):
-    headers = {
-        'User-Agent': 'Antigravity Telegram Bot antigravity@tradersentertainment.com',
-    }
-    req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req) as response:
-            return response.read().decode('utf-8')
+        resp = http_session.get(url, timeout=5)
+        if resp.status_code == 200:
+            return resp.text
     except Exception as e:
         print(f"Error fetching filing HTML: {e}")
-        return ""
+    return ""
 
 def clean_row_values(row):
     cleaned = []
@@ -328,7 +327,6 @@ def analyze_filing_with_groq(text, url):
         
     truncated_text = text[:15000]
     
-    # Get last known debt and financing source to help Llama 3 contextually
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -371,8 +369,9 @@ You must return ONLY the raw JSON object. Do not include markdown code block mar
         "Content-Type": "application/json"
     }
     
+    # Optimization: Using llama-3.1-8b-instant which operates at 800+ tokens/sec
     payload = {
-        "model": "llama3-70b-8192",
+        "model": "llama-3.1-8b-instant",
         "messages": [
             {"role": "user", "content": prompt}
         ],
@@ -381,7 +380,7 @@ You must return ONLY the raw JSON object. Do not include markdown code block mar
     }
     
     try:
-        response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=30)
+        response = http_session.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=10)
         if response.status_code == 200:
             result = response.json()
             content = result['choices'][0]['message']['content'].strip()
@@ -408,7 +407,8 @@ def send_telegram_alert(message_text):
         "disable_web_page_preview": False
     }
     try:
-        resp = requests.post(url, json=payload, timeout=10)
+        # Optimization: Use http_session for Keep-Alive connection reuse
+        resp = http_session.post(url, json=payload, timeout=5)
         if resp.status_code == 200:
             return True
         else:
@@ -421,7 +421,7 @@ def send_telegram_alert(message_text):
                 "chat_id": TELEGRAM_CHAT_ID,
                 "text": plain_text
             }
-            resp_plain = requests.post(url, json=payload_plain, timeout=10)
+            resp_plain = http_session.post(url, json=payload_plain, timeout=5)
             if resp_plain.status_code == 200:
                 print("Fallback plain text send succeeded.")
                 return True
@@ -502,6 +502,10 @@ MicroStrategy yeni bir Form 8-K bildiriminde bulundu.
 
 def process_filing(accession, date, form, url):
     print(f"Processing new filing: {accession} | Date: {date} | Form: {form}")
+    
+    # Optimization: Instant notification on filing detection
+    preliminary_text = f"⚠️ **MSTR Yeni SEC Bildirimi (Form 8-K) Yayınlandı!**\n\nFiling analiz ediliyor...\n🔗 [Filing Linki]({url})"
+    send_telegram_alert(preliminary_text)
     
     html_content = fetch_html(url)
     if not html_content:
@@ -693,7 +697,6 @@ def get_purchase_history():
 
 @app.route('/api/trigger', methods=['POST'])
 def force_trigger():
-    # Verify Admin Password if configured in Environment
     if ADMIN_PASSWORD:
         req_pass = request.args.get("password") or request.headers.get("X-Admin-Password")
         if req_pass != ADMIN_PASSWORD:
@@ -717,6 +720,9 @@ def force_trigger():
     elif trigger_type == "test":
         test_url = "https://www.sec.gov/Archives/edgar/data/1050446/000119312526276717/mstr-20260504.htm"
         try:
+            # Send immediate alert that we started testing
+            send_telegram_alert("🧪 **[TEST BİLDİRİMİ]** MSTR SEC alım raporu testi başlatıldı. Analiz ediliyor...")
+            
             html_content = fetch_html(test_url)
             if not html_content:
                 return jsonify({"status": "error", "message": "Test HTML'i SEC EDGAR'dan çekilemedi."}), 500
@@ -737,9 +743,8 @@ def force_trigger():
                     parsed_data["financing_source_turkish"] = "ATM Hisse Satışı"
                     
                 alert_text = format_alert(parsed_data, test_url)
-                test_alert_text = f"🧪 **[TEST BİLDİRİMİ]**\n\n{alert_text}"
+                test_alert_text = f"🧪 **[TEST BİLDİRİMİ - SONUÇ]**\n\n{alert_text}"
                 
-                # Verify Telegram Alert Sending
                 sent_successfully = send_telegram_alert(test_alert_text)
                 if not sent_successfully:
                     return jsonify({
@@ -771,10 +776,10 @@ if bot:
             message,
             "📊 **MSTR SEC Filings Monitor Bot**\n\n"
             "Bu bot MicroStrategy SEC bildirimlerini (Form 8-K) gerçek zamanlı takip eder. "
-            "TR Saatiyle 14:59 - 15:10 arasında 2 saniyede bir yüksek hızlı sorgulama yapar.\n\n"
+            "TR Saatiyle 14:59 - 15:10 arasında 1 saniyede bir yüksek hızlı sorgulama yapar.\n\n"
             "**Komutlar:**\n"
             "/data veya /history - Son BTC alım geçmişini ve toplam portföy durumunu gösterir.\n"
-            "/check - Hemen şimdi zorla SEC EDGAR kontrolü yapar (şifre gerektirmez, sadece yetkili kullanıcı).\n"
+            "/check - Hemen şimdi zorla SEC EDGAR kontrolü yapar.\n"
             "/test_integration - Son BTC alım raporunu (22 Haziran) okuyup analiz testi yapar.\n"
             "/status - Botun çalışma durumunu ve anlık modunu gösterir.",
             parse_mode="Markdown"
@@ -810,6 +815,7 @@ if bot:
         bot.reply_to(message, "22 Haziran alım raporu çekilip Groq/Telegram entegrasyonu test ediliyor...")
         test_url = "https://www.sec.gov/Archives/edgar/data/1050446/000119312526276717/mstr-20260504.htm"
         try:
+            send_telegram_alert("🧪 **[TEST BİLDİRİMİ]** Telegram entegrasyon testi başlatıldı. Analiz ediliyor...")
             html_content = fetch_html(test_url)
             if html_content:
                 cleaned_text = clean_html(html_content)
@@ -826,7 +832,7 @@ if bot:
                         parsed_data["financing_source_turkish"] = "ATM Hisse Satışı"
                         
                     alert_text = format_alert(parsed_data, test_url)
-                    test_alert_text = f"🧪 **[TEST BİLDİRİMİ]**\n\n{alert_text}"
+                    test_alert_text = f"🧪 **[TEST BİLDİRİMİ - SONUÇ]**\n\n{alert_text}"
                     send_telegram_alert(test_alert_text)
                     bot.reply_to(message, f"Test alerti Telegram'a atıldı! Analiz Önizleme:\n\n{alert_text}", parse_mode="Markdown")
                 else:
