@@ -945,8 +945,26 @@ def force_trigger():
             }), 500
             
     elif trigger_type == "test":
-        test_url = "https://www.sec.gov/Archives/edgar/data/1050446/000119312526276717/mstr-20260504.htm"
+        test_url = "https://www.sec.gov/Archives/edgar/data/1050446/000119312526276717/mstr-20260504.htm" # Default fallback
         try:
+            try:
+                data = fetch_mstr_filings()
+                if data:
+                    recent = data.get('filings', {}).get('recent', {})
+                    forms = recent.get('form', [])
+                    accession_numbers = recent.get('accessionNumber', [])
+                    primary_docs = recent.get('primaryDocument', [])
+                    for idx, form in enumerate(forms):
+                        if form == '8-K':
+                            acc_num = accession_numbers[idx]
+                            doc = primary_docs[idx]
+                            acc_num_no_dash = acc_num.replace('-', '')
+                            test_url = f"https://www.sec.gov/Archives/edgar/data/1050446/{acc_num_no_dash}/{doc}"
+                            print(f"Test route dynamically selected latest Form 8-K: {test_url}")
+                            break
+            except Exception as e:
+                print(f"Error fetching latest filing for test route: {e}, using default fallback.")
+                
             # Send immediate alert that we started testing
             send_telegram_alert("🧪 **[TEST BİLDİRİMİ]** MSTR SEC alım raporu testi başlatıldı. Analiz ediliyor...")
             
