@@ -355,8 +355,24 @@ def parse_table_fallback(html_content):
 
 # ----------------- GROQ API INTEGRATION -----------------
 
+# Groq API Keys Rotation Support
+groq_keys = [k.strip() for k in os.getenv("GROQ_API_KEY", "").split(",") if k.strip()]
+current_key_idx = 0
+
+def get_groq_client():
+    global current_key_idx
+    if not groq_keys:
+        return None
+    return groq_keys[current_key_idx % len(groq_keys)]
+
+def rotate_groq_key():
+    global current_key_idx
+    if len(groq_keys) > 1:
+        current_key_idx = (current_key_idx + 1) % len(groq_keys)
+        print(f"Rotated to next Groq API key (index: {current_key_idx % len(groq_keys)})")
+
 def analyze_filing_with_groq(text, url):
-    if not GROQ_API_KEY:
+    if not groq_keys:
         print("Groq API Key is not configured.")
         return None
         
@@ -399,12 +415,6 @@ Filing text:
 You must return ONLY the raw JSON object. Do not include markdown code block markers or any preamble.
 """
 
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    
-    # Optimization: Using llama-3.1-8b-instant which operates at 800+ tokens/sec
     payload = {
         "model": "llama-3.1-8b-instant",
         "messages": [
@@ -414,25 +424,39 @@ You must return ONLY the raw JSON object. Do not include markdown code block mar
         "temperature": 0.1
     }
     
-    try:
-        response = http_session.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=10)
-        if response.status_code == 200:
-            result = response.json()
-            content = result['choices'][0]['message']['content'].strip()
-            return json.loads(content)
-        else:
-            print(f"Groq API error status {response.status_code}: {response.text}")
-            return None
-    except Exception as e:
-        print(f"Groq API exception: {e}")
-        return None
+    # Rotation attempt loop
+    for attempt in range(len(groq_keys)):
+        api_key = get_groq_client()
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        try:
+            print(f"Trying Groq API with key index {current_key_idx % len(groq_keys)}...")
+            response = http_session.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=10)
+            if response.status_code == 200:
+                result = response.json()
+                content = result['choices'][0]['message']['content'].strip()
+                return json.loads(content)
+            elif response.status_code == 429:
+                print(f"Groq API key at index {current_key_idx % len(groq_keys)} rate limited (429). Rotating key...")
+                rotate_groq_key()
+            else:
+                print(f"Groq API error status {response.status_code}: {response.text}. Rotating key...")
+                rotate_groq_key()
+        except Exception as e:
+            print(f"Groq API exception with key index {current_key_idx % len(groq_keys)}: {e}. Rotating key...")
+            rotate_groq_key()
+            
+    print("All available Groq API keys failed or were rate limited.")
+    return None
 
 # ----------------- TELEGRAM ALERTS -----------------
 
-def send_telegram_alert(message_text):
+def send_telegram_alert(message_text, reply_to_message_id=None):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram bot not configured.")
-        return False
+        return None
         
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -441,11 +465,17 @@ def send_telegram_alert(message_text):
         "parse_mode": "Markdown",
         "disable_web_page_preview": False
     }
+    if reply_to_message_id:
+        payload["reply_to_message_id"] = reply_to_message_id
+        
     try:
         # Optimization: Use http_session for Keep-Alive connection reuse
         resp = http_session.post(url, json=payload, timeout=5)
         if resp.status_code == 200:
-            return True
+            result = resp.json()
+            if result.get("ok"):
+                return result.get("result", {}).get("message_id")
+            return None
         else:
             print(f"Telegram Markdown send failed (Status {resp.status_code}): {resp.text}. Retrying as plain text...")
             # Fallback: strip markdown formatting to guarantee delivery
@@ -456,16 +486,22 @@ def send_telegram_alert(message_text):
                 "chat_id": TELEGRAM_CHAT_ID,
                 "text": plain_text
             }
+            if reply_to_message_id:
+                payload_plain["reply_to_message_id"] = reply_to_message_id
+                
             resp_plain = http_session.post(url, json=payload_plain, timeout=5)
             if resp_plain.status_code == 200:
                 print("Fallback plain text send succeeded.")
-                return True
+                result = resp_plain.json()
+                if result.get("ok"):
+                    return result.get("result", {}).get("message_id")
+                return None
             else:
                 print(f"Telegram fallback send failed (Status {resp_plain.status_code}): {resp_plain.text}")
-                return False
+                return None
     except Exception as e:
         print(f"Error sending Telegram alert: {e}")
-        return False
+        return None
 
 def format_alert(parsed_data, url):
     event_type = parsed_data.get("event_type")
@@ -561,6 +597,50 @@ MicroStrategy, yeni SEC bildirimine göre bu hafta Bitcoin alımı gerçekleşti
 
 # ----------------- MONITORS ENGINE -----------------
 
+def save_to_database(date, parsed_data, url, accession, form):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "INSERT OR IGNORE INTO processed_filings (accession_number, filing_date, form, url) VALUES (?, ?, ?, ?)",
+            (accession, date, form, url)
+        )
+        
+        cursor.execute(
+            """INSERT INTO purchase_history 
+               (filing_date, period, btc_acquired, purchase_price, avg_price, total_holdings, total_cost, avg_cost, url, total_debt, financing_source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                date,
+                parsed_data.get("purchase_period"),
+                str(parsed_data.get("btc_acquired") or "-"),
+                str(parsed_data.get("purchase_price") or parsed_data.get("purchase_price_usd") or "-"),
+                str(parsed_data.get("avg_price") or parsed_data.get("avg_purchase_price") or "-"),
+                str(parsed_data.get("total_holdings") or parsed_data.get("total_btc_holdings") or "-"),
+                str(parsed_data.get("total_cost") or parsed_data.get("total_cost_usd") or "-"),
+                str(parsed_data.get("avg_cost") or parsed_data.get("avg_cost_per_btc") or "-"),
+                url,
+                str(parsed_data.get("total_debt") or parsed_data.get("total_debt_usd") or "-"),
+                str(parsed_data.get("financing_source_turkish") or parsed_data.get("financing_details") or "-")
+            )
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Error saving to database: {e}")
+
+def async_groq_analysis(cleaned_text, url, reply_to_id):
+    print("Running async Groq analysis in background thread...")
+    parsed_data = analyze_filing_with_groq(cleaned_text, url)
+    if parsed_data and parsed_data.get("summary_turkish"):
+        summary = parsed_data["summary_turkish"]
+        analysis_text = f"💡 **[Yapay Zeka Analizi & Özet]**\n\n{summary}"
+        send_telegram_alert(analysis_text, reply_to_message_id=reply_to_id)
+        print("Async Groq analysis completed and sent.")
+    else:
+        print("Async Groq analysis finished with no summary output.")
+
 def process_filing(accession, date, form, url):
     print(f"Processing new filing: {accession} | Date: {date} | Form: {form}")
     
@@ -576,127 +656,66 @@ def process_filing(accession, date, form, url):
         print(f"Error parsing filing date for spam check: {e}")
         should_alert = False
         
-    if should_alert:
-        # Optimization: Instant notification on filing detection
-        preliminary_text = f"⚠️ **MSTR Yeni SEC Bildirimi (Form 8-K) Yayınlandı!**\n\nFiling analiz ediliyor...\n🔗 [Filing Linki]({url})"
-        send_telegram_alert(preliminary_text)
-    
     html_content = fetch_html(url)
     if not html_content:
         print(f"Could not load HTML for {url}")
         return
         
-    cleaned_text = clean_html(html_content)
-    parsed_data = None
-    
-    if GROQ_API_KEY:
-        print("Calling Groq API for analysis...")
-        parsed_data = analyze_filing_with_groq(cleaned_text, url)
-        if parsed_data:
-            print("Groq analysis succeeded:", parsed_data)
-            
-            # CRITICAL SAFEGUARD: Prevent false panic alarms for BTC sales.
-            # LLMs can easily mistake stock ATM sales ("sold shares of common stock") for Bitcoin sales.
-            if parsed_data.get("event_type") == "btc_sale":
-                text_lower = cleaned_text.lower()
-                btc_sale_keywords = [
-                    "sold bitcoin", "sale of bitcoin", "sold approximately", "disposed of bitcoin",
-                    "disposition of bitcoin", "bitcoin sale", "sell bitcoin", "sale of any bitcoin"
-                ]
-                has_real_btc_sale = False
-                for kw in btc_sale_keywords:
-                    if kw in text_lower:
-                        if kw == "sold approximately":
-                            # Check if the word "approximately" is followed by shares or stock instead of BTC
-                            stock_match = re.search(r'sold approximately\s+[\d,]+\s*(shares|class a|common stock|preferred stock)', text_lower)
-                            if stock_match:
-                                continue
-                        has_real_btc_sale = True
-                        break
-                
-                if not has_real_btc_sale:
-                    print("CRITICAL SAFEGUARD TRIGGERED: Overriding false btc_sale event type.")
-                    # Override to financing if it mentions sales agreements or stock, else corporate_update
-                    if "sales agreement" in text_lower or "preferred stock" in text_lower or "notes" in text_lower:
-                        parsed_data["event_type"] = "financing"
-                    else:
-                        parsed_data["event_type"] = "corporate_update"
-            
-    # Run deterministic local table parser
+    # First, run local table parser (offline, instant, 100% reliable)
     fallback_data = parse_table_fallback(html_content)
     
     if fallback_data:
-        print("Local table parser successfully extracted BTC stats:", fallback_data)
-        if parsed_data:
-            # If a weekly BTC update table is present, the event MUST be btc_purchase, btc_sale or no_purchase.
-            # It cannot be a generic corporate_update or financing.
-            if parsed_data.get("event_type") in ["corporate_update", "financing", None]:
-                print(f"Overriding event_type from '{parsed_data.get('event_type')}' to '{fallback_data['event_type']}' due to BTC table presence.")
-                parsed_data["event_type"] = fallback_data["event_type"]
-                
-            # Merge deterministic stats to ensure 100% accuracy in the alert message
-            parsed_data["purchase_period"] = fallback_data.get("purchase_period") or parsed_data.get("purchase_period")
-            parsed_data["btc_acquired"] = fallback_data.get("btc_acquired") or parsed_data.get("btc_acquired")
-            parsed_data["purchase_price"] = fallback_data.get("purchase_price") or fallback_data.get("purchase_price_usd") or parsed_data.get("purchase_price")
-            parsed_data["avg_price"] = fallback_data.get("avg_price") or fallback_data.get("avg_purchase_price") or parsed_data.get("avg_price")
-            parsed_data["total_holdings"] = fallback_data.get("total_holdings") or fallback_data.get("total_btc_holdings") or parsed_data.get("total_holdings")
-            parsed_data["total_cost"] = fallback_data.get("total_cost") or fallback_data.get("total_cost_usd") or parsed_data.get("total_cost")
-            parsed_data["avg_cost"] = fallback_data.get("avg_cost") or fallback_data.get("avg_cost_per_btc") or parsed_data.get("avg_cost")
-        else:
-            parsed_data = fallback_data
-            
-    if not parsed_data:
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT total_debt, financing_source FROM purchase_history ORDER BY id DESC LIMIT 1")
-            last_row = cursor.fetchone()
-            conn.close()
-            last_debt = last_row["total_debt"] if last_row else "$6.7B"
-            last_source = last_row["financing_source"] if last_row else "ATM Hisse Satışı"
-        except Exception:
-            last_debt = "$6.7B"
-            last_source = "ATM Hisse Satışı"
-            
-        parsed_data = {
-            "event_type": "corporate_update",
-            "summary_turkish": "Filtrelenemeyen veya tablo içermeyen yeni 8-K bildirimi.",
-            "total_debt_usd": last_debt,
-            "financing_source_turkish": last_source
-        }
+        # Table is present! We can determine event and statistics instantly without Groq.
+        print("BTC update table found in filing! Bypassing synchronous Groq call for instant alert.")
+        save_to_database(date, fallback_data, url, accession, form)
         
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute(
-        "INSERT OR IGNORE INTO processed_filings (accession_number, filing_date, form, url) VALUES (?, ?, ?, ?)",
-        (accession, date, form, url)
-    )
-    
-    cursor.execute(
-        """INSERT INTO purchase_history 
-           (filing_date, period, btc_acquired, purchase_price, avg_price, total_holdings, total_cost, avg_cost, url, total_debt, financing_source)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            date,
-            parsed_data.get("purchase_period"),
-            str(parsed_data.get("btc_acquired") or "-"),
-            str(parsed_data.get("purchase_price") or "-"),
-            str(parsed_data.get("avg_price") or "-"),
-            str(parsed_data.get("total_holdings") or "-"),
-            str(parsed_data.get("total_cost") or "-"),
-            str(parsed_data.get("avg_cost") or "-"),
-            url,
-            str(parsed_data.get("total_debt") or parsed_data.get("total_debt_usd") or "-"),
-            str(parsed_data.get("financing_source_turkish") or parsed_data.get("financing_details") or "-")
-        )
-    )
-    conn.commit()
-    conn.close()
-    
-    alert_text = format_alert(parsed_data, url)
-    if should_alert:
-        send_telegram_alert(alert_text)
+        main_msg_id = None
+        if should_alert:
+            alert_text = format_alert(fallback_data, url)
+            main_msg_id = send_telegram_alert(alert_text)
+            
+        # Run Groq in the background asynchronously for the interpretation summary
+        if groq_keys and should_alert:
+            cleaned_text = clean_html(html_content)
+            threading.Thread(
+                target=async_groq_analysis,
+                args=(cleaned_text, url, main_msg_id),
+                daemon=True
+            ).start()
+    else:
+        # No table found. We need Groq to analyze the corporate update or financing text.
+        print("No BTC table found. Running synchronous Groq analysis...")
+        cleaned_text = clean_html(html_content)
+        parsed_data = None
+        
+        if groq_keys:
+            parsed_data = analyze_filing_with_groq(cleaned_text, url)
+            
+        if not parsed_data:
+            try:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT total_debt, financing_source FROM purchase_history ORDER BY id DESC LIMIT 1")
+                last_row = cursor.fetchone()
+                conn.close()
+                last_debt = last_row["total_debt"] if last_row else "$6.7B"
+                last_source = last_row["financing_source"] if last_row else "ATM Hisse Satışı"
+            except Exception:
+                last_debt = "$6.7B"
+                last_source = "ATM Hisse Satışı"
+                
+            parsed_data = {
+                "event_type": "corporate_update",
+                "summary_turkish": "Filtrelenemeyen veya tablo içermeyen yeni 8-K bildirimi.",
+                "total_debt_usd": last_debt,
+                "financing_source_turkish": last_source
+            }
+            
+        save_to_database(date, parsed_data, url, accession, form)
+        
+        if should_alert:
+            alert_text = format_alert(parsed_data, url)
+            send_telegram_alert(alert_text)
 
 def check_for_new_filings():
     global last_checked_time
