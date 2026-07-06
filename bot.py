@@ -455,27 +455,76 @@ def parse_table_fallback(html_content):
     # Use the LAST holdings snapshot (most recent date)
     latest_holdings = holdings_snapshots[-1] if holdings_snapshots else {}
     
-    # Try to fetch last known debt & financing as fallback value
+    # Try to fetch last known holdings, debt & financing from DB
+    prev_holdings_num = 0
+    last_debt = "$6.7B"
+    last_source = "ATM Hisse Satışı"
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT total_debt, financing_source FROM purchase_history ORDER BY id DESC LIMIT 1")
+        cursor.execute("SELECT total_holdings, total_debt, financing_source FROM purchase_history ORDER BY id DESC LIMIT 1")
         last_row = cursor.fetchone()
         conn.close()
-        last_debt = last_row["total_debt"] if last_row else "$6.7B"
-        last_source = last_row["financing_source"] if last_row else "ATM Hisse Satışı"
+        if last_row:
+            last_debt = last_row["total_debt"] or "$6.7B"
+            last_source = last_row["financing_source"] or "ATM Hisse Satışı"
+            # Parse previous holdings number for comparison
+            try:
+                prev_holdings_num = int(str(last_row["total_holdings"]).replace(',', '').replace(' ', ''))
+            except (ValueError, TypeError):
+                prev_holdings_num = 0
     except Exception:
-        last_debt = "$6.7B"
-        last_source = "ATM Hisse Satışı"
+        pass
     
-    if sale_activities:
-        total_sold = sum(parse_btc_number(a["btc_count"]) for a in sale_activities)
-        total_proceeds_m = sum(parse_money(a["price"]) for a in sale_activities)
+    # --- PRIMARY EVENT DETECTION: Holdings Comparison ---
+    # This is format-agnostic — doesn't depend on "BTC Sold" or "BTC Acquired" headers
+    current_holdings_str = latest_holdings.get("holdings", "0")
+    try:
+        current_holdings_num = int(current_holdings_str.replace(',', '').replace(' ', ''))
+    except (ValueError, TypeError):
+        current_holdings_num = 0
+    
+    holdings_diff = current_holdings_num - prev_holdings_num if prev_holdings_num > 0 else 0
+    
+    print(f"Holdings comparison: Previous={prev_holdings_num:,} → Current={current_holdings_num:,} = Diff={holdings_diff:+,}")
+    
+    # Determine event_type
+    if prev_holdings_num > 0 and current_holdings_num > 0:
+        # PRIMARY: Holdings comparison (format-agnostic, most reliable)
+        if holdings_diff > 0:
+            detected_event = "btc_purchase"
+        elif holdings_diff < 0:
+            detected_event = "btc_sale"
+        else:
+            detected_event = "no_purchase"
+    else:
+        # FALLBACK: Use activity table headers when no previous holdings in DB
+        sale_activities = [a for a in activities if a["type"] == "sale"]
+        purchase_activities = [a for a in activities if a["type"] == "purchase"]
+        if sale_activities:
+            detected_event = "btc_sale"
+        elif purchase_activities:
+            total_bought = sum(parse_btc_number(a["btc_count"]) for a in purchase_activities)
+            detected_event = "btc_purchase" if total_bought > 0 else "no_purchase"
+        else:
+            detected_event = "no_purchase"
+    
+    # --- SECONDARY: Use activity tables for price/amount details ---
+    # Aggregate activity data regardless of sale/purchase classification from headers
+    all_activities = activities  # Already collected from both "BTC Sold" and "BTC Acquired" tables
+    
+    # Build combined period string from all activity tables
+    if all_activities:
+        periods = [a["period"] for a in all_activities]
+        combined_period = " & ".join(periods)
         
-        # Weighted average sale price
+        total_btc = sum(parse_btc_number(a["btc_count"]) for a in all_activities)
+        total_money_m = sum(parse_money(a["price"]) for a in all_activities)
+        
+        # Weighted average price
         weighted_sum = 0
         total_btc_for_avg = 0
-        for a in sale_activities:
+        for a in all_activities:
             btc_n = parse_btc_number(a["btc_count"])
             try:
                 avg_p = float(a["avg_price"].replace('$', '').replace(',', ''))
@@ -485,69 +534,50 @@ def parse_table_fallback(html_content):
             total_btc_for_avg += btc_n
         weighted_avg = weighted_sum / total_btc_for_avg if total_btc_for_avg else 0
         
-        # Build combined period string
-        periods = [a["period"] for a in sale_activities]
-        combined_period = " & ".join(periods)
+        # Use absolute value of holdings diff as the BTC count if activity tables show different
+        # (holdings diff is the ground truth)
+        display_btc = abs(holdings_diff) if holdings_diff != 0 else total_btc
+        display_btc_str = f"{display_btc:,}" if display_btc > 0 else "0"
         
-        return {
-            "event_type": "btc_sale",
+        # Format money
+        if total_money_m >= 1000:
+            display_money = f"${total_money_m/1000:.2f}B"
+        elif total_money_m > 0:
+            display_money = f"${total_money_m:.1f}M"
+        else:
+            display_money = "-"
+        
+        result = {
+            "event_type": detected_event,
             "purchase_period": combined_period,
-            "btc_acquired": f"{total_sold:,}",
-            "purchase_price": f"${total_proceeds_m:.1f}M",
-            "avg_price": f"${weighted_avg:,.0f}",
+            "btc_acquired": display_btc_str,
+            "purchase_price": display_money,
+            "avg_price": f"${weighted_avg:,.0f}" if weighted_avg > 0 else "-",
             "total_holdings": latest_holdings.get("holdings", "-"),
             "total_cost": latest_holdings.get("total_cost", "-"),
             "avg_cost": latest_holdings.get("avg_cost", "-"),
             "total_debt": last_debt,
             "financing_details": last_source,
             "summary_turkish": None,
-            "sale_breakdown": sale_activities  # Keep individual periods for detail
+            "holdings_diff": holdings_diff
         }
-    
-    elif purchase_activities:
-        total_bought = sum(parse_btc_number(a["btc_count"]) for a in purchase_activities)
-        total_cost_m = sum(parse_money(a["price"]) for a in purchase_activities)
         
-        # Weighted average purchase price
-        weighted_sum = 0
-        total_btc_for_avg = 0
-        for a in purchase_activities:
-            btc_n = parse_btc_number(a["btc_count"])
-            try:
-                avg_p = float(a["avg_price"].replace('$', '').replace(',', ''))
-            except (ValueError, AttributeError):
-                avg_p = 0
-            weighted_sum += btc_n * avg_p
-            total_btc_for_avg += btc_n
-        weighted_avg = weighted_sum / total_btc_for_avg if total_btc_for_avg else 0
-        
-        # Build combined period string
-        periods = [a["period"] for a in purchase_activities]
-        combined_period = " & ".join(periods)
-        
-        event = "btc_purchase" if total_bought > 0 else "no_purchase"
-        
-        return {
-            "event_type": event,
-            "purchase_period": combined_period,
-            "btc_acquired": f"{total_bought:,}",
-            "purchase_price": f"${total_cost_m:.1f}M" if total_cost_m < 1000 else f"${total_cost_m/1000:.2f}B",
-            "avg_price": f"${weighted_avg:,.0f}",
-            "total_holdings": latest_holdings.get("holdings", "-"),
-            "total_cost": latest_holdings.get("total_cost", "-"),
-            "avg_cost": latest_holdings.get("avg_cost", "-"),
-            "total_debt": last_debt,
-            "financing_details": last_source,
-            "summary_turkish": None,
-            "purchase_breakdown": purchase_activities
-        }
+        # Add breakdown for display purposes
+        if detected_event == "btc_sale":
+            result["sale_breakdown"] = all_activities
+        elif detected_event == "btc_purchase":
+            result["purchase_breakdown"] = all_activities
+            
+        return result
     
     elif holdings_snapshots:
-        # Only holdings tables found, no activity — likely a "no purchase" week
-        return {
-            "event_type": "no_purchase",
+        # Only holdings tables found, no activity tables
+        display_btc = abs(holdings_diff) if holdings_diff != 0 else 0
+        
+        result = {
+            "event_type": detected_event,
             "purchase_period": latest_holdings.get("as_of", "-"),
-            "btc_acquired": "0",
+            "btc_acquired": f"{display_btc:,}" if display_btc > 0 else "0",
             "purchase_price": "-",
             "avg_price": "-",
             "total_holdings": latest_holdings.get("holdings", "-"),
@@ -555,8 +585,10 @@ def parse_table_fallback(html_content):
             "avg_cost": latest_holdings.get("avg_cost", "-"),
             "total_debt": last_debt,
             "financing_details": last_source,
-            "summary_turkish": None
+            "summary_turkish": None,
+            "holdings_diff": holdings_diff
         }
+        return result
     
     return None
 
