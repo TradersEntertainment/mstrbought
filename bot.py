@@ -146,6 +146,7 @@ def seed_database(conn):
     if count == 0:
         print("Seeding database with historical purchase data...")
         history = [
+            ("2026-07-06", "June 29, 2026 to July 5, 2026", "-3,588", "$216.0M", "$60,197", "843,775", "$63.69B", "$75,476", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526295586/mstr-20260706.htm", "$6.7B", "İmtiyazlı Hisse (STRC) Temettüsü"),
             ("2026-06-29", "June 22, 2026 to June 28, 2026", "0", "$0M", "$0", "847,363", "$64.10B", "$75,651", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526286871/mstr-20260629.htm", "$6.7B", "-"),
             ("2026-06-22", "June 15, 2026 to June 21, 2026", "520", "$34.9M", "$67,068", "847,363", "$64.10B", "$75,651", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526276717/mstr-20260504.htm", "$6.7B", "ATM Hisse Satışı"),
             ("2026-06-15", "June 8, 2026 to June 14, 2026", "1,587", "$100.0M", "$63,024", "846,842", "$64.07B", "$75,656", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526270311/mstr-20260504.htm", "$6.7B", "ATM Hisse Satışı"),
@@ -304,76 +305,259 @@ def clean_row_values(row):
     return final_cleaned
 
 def parse_table_fallback(html_content):
+    """Parse all BTC activity and holdings tables from an SEC 8-K filing.
+    
+    Handles filings with multiple sale/purchase periods (e.g., two separate sale tables)
+    by summing quantities and using the latest holdings snapshot.
+    """
     soup = BeautifulSoup(html_content, 'html.parser')
     tables = soup.find_all('table')
     
+    # Collect all activity entries (purchases/sales) and holdings snapshots
+    activities = []      # list of dicts: {type, period, btc_count, price, avg_price}
+    holdings_snapshots = []  # list of dicts: {as_of, holdings, total_cost, avg_cost}
+    
     for table in tables:
         text = table.get_text()
-        if "BTC Acquired" in text and ("BTC Holdings" in text or "Aggregate BTC Holdings" in text):
-            rows = table.find_all('tr')
-            row_data = []
-            for r in rows:
-                cols = [col.get_text().strip().replace('\n', ' ') for col in r.find_all(['td', 'th'])]
-                cols = [re.sub(r'\s+', ' ', c) for c in cols if c.strip()]
-                if cols:
-                    row_data.append(cols)
+        rows = table.find_all('tr')
+        row_data = []
+        for r in rows:
+            cols = [col.get_text().strip().replace('\n', ' ') for col in r.find_all(['td', 'th'])]
+            cols = [re.sub(r'\s+', ' ', c) for c in cols if c.strip()]
+            if cols:
+                row_data.append(cols)
+        
+        if len(row_data) < 2:
+            continue
             
-            if len(row_data) >= 3:
-                try:
-                    period_text = row_data[0][0].replace("During Period ", "").strip()
-                    headers = row_data[1]
-                    raw_values = row_data[2]
-                    cleaned_values = clean_row_values(raw_values)
-                    
-                    if len(cleaned_values) < 6:
-                        cleaned_values += ['-'] * (6 - len(cleaned_values))
+        # Detect activity tables: "BTC Sold" or "BTC Acquired" in headers
+        header_text = ' '.join(row_data[1]) if len(row_data) > 1 else ''
+        period_text = row_data[0][0] if row_data[0] else ''
+        
+        is_sold = 'BTC Sold' in header_text or 'BTC Sold' in text
+        is_acquired = 'BTC Acquired' in header_text or 'BTC Acquired' in text
+        is_holdings = 'Aggregate BTC Holdings' in header_text or 'Aggregate BTC Holdings' in text
+        
+        if (is_sold or is_acquired) and len(row_data) >= 3:
+            try:
+                cleaned = clean_row_values(row_data[2])
+                if len(cleaned) < 3:
+                    cleaned += ['-'] * (3 - len(cleaned))
+                
+                # Clean footnote markers like (1) from BTC count
+                btc_raw = re.sub(r'\(\d+\)', '', cleaned[0]).strip()
+                
+                # Detect price unit from header
+                price_header = row_data[1][1].lower() if len(row_data[1]) > 1 else ''
+                unit = "M" if "millions" in price_header else ("B" if "billions" in price_header else "")
+                price_val = cleaned[1]
+                if price_val != '-' and unit and not price_val.endswith(unit):
+                    price_val = f"{price_val}{unit}"
+                
+                avg_val = cleaned[2]
+                
+                # Extract period from row 0
+                period = period_text.replace("During Period ", "").replace("*", "").strip()
+                
+                activities.append({
+                    "type": "sale" if is_sold else "purchase",
+                    "period": period,
+                    "btc_count": btc_raw,
+                    "price": price_val,
+                    "avg_price": avg_val
+                })
+                
+                # Old format: combined table with holdings in columns 3-5
+                # e.g. headers: [BTC Acquired, Price(M), Avg Price, Aggregate BTC Holdings, Price(B), Avg Price]
+                if is_holdings and len(cleaned) >= 6:
+                    holdings_header_idx = next((h for h, hdr in enumerate(row_data[1]) if 'Aggregate BTC Holdings' in hdr), None)
+                    if holdings_header_idx is not None:
+                        h_cost_header = row_data[1][holdings_header_idx + 1].lower() if holdings_header_idx + 1 < len(row_data[1]) else ''
+                        h_cost_unit = "M" if "millions" in h_cost_header else ("B" if "billions" in h_cost_header else "")
+                        h_cost_val = cleaned[holdings_header_idx]  
+                        # holdings is at index 3, cost at 4, avg cost at 5 for 6-col format
+                        h_holdings = cleaned[3]
+                        h_cost_val = cleaned[4]
+                        if h_cost_val != '-' and h_cost_unit and not h_cost_val.endswith(h_cost_unit):
+                            h_cost_val = f"{h_cost_val}{h_cost_unit}"
+                        h_avg_cost = cleaned[5] if len(cleaned) > 5 else '-'
                         
-                    btc_acquired = cleaned_values[0]
-                    
-                    # Purchase Price
-                    price_header = headers[1].lower()
-                    unit = "M" if "millions" in price_header else ("B" if "billions" in price_header else "")
-                    purch_price = cleaned_values[1]
-                    if purch_price != '-' and unit and not purch_price.endswith(unit):
-                        purch_price = f"{purch_price}{unit}"
+                        # Extract "As of" date from period header row
+                        as_of_parts = [p for p in row_data[0] if 'As of' in p]
+                        as_of_date = as_of_parts[0].replace("As of ", "").replace("*", "").strip() if as_of_parts else period
                         
-                    avg_price = cleaned_values[2]
-                    total_holdings = cleaned_values[3]
-                    
-                    # Total Cost
-                    total_cost_header = headers[4].lower()
-                    total_cost_unit = "M" if "millions" in total_cost_header else ("B" if "billions" in total_cost_header else "")
-                    total_cost = cleaned_values[4]
-                    if total_cost != '-' and total_cost_unit and not total_cost.endswith(total_cost_unit):
-                        total_cost = f"{total_cost}{total_cost_unit}"
-                        
-                    avg_cost = cleaned_values[5]
-                    
-                    # Try to fetch last known debt & financing as fallback value
-                    conn = get_db_connection()
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT total_debt, financing_source FROM purchase_history ORDER BY id DESC LIMIT 1")
-                    last_row = cursor.fetchone()
-                    conn.close()
-                    last_debt = last_row["total_debt"] if last_row else "$6.7B"
-                    last_source = last_row["financing_source"] if last_row else "ATM Hisse Satışı"
-                    
-                    return {
-                        "event_type": "btc_purchase" if btc_acquired != '0' and btc_acquired != '-' else "no_purchase",
-                        "purchase_period": period_text,
-                        "btc_acquired": btc_acquired,
-                        "purchase_price": purch_price,
-                        "avg_price": avg_price,
-                        "total_holdings": total_holdings,
-                        "total_cost": total_cost,
-                        "avg_cost": avg_cost,
-                        "total_debt": last_debt,
-                        "financing_details": last_source,
-                        "summary_turkish": None
-                    }
-                except Exception as e:
-                    print(f"Fallback table parsing exception: {e}")
-                    
+                        holdings_snapshots.append({
+                            "as_of": as_of_date,
+                            "holdings": h_holdings,
+                            "total_cost": h_cost_val,
+                            "avg_cost": h_avg_cost
+                        })
+            except Exception as e:
+                print(f"Error parsing activity table: {e}")
+                
+        elif is_holdings and len(row_data) >= 3:
+            try:
+                cleaned = clean_row_values(row_data[2])
+                if len(cleaned) < 3:
+                    cleaned += ['-'] * (3 - len(cleaned))
+                
+                # Detect cost unit
+                cost_header = row_data[1][1].lower() if len(row_data[1]) > 1 else ''
+                cost_unit = "M" if "millions" in cost_header else ("B" if "billions" in cost_header else "")
+                cost_val = cleaned[1]
+                if cost_val != '-' and cost_unit and not cost_val.endswith(cost_unit):
+                    cost_val = f"{cost_val}{cost_unit}"
+                
+                as_of = period_text.replace("As of ", "").replace("*", "").strip()
+                
+                holdings_snapshots.append({
+                    "as_of": as_of,
+                    "holdings": cleaned[0],
+                    "total_cost": cost_val,
+                    "avg_cost": cleaned[2]
+                })
+            except Exception as e:
+                print(f"Error parsing holdings table: {e}")
+    
+    # If no activity or holdings tables found, return None
+    if not activities and not holdings_snapshots:
+        return None
+    
+    print(f"Parsed {len(activities)} activity tables and {len(holdings_snapshots)} holdings snapshots.")
+    
+    # Determine event type and aggregate
+    sale_activities = [a for a in activities if a["type"] == "sale"]
+    purchase_activities = [a for a in activities if a["type"] == "purchase"]
+    
+    # Sum up BTC counts
+    def parse_btc_number(s):
+        """Parse a BTC count string like '1,363' or '2,225' to integer."""
+        try:
+            return int(s.replace(',', '').replace(' ', ''))
+        except (ValueError, AttributeError):
+            return 0
+    
+    def parse_money(s):
+        """Parse a money string like '$80.8M' to float for summing."""
+        try:
+            s = s.replace('$', '').replace(',', '').strip()
+            multiplier = 1
+            if s.endswith('M'):
+                multiplier = 1
+                s = s[:-1]
+            elif s.endswith('B'):
+                multiplier = 1000
+                s = s[:-1]
+            return float(s) * multiplier
+        except (ValueError, AttributeError):
+            return 0.0
+    
+    # Use the LAST holdings snapshot (most recent date)
+    latest_holdings = holdings_snapshots[-1] if holdings_snapshots else {}
+    
+    # Try to fetch last known debt & financing as fallback value
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT total_debt, financing_source FROM purchase_history ORDER BY id DESC LIMIT 1")
+        last_row = cursor.fetchone()
+        conn.close()
+        last_debt = last_row["total_debt"] if last_row else "$6.7B"
+        last_source = last_row["financing_source"] if last_row else "ATM Hisse Satışı"
+    except Exception:
+        last_debt = "$6.7B"
+        last_source = "ATM Hisse Satışı"
+    
+    if sale_activities:
+        total_sold = sum(parse_btc_number(a["btc_count"]) for a in sale_activities)
+        total_proceeds_m = sum(parse_money(a["price"]) for a in sale_activities)
+        
+        # Weighted average sale price
+        weighted_sum = 0
+        total_btc_for_avg = 0
+        for a in sale_activities:
+            btc_n = parse_btc_number(a["btc_count"])
+            try:
+                avg_p = float(a["avg_price"].replace('$', '').replace(',', ''))
+            except (ValueError, AttributeError):
+                avg_p = 0
+            weighted_sum += btc_n * avg_p
+            total_btc_for_avg += btc_n
+        weighted_avg = weighted_sum / total_btc_for_avg if total_btc_for_avg else 0
+        
+        # Build combined period string
+        periods = [a["period"] for a in sale_activities]
+        combined_period = " & ".join(periods)
+        
+        return {
+            "event_type": "btc_sale",
+            "purchase_period": combined_period,
+            "btc_acquired": f"{total_sold:,}",
+            "purchase_price": f"${total_proceeds_m:.1f}M",
+            "avg_price": f"${weighted_avg:,.0f}",
+            "total_holdings": latest_holdings.get("holdings", "-"),
+            "total_cost": latest_holdings.get("total_cost", "-"),
+            "avg_cost": latest_holdings.get("avg_cost", "-"),
+            "total_debt": last_debt,
+            "financing_details": last_source,
+            "summary_turkish": None,
+            "sale_breakdown": sale_activities  # Keep individual periods for detail
+        }
+    
+    elif purchase_activities:
+        total_bought = sum(parse_btc_number(a["btc_count"]) for a in purchase_activities)
+        total_cost_m = sum(parse_money(a["price"]) for a in purchase_activities)
+        
+        # Weighted average purchase price
+        weighted_sum = 0
+        total_btc_for_avg = 0
+        for a in purchase_activities:
+            btc_n = parse_btc_number(a["btc_count"])
+            try:
+                avg_p = float(a["avg_price"].replace('$', '').replace(',', ''))
+            except (ValueError, AttributeError):
+                avg_p = 0
+            weighted_sum += btc_n * avg_p
+            total_btc_for_avg += btc_n
+        weighted_avg = weighted_sum / total_btc_for_avg if total_btc_for_avg else 0
+        
+        # Build combined period string
+        periods = [a["period"] for a in purchase_activities]
+        combined_period = " & ".join(periods)
+        
+        event = "btc_purchase" if total_bought > 0 else "no_purchase"
+        
+        return {
+            "event_type": event,
+            "purchase_period": combined_period,
+            "btc_acquired": f"{total_bought:,}",
+            "purchase_price": f"${total_cost_m:.1f}M" if total_cost_m < 1000 else f"${total_cost_m/1000:.2f}B",
+            "avg_price": f"${weighted_avg:,.0f}",
+            "total_holdings": latest_holdings.get("holdings", "-"),
+            "total_cost": latest_holdings.get("total_cost", "-"),
+            "avg_cost": latest_holdings.get("avg_cost", "-"),
+            "total_debt": last_debt,
+            "financing_details": last_source,
+            "summary_turkish": None,
+            "purchase_breakdown": purchase_activities
+        }
+    
+    elif holdings_snapshots:
+        # Only holdings tables found, no activity — likely a "no purchase" week
+        return {
+            "event_type": "no_purchase",
+            "purchase_period": latest_holdings.get("as_of", "-"),
+            "btc_acquired": "0",
+            "purchase_price": "-",
+            "avg_price": "-",
+            "total_holdings": latest_holdings.get("holdings", "-"),
+            "total_cost": latest_holdings.get("total_cost", "-"),
+            "avg_cost": latest_holdings.get("avg_cost", "-"),
+            "total_debt": last_debt,
+            "financing_details": last_source,
+            "summary_turkish": None
+        }
+    
     return None
 
 # ----------------- GROQ API INTEGRATION -----------------
@@ -473,6 +657,145 @@ You must return ONLY the raw JSON object. Do not include markdown code block mar
             
     print("All available Groq API keys failed or were rate limited.")
     return None
+
+def groq_api_call(prompt, temperature=0.1, max_retries=None):
+    """Low-level Groq API call with key rotation. Returns parsed JSON or None."""
+    if not groq_keys:
+        return None
+    retries = max_retries or len(groq_keys)
+    payload = {
+        "model": "llama-3.1-8b-instant",
+        "messages": [{"role": "user", "content": prompt}],
+        "response_format": {"type": "json_object"},
+        "temperature": temperature
+    }
+    for attempt in range(retries):
+        api_key = get_groq_client()
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        try:
+            response = http_session.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=15)
+            if response.status_code == 200:
+                return json.loads(response.json()['choices'][0]['message']['content'].strip())
+            elif response.status_code == 429:
+                print(f"Groq key {current_key_idx % len(groq_keys)} rate limited. Rotating...")
+                rotate_groq_key()
+                time.sleep(2)
+            else:
+                print(f"Groq error {response.status_code}. Rotating...")
+                rotate_groq_key()
+        except Exception as e:
+            print(f"Groq exception: {e}. Rotating...")
+            rotate_groq_key()
+    return None
+
+def analyze_filing_deep_groq(text, url, table_data=None):
+    """Multi-pass Groq analysis for high-quality Turkish summary.
+    
+    Pass 1: Extract key facts and data points from the filing
+    Pass 2: Generate a rich Turkish analysis using the extracted facts + table data
+    Pass 3 (optional): Refine and add market context
+    """
+    if not groq_keys:
+        return None
+    
+    truncated_text = text[:15000]
+    
+    # --- PASS 1: Extract key facts ---
+    print("Deep analysis Pass 1: Extracting key facts...")
+    pass1_prompt = f"""You are a financial analyst. Read this SEC Form 8-K filing from Strategy Inc. (formerly MicroStrategy).
+Extract ALL key facts as a JSON object:
+- "btc_activity": Describe ALL bitcoin purchase or sale activities mentioned (there may be multiple periods)
+- "share_repurchase": Any share repurchase program updates
+- "preferred_stock": Any STRC/STRF preferred stock updates (dividends, distributions, issuance)
+- "financing": Any new debt, ATM share sales, convertible notes
+- "other_events": Any other material events
+- "key_numbers": List of ALL important numbers mentioned (BTC counts, dollar amounts, prices, holdings)
+- "proceeds_usage": How were any sale proceeds used?
+
+Filing text:
+{truncated_text}
+
+Return ONLY the raw JSON object."""
+
+    pass1_result = groq_api_call(pass1_prompt, temperature=0.05)
+    if not pass1_result:
+        print("Deep analysis Pass 1 failed.")
+        return None
+    
+    # --- PASS 2: Generate rich Turkish analysis ---
+    print("Deep analysis Pass 2: Generating Turkish analysis...")
+    
+    # Include table_data context if available
+    table_context = ""
+    if table_data:
+        event = table_data.get("event_type", "unknown")
+        btc = table_data.get("btc_acquired", "-")
+        price = table_data.get("purchase_price", "-")
+        avg = table_data.get("avg_price", "-")
+        holdings = table_data.get("total_holdings", "-")
+        breakdown = table_data.get("sale_breakdown") or table_data.get("purchase_breakdown") or []
+        
+        table_context = f"""
+Parsed table data:
+- Event type: {event}
+- Total BTC: {btc}
+- Total amount: {price}
+- Weighted avg price: {avg}
+- Current holdings: {holdings} BTC
+"""
+        if breakdown:
+            table_context += "Period breakdown:\n"
+            for b in breakdown:
+                table_context += f"  - {b['period']}: {b['btc_count']} BTC @ {b['avg_price']} (total: {b['price']})\n"
+    
+    pass2_prompt = f"""Sen bir uzman finans analistsin. Aşağıdaki verileri kullanarak MicroStrategy (Strategy Inc.) hakkında kapsamlı bir Türkçe analiz yaz.
+
+Çıkarılan veriler (Pass 1):
+{json.dumps(pass1_result, indent=2, ensure_ascii=False)}
+{table_context}
+
+SEC Bildirimi URL: {url}
+
+Şu JSON formatında yanıt ver:
+- "summary_turkish": (string) 4-6 cümlelik detaylı Türkçe analiz. Şunları içermeli:
+  1. Ne oldu? (BTC alım/satım/değişiklik yok) - Eğer birden fazla dönem varsa HEPSİNİ belirt
+  2. Neden oldu? (Temettü ödemesi, fon oluşturma, tercihli hisse dağıtımı vs.)
+  3. Portföy etkisi (toplam BTC, maliyet değişimi)
+  4. Yatırımcı için ne anlama geliyor?
+- "market_impact": (string) 1-2 cümle, bu haberin piyasaya potansiyel etkisi
+- "risk_note": (string) 1 cümle, dikkat edilmesi gereken risk veya önemli not
+
+Sadece ham JSON döndür, markdown veya açıklama ekleme."""
+
+    pass2_result = groq_api_call(pass2_prompt, temperature=0.3)
+    if not pass2_result:
+        print("Deep analysis Pass 2 failed.")
+        # Fallback: use pass1 data to build a basic summary
+        return {"summary_turkish": str(pass1_result.get("btc_activity", "Analiz tamamlanamadı."))}
+    
+    # --- PASS 3: Refine with market context (optional, best-effort) ---
+    print("Deep analysis Pass 3: Refining analysis...")
+    pass3_prompt = f"""Sen bir finans editörüsün. Aşağıdaki analizi gözden geçir ve iyileştir.
+Gereksiz tekrarları kaldır, dili akıcı ve profesyonel yap. Maksimum 5-6 cümle olsun.
+
+Mevcut analiz:
+{pass2_result.get('summary_turkish', '')}
+
+Piyasa etkisi: {pass2_result.get('market_impact', '')}
+Risk notu: {pass2_result.get('risk_note', '')}
+
+JSON olarak döndür:
+- "summary_turkish": (string) İyileştirilmiş ve birleştirilmiş nihai Türkçe analiz metni (piyasa etkisi ve risk notunu da içersin, tek paragraf halinde akıcı şekilde). Metin kısa ve öz olmalı ama tüm kritik bilgileri kapsamalı.
+
+Sadece ham JSON döndür."""
+
+    pass3_result = groq_api_call(pass3_prompt, temperature=0.2)
+    if pass3_result and pass3_result.get("summary_turkish"):
+        print("Deep analysis Pass 3 succeeded — using refined summary.")
+        return pass3_result
+    else:
+        print("Deep analysis Pass 3 failed — using Pass 2 result.")
+        return pass2_result
 
 # ----------------- TELEGRAM ALERTS -----------------
 
@@ -654,8 +977,8 @@ def save_to_database(date, parsed_data, url, accession, form):
         print(f"Error saving to database: {e}")
 
 def async_groq_analysis(cleaned_text, url, reply_to_id, table_data=None):
-    print("Running async Groq analysis in background thread...")
-    parsed_data = analyze_filing_with_groq(cleaned_text, url)
+    print("Running async deep Groq analysis (3-pass) in background thread...")
+    parsed_data = analyze_filing_deep_groq(cleaned_text, url, table_data=table_data)
     if parsed_data and parsed_data.get("summary_turkish"):
         summary = parsed_data["summary_turkish"]
         
