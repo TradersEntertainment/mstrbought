@@ -1142,22 +1142,54 @@ def process_filing(accession, date, form, url):
                 save_to_database(date, parsed_data, url, accession, form)
                 
         threading.Thread(target=async_no_table_analysis, daemon=True).start()
+# Cache for processed filings — avoid DB query every 250ms
+_processed_cache = set()
+_processed_cache_time = 0
+
+def _refresh_processed_cache():
+    """Refresh the processed filings cache from DB. Called sparingly."""
+    global _processed_cache, _processed_cache_time
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT accession_number FROM processed_filings")
+        _processed_cache = set(row['accession_number'] for row in cursor.fetchall())
+        conn.close()
+        _processed_cache_time = time.time()
+    except Exception as e:
+        print(f"Error refreshing processed cache: {e}")
 
 def check_for_new_filings():
     global last_checked_time
     last_checked_time = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
     
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT accession_number FROM processed_filings")
-    processed = set(row['accession_number'] for row in cursor.fetchall())
-    conn.close()
+    # Refresh cache every 30 seconds (not every poll cycle)
+    if time.time() - _processed_cache_time > 30:
+        _refresh_processed_cache()
+    
+    processed = _processed_cache
     
     new_filings_found = []
     seen_accessions = set()
     
-    # Source 1: Primary submissions API
-    data = fetch_mstr_filings()
+    # Run BOTH sources in parallel threads for maximum speed
+    submissions_result = [None]
+    efts_result = [[]]
+    
+    def _fetch_submissions():
+        submissions_result[0] = fetch_mstr_filings()
+    def _fetch_efts():
+        efts_result[0] = fetch_mstr_filings_efts()
+    
+    t1 = threading.Thread(target=_fetch_submissions, daemon=True)
+    t2 = threading.Thread(target=_fetch_efts, daemon=True)
+    t1.start()
+    t2.start()
+    t1.join(timeout=4)
+    t2.join(timeout=4)
+    
+    # Process submissions results
+    data = submissions_result[0]
     if data:
         recent = data.get('filings', {}).get('recent', {})
         if recent:
@@ -1177,9 +1209,8 @@ def check_for_new_filings():
                         new_filings_found.append((acc_num, filing_date, form, url))
                         seen_accessions.add(acc_num)
     
-    # Source 2: EFTS (Full-Text Search) — often indexes 30-60s before submissions API
-    efts_results = fetch_mstr_filings_efts()
-    for result in efts_results:
+    # Process EFTS results
+    for result in efts_result[0]:
         acc = result["accession"]
         if acc not in processed and acc not in seen_accessions:
             new_filings_found.append((acc, result["date"], "8-K", result["url"]))
@@ -1187,6 +1218,8 @@ def check_for_new_filings():
                 
     for acc, date, form, url in reversed(new_filings_found):
         process_filing(acc, date, form, url)
+        # Immediately add to cache so we don't re-process
+        _processed_cache.add(acc)
         
     return len(new_filings_found)
 
