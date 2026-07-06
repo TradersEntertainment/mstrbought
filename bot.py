@@ -766,39 +766,59 @@ def process_filing(accession, date, form, url):
                 daemon=True
             ).start()
     else:
-        # No table found. We need Groq to analyze the corporate update or financing text.
-        print("No BTC table found. Running synchronous Groq analysis...")
+        # No table found — but we MUST still send an immediate alert, then analyze async
+        print("No BTC table found. Sending immediate alert, then running async Groq analysis...")
         cleaned_text = clean_html(html_content)
-        parsed_data = None
         
-        if groq_keys:
-            parsed_data = analyze_filing_with_groq(cleaned_text, url)
-            
-        if not parsed_data:
-            try:
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute("SELECT total_debt, financing_source FROM purchase_history ORDER BY id DESC LIMIT 1")
-                last_row = cursor.fetchone()
-                conn.close()
-                last_debt = last_row["total_debt"] if last_row else "$6.7B"
-                last_source = last_row["financing_source"] if last_row else "ATM Hisse Satışı"
-            except Exception:
-                last_debt = "$6.7B"
-                last_source = "ATM Hisse Satışı"
-                
-            parsed_data = {
-                "event_type": "corporate_update",
-                "summary_turkish": "Filtrelenemeyen veya tablo içermeyen yeni 8-K bildirimi.",
-                "total_debt_usd": last_debt,
-                "financing_source_turkish": last_source
-            }
-            
-        save_to_database(date, parsed_data, url, accession, form)
-        
+        main_msg_id = None
         if should_alert:
-            alert_text = format_alert(parsed_data, url)
-            send_telegram_alert(alert_text)
+            # Send an immediate "new filing detected" alert — don't wait for Groq
+            instant_alert = (
+                f"📋 **MSTR Yeni SEC Bildirimi (Form 8-K)**\n\n"
+                f"📅 Tarih: {date}\n"
+                f"📄 Yeni bir Form 8-K bildirimi tespit edildi. İçerik analiz ediliyor...\n\n"
+                f"🔗 [SEC Bildirimi]({url})"
+            )
+            main_msg_id = send_telegram_alert(instant_alert)
+        
+        # Run Groq analysis in background thread — reply with details when ready
+        def async_no_table_analysis():
+            parsed_data = None
+            if groq_keys:
+                parsed_data = analyze_filing_with_groq(cleaned_text, url)
+            
+            if not parsed_data:
+                try:
+                    conn2 = get_db_connection()
+                    cursor2 = conn2.cursor()
+                    cursor2.execute("SELECT total_debt, financing_source FROM purchase_history ORDER BY id DESC LIMIT 1")
+                    last_row = cursor2.fetchone()
+                    conn2.close()
+                    last_debt = last_row["total_debt"] if last_row else "$6.7B"
+                    last_source = last_row["financing_source"] if last_row else "ATM Hisse Satışı"
+                except Exception:
+                    last_debt = "$6.7B"
+                    last_source = "ATM Hisse Satışı"
+                    
+                parsed_data = {
+                    "event_type": "corporate_update",
+                    "summary_turkish": "Filtrelenemeyen veya tablo içermeyen yeni 8-K bildirimi.",
+                    "total_debt_usd": last_debt,
+                    "financing_source_turkish": last_source
+                }
+                
+            save_to_database(date, parsed_data, url, accession, form)
+            
+            if should_alert and main_msg_id:
+                summary = parsed_data.get("summary_turkish", "")
+                if summary:
+                    detail_text = f"💡 **[AI Analizi — Detaylı Rapor]**\n\n{summary}\n\n🔗 [SEC Bildirimi]({url})"
+                    send_telegram_alert(detail_text, reply_to_message_id=main_msg_id)
+                    print("Async no-table Groq analysis completed and sent.")
+            else:
+                save_to_database(date, parsed_data, url, accession, form)
+                
+        threading.Thread(target=async_no_table_analysis, daemon=True).start()
 
 def check_for_new_filings():
     global last_checked_time
@@ -858,16 +878,28 @@ def polling_loop():
             now_trt = datetime.now(timezone.utc).astimezone(trt_tz)
             
             is_weekday = now_trt.weekday() < 5
-            is_critical_time = (
-                (now_trt.hour == 14 and now_trt.minute >= 55) or
-                (now_trt.hour == 15 and now_trt.minute <= 10)
+            
+            # Ultra-critical: 14:30 - 15:15 TRT (sub-second polling)
+            is_ultra_critical = (
+                (now_trt.hour == 14 and now_trt.minute >= 30) or
+                (now_trt.hour == 15 and now_trt.minute <= 15)
+            )
+            # Extended fast: 14:00-14:30 and 15:15-16:00 TRT (15s polling)
+            is_extended_fast = (
+                (now_trt.hour == 14 and now_trt.minute < 30) or
+                (now_trt.hour == 15 and now_trt.minute > 15)
             )
             
-            if is_weekday and is_critical_time:
-                if current_mode != "High-Speed Mode":
-                    print(f"Entering HIGH-SPEED POLLING MODE at {now_trt.strftime('%H:%M:%S')} TRT")
-                    current_mode = "High-Speed Mode"
+            if is_weekday and is_ultra_critical:
+                if current_mode != "Ultra High-Speed Mode":
+                    print(f"Entering ULTRA HIGH-SPEED POLLING MODE at {now_trt.strftime('%H:%M:%S')} TRT")
+                    current_mode = "Ultra High-Speed Mode"
                 interval = POLL_INTERVAL_CRITICAL
+            elif is_weekday and is_extended_fast:
+                if current_mode != "Extended Fast Mode":
+                    print(f"Entering EXTENDED FAST POLLING MODE at {now_trt.strftime('%H:%M:%S')} TRT")
+                    current_mode = "Extended Fast Mode"
+                interval = 15.0
             else:
                 if current_mode != "Normal Mode":
                     print(f"Entering NORMAL POLLING MODE at {now_trt.strftime('%H:%M:%S')} TRT")
