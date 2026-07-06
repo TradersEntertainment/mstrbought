@@ -268,7 +268,7 @@ def fetch_mstr_filings_efts():
 
 def fetch_html(url):
     try:
-        resp = http_session.get(url, timeout=5)
+        resp = http_session.get(url, timeout=3)
         if resp.status_code == 200:
             return resp.text
     except Exception as e:
@@ -880,16 +880,27 @@ def format_alert(parsed_data, url):
         avg = parsed_data.get('avg_price') or parsed_data.get('avg_purchase_price') or '-'
         holdings = parsed_data.get('total_holdings') or parsed_data.get('total_btc_holdings') or '-'
         
+        # Build period breakdown for multi-period sales
+        breakdown = parsed_data.get('sale_breakdown', [])
+        if len(breakdown) > 1:
+            breakdown_text = ""
+            for b in breakdown:
+                breakdown_text += f"\n  ↳ {b['period']}: {b['btc_count']} BTC @ {b['avg_price']} ({b['price']})"
+            period_line = f"- 📅 **Dönem**: {parsed_data.get('purchase_period') or 'Belirtilmemiş'}{breakdown_text}"
+        else:
+            period_line = f"- 📅 **Dönem**: {parsed_data.get('purchase_period') or 'Belirtilmemiş'}"
+        
         return f"""🚨 **MSTR BITCOIN SATTI: -{acquired} BTC!** (Tutar: {price} | Ort: {avg})
 ℹ️ Kalan Toplam Portföy: {holdings} BTC.
 
 **Detaylı Rapor:**
-- 📅 **Dönem**: {parsed_data.get('purchase_period') or 'Belirtilmemiş'}
-- 🪙 **Satılan Miktar**: {acquired} BTC
-- 💰 **Elde Edilen Tutar**: {price}
-- 🏷️ **Ortalama Satış Fiyatı**: {avg}
+{period_line}
+- 🪙 **Toplam Satılan**: -{acquired} BTC
+- 💰 **Toplam Elde Edilen**: {price}
+- 🏷️ **Ağırlıklı Ort. Satış Fiyatı**: {avg}
 - 📊 **Kalan Toplam Portföy**: {holdings} BTC
 - 📉 **Toplam Kümülatif Maliyet**: {parsed_data.get('total_cost') or parsed_data.get('total_cost_usd') or 'Belirtilmemiş'}
+- 🎯 **Ortalama Maliyet**: {parsed_data.get('avg_cost') or parsed_data.get('avg_cost_per_btc') or 'Belirtilmemiş'}
 - 🏦 **Toplam Borç (Tahvil)**: {parsed_data.get('total_debt') or parsed_data.get('total_debt_usd') or 'Belirtilmemiş'}
 
 🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
@@ -1108,7 +1119,7 @@ def process_filing(accession, date, form, url):
         def async_no_table_analysis():
             parsed_data = None
             if groq_keys:
-                parsed_data = analyze_filing_with_groq(cleaned_text, url)
+                parsed_data = analyze_filing_deep_groq(cleaned_text, url)
             
             if not parsed_data:
                 try:
@@ -1138,10 +1149,9 @@ def process_filing(accession, date, form, url):
                     detail_text = f"💡 **[AI Analizi — Detaylı Rapor]**\n\n{summary}\n\n🔗 [SEC Bildirimi]({url})"
                     send_telegram_alert(detail_text, reply_to_message_id=main_msg_id)
                     print("Async no-table Groq analysis completed and sent.")
-            else:
-                save_to_database(date, parsed_data, url, accession, form)
                 
         threading.Thread(target=async_no_table_analysis, daemon=True).start()
+
 # Cache for processed filings — avoid DB query every 250ms
 _processed_cache = set()
 _processed_cache_time = 0
