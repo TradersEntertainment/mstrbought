@@ -50,7 +50,25 @@ def test_no_atm_table_returns_none():
 def test_weekly_table_is_period_scoped():
     atm = bot.parse_atm_table(load_tables('july13_hold_atm.html'))
     assert atm['period_scoped'] is True
-    assert atm['fmt'] == 2
+    assert atm['fmt'] == 3
+
+
+def test_net_proceeds_clamped_to_notional_when_impossible():
+    """Net proceeds can't exceed gross notional. A net cell that does
+    (e.g. the Available-for-Issuance capacity leaking in) is clamped, so
+    STRC shows its real ~$445M, not the inflated $5,350M."""
+    atm = bot.parse_atm_table(load_tables('atm_misaligned.html'))
+    strc = next(s for s in atm['securities'] if s['ticker'] == 'STRC')
+    assert strc['net_proceeds_num_m'] == 445.0
+    assert strc['suspect'] is not None and 'net>notional' in strc['suspect']
+    # The badge total reflects the corrected value
+    assert atm['total_net_proceeds'] == '$445.0M'
+    assert strc['fmt'] if 'fmt' in strc else True  # sanity
+
+
+def test_fmt_bumped_to_3():
+    atm = bot.parse_atm_table(load_tables('july13_hold_atm.html'))
+    assert atm['fmt'] == 3
 
 
 def test_cumulative_program_table_is_not_period_scoped():

@@ -358,7 +358,7 @@ def _migrate_repair_july_2026_rows(conn):
 # table), in the exact shape parse_atm_table produces — backfilled so the
 # dashboard shows WHICH security raised the cash for that week too.
 _JULY13_ATM_JSON = {
-    "fmt": 2,
+    "fmt": 3,
     "period_scoped": True,
     "period": "July 6, 2026 to July 12, 2026",
     "securities": [
@@ -1002,23 +1002,53 @@ def parse_atm_table(tables):
                 entry[key] = val
             entry["shares_sold_num"] = parse_btc_number(entry.get("shares_sold", "-"))
             entry["net_proceeds_num_m"] = parse_money(entry.get("net_proceeds", "-"))
+
+            # --- Sanity guards against column misalignment ---
+            # (e.g. the huge "Available for Issuance" capacity number leaking
+            # into the Net Proceeds slot and inflating the cash estimate.)
+            entry["suspect"] = None
+            notional_m = parse_money(entry.get("notional", "-"))
+            net_m = entry["net_proceeds_num_m"]
+            shares = entry["shares_sold_num"]
+
+            # HARD invariant: net proceeds can never exceed gross notional.
+            # If it does, the net cell is corrupt — clamp it to the notional.
+            if notional_m > 0 and net_m > notional_m * 1.02:
+                entry["net_proceeds_num_m"] = round(notional_m, 4)
+                entry["net_proceeds"] = entry.get("notional", "-")
+                entry["suspect"] = f"net>notional ({net_m:.0f}M>{notional_m:.0f}M) → nominale sabitlendi"
+                net_m = notional_m
+
+            # Implied per-share sanity: preferreds are ~$100-par (trade
+            # roughly $50-150); MSTR common is high but bounded. A value far
+            # outside these bands means a shifted column — don't count it.
+            if shares > 0 and net_m > 0:
+                implied = net_m * 1e6 / shares
+                lo, hi = (20.0, 5000.0) if ticker == "MSTR" else (5.0, 1000.0)
+                if not (lo <= implied <= hi):
+                    entry["suspect"] = (entry["suspect"] or "") + \
+                        f" | hisse başı ${implied:,.0f} bandın dışında (${lo:.0f}-${hi:.0f})"
+                    entry["counts"] = False
             securities.append(entry)
 
         if not securities:
             continue
 
-        sold = [s for s in securities if s["shares_sold_num"] > 0]
-        if total_net_proceeds == "-" and sold:
-            total_m = sum(s["net_proceeds_num_m"] for s in sold)
-            if total_m >= 1000:
-                total_net_proceeds = f"${total_m/1000:.2f}B"
-            elif total_m > 0:
-                total_net_proceeds = f"${total_m:.1f}M"
+        # A security "counts" only if it sold shares and isn't flagged by a
+        # sanity guard (counts defaults True; guards set it False).
+        sold = [s for s in securities
+                if s["shares_sold_num"] > 0 and s.get("counts") is not False]
+        # Recompute the badge total from sane, clamped values
+        total_m = sum(s["net_proceeds_num_m"] for s in sold)
+        if total_m >= 1000:
+            total_net_proceeds = f"${total_m/1000:.2f}B"
+        elif total_m > 0:
+            total_net_proceeds = f"${total_m:.1f}M"
 
         return {
-            # fmt 2 = carries period_scoped; the backfill re-parses any
-            # stored JSON older than this format
-            "fmt": 2,
+            # fmt 3 = period_scoped + column-misalignment sanity guards;
+            # the backfill re-parses any stored JSON older than this format
+            "fmt": 3,
             "period": period,
             # Only tables covering a "During Period" window are weekly
             # sales. Cumulative program summaries ("sold to date") match
@@ -1269,8 +1299,10 @@ def compute_dividend_model():
                 if m:
                     e["rate"] = float(m.group(1)) / 100.0
                     e["rate_source"] = "filing_name"
-            # Cumulative tables must not be added as weekly issuance
-            if period_scoped and (s.get("shares_sold_num") or 0) > 0 and row["filing_date"] >= PREFERRED_BASELINE_AS_OF:
+            # Cumulative tables and sanity-flagged rows must not be added as issuance
+            if (period_scoped and s.get("counts") is not False
+                    and (s.get("shares_sold_num") or 0) > 0
+                    and row["filing_date"] >= PREFERRED_BASELINE_AS_OF):
                 notional_m = parse_money(s.get("notional", "-"))
                 if not notional_m:
                     # Some rows only carry net proceeds — close approximation
@@ -1362,6 +1394,7 @@ def compute_cash_estimate():
             {"ticker": s.get("ticker"), "net_m": round(s.get("net_proceeds_num_m") or 0.0, 1)}
             for s in atm.get("securities", [])
             if (s.get("shares_sold_num") or 0) > 0 and (s.get("net_proceeds_num_m") or 0) > 0
+            and s.get("counts") is not False
         ]
         atm_m = sum(d["net_m"] for d in atm_detail)
         btc_signed = parse_btc_number(r["btc_acquired"])
@@ -1558,8 +1591,8 @@ def _next_quarter_end(period_end):
 
 # ----------------- HISTORICAL ATM BACKFILL -----------------
 
-ATM_SENTINEL_NO_TABLE = {"fmt": 2, "sold_any": False, "securities": [], "note": "no_atm_table"}
-ATM_SENTINEL_NO_DOC = {"fmt": 2, "sold_any": False, "securities": [], "note": "no_fetchable_doc"}
+ATM_SENTINEL_NO_TABLE = {"fmt": 3, "sold_any": False, "securities": [], "note": "no_atm_table"}
+ATM_SENTINEL_NO_DOC = {"fmt": 3, "sold_any": False, "securities": [], "note": "no_fetchable_doc"}
 
 def backfill_atm_history(sleep_seconds=1.5):
     """Re-read historical filings and fill missing per-security ATM data.
@@ -1572,12 +1605,12 @@ def backfill_atm_history(sleep_seconds=1.5):
     """
     try:
         conn = get_db_connection()
-        # Also re-parse rows stored before fmt 2 (adds the period_scoped
-        # guard that keeps cumulative program tables out of weekly flows)
+        # Also re-parse rows stored before fmt 3 (adds the period_scoped
+        # guard and column-misalignment sanity checks)
         rows = conn.execute(
             "SELECT id, url, financing_source FROM purchase_history "
             "WHERE atm_sales IS NULL OR atm_sales = '' "
-            "   OR atm_sales NOT LIKE '%\"fmt\": 2%'"
+            "   OR atm_sales NOT LIKE '%\"fmt\": 3%'"
         ).fetchall()
         conn.close()
     except Exception as e:
@@ -2664,14 +2697,18 @@ def get_atm_audit():
                 if shares <= 0:
                     continue
                 net_usd = (s.get("net_proceeds_num_m") or 0.0) * 1e6
+                row_counts = counted and s.get("counts") is not False
                 secs.append({
                     "ticker": s.get("ticker"),
                     "shares_sold": s.get("shares_sold"),
                     "notional": s.get("notional"),
                     "net_proceeds": s.get("net_proceeds"),
+                    "available": s.get("available"),
                     "implied_price_usd": round(net_usd / shares, 2) if shares and net_usd else None,
+                    "counts": row_counts,
+                    "suspect": s.get("suspect"),
                 })
-                if counted:
+                if row_counts:
                     totals[s.get("ticker")] = round(
                         totals.get(s.get("ticker"), 0.0) + (s.get("net_proceeds_num_m") or 0.0), 1)
             if secs or atm.get("note"):
