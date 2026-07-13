@@ -154,7 +154,11 @@ def init_db():
     proc_count = cursor.fetchone()[0]
     if proc_count < 100:
         mark_current_filings_processed(conn)
-        
+
+    # Repair known-bad historical rows (runs after self-heal + seed so every
+    # ordering is safe; content guards make it a no-op on healthy databases)
+    apply_data_migrations(conn)
+
     conn.close()
 
 def seed_database(conn):
@@ -163,7 +167,10 @@ def seed_database(conn):
     count = cursor.fetchone()[0]
     if count == 0:
         print("Seeding database with historical purchase data...")
+        # TODO: replace the July 13 placeholder URL with the real filing URL
+        # once it can be read from EDGAR or the Railway logs.
         history = [
+            ("2026-07-13", "July 6, 2026 to July 12, 2026", "0", "-", "-", "843,775", "$63.69B", "$75,476", "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001050446&type=8-K", "$6.7B", "MSTR ATM Hisse Satışı ($466.7M)"),
             ("2026-07-06", "June 29, 2026 to July 5, 2026", "-3,588", "$216.0M", "$60,197", "843,775", "$63.69B", "$75,476", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526295586/mstr-20260706.htm", "$6.7B", "İmtiyazlı Hisse (STRC) Temettüsü"),
             ("2026-06-29", "June 22, 2026 to June 28, 2026", "0", "$0M", "$0", "847,363", "$64.10B", "$75,651", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526286871/mstr-20260629.htm", "$6.7B", "-"),
             ("2026-06-22", "June 15, 2026 to June 21, 2026", "520", "$34.9M", "$67,068", "847,363", "$64.10B", "$75,651", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526276717/mstr-20260504.htm", "$6.7B", "ATM Hisse Satışı"),
@@ -193,17 +200,20 @@ def seed_database(conn):
             )
             
             url = item[8]
-            parts = url.split('/')
-            acc_no_dash = parts[-2]
-            if len(acc_no_dash) == 18:
-                acc_dashed = f"{acc_no_dash[:10]}-{acc_no_dash[10:12]}-{acc_no_dash[12:]}"
-            else:
-                acc_dashed = acc_no_dash
-            
-            cursor.execute(
-                "INSERT OR IGNORE INTO processed_filings (accession_number, filing_date, form, url) VALUES (?, ?, '8-K', ?)",
-                (acc_dashed, item[0], url)
-            )
+            # A real accession number can only be derived from Archives URLs;
+            # placeholder rows are covered by mark_current_filings_processed.
+            if '/Archives/edgar/data/' in url:
+                parts = url.split('/')
+                acc_no_dash = parts[-2]
+                if len(acc_no_dash) == 18:
+                    acc_dashed = f"{acc_no_dash[:10]}-{acc_no_dash[10:12]}-{acc_no_dash[12:]}"
+                else:
+                    acc_dashed = acc_no_dash
+
+                cursor.execute(
+                    "INSERT OR IGNORE INTO processed_filings (accession_number, filing_date, form, url) VALUES (?, ?, '8-K', ?)",
+                    (acc_dashed, item[0], url)
+                )
         conn.commit()
         print("Database seeded successfully.")
 
@@ -234,6 +244,98 @@ def mark_current_filings_processed(conn):
                 count_marked += 1
         conn.commit()
         print(f"Successfully marked {count_marked} existing filings in EDGAR as processed.")
+
+# ----------------- DATA-REPAIR MIGRATIONS -----------------
+
+def apply_data_migrations(conn):
+    """Run idempotent data-repair migrations at startup.
+
+    Each migration is recorded in schema_migrations AND content-guarded, so
+    every ordering is safe: fresh install (seed already correct, guards
+    no-op), stale production DB (rows repaired exactly once), repeated boots
+    (ledger skips). A failing migration never blocks startup.
+    """
+    migrations = [
+        ("2026-07-13-repair-july-rows", _migrate_repair_july_2026_rows),
+    ]
+    cursor = conn.cursor()
+    for migration_id, fn in migrations:
+        try:
+            cursor.execute("SELECT 1 FROM schema_migrations WHERE migration_id = ?", (migration_id,))
+            if cursor.fetchone():
+                continue
+            fn(conn)
+            cursor.execute("INSERT OR IGNORE INTO schema_migrations (migration_id) VALUES (?)", (migration_id,))
+            conn.commit()
+            print(f"Data migration applied: {migration_id}")
+        except Exception as e:
+            print(f"Data migration {migration_id} failed (will retry next boot): {e}")
+
+def _migrate_repair_july_2026_rows(conn):
+    """Repair production rows corrupted by the pre-multi-table parser.
+
+    The July 6, 2026 filing contained TWO sale periods; the old parser only
+    captured the first (-1,363 → holdings 846,000). The stale holdings then
+    made the July 13 filing (no BTC transaction) look like a 2,225 BTC sale.
+    """
+    cursor = conn.cursor()
+
+    # 1. July 6 row: corrected aggregate of both sale periods
+    cursor.execute(
+        """UPDATE purchase_history
+           SET btc_acquired='-3,588', purchase_price='$216.0M', avg_price='$60,197',
+               total_holdings='843,775', total_cost='$63.69B', avg_cost='$75,476',
+               period='June 29, 2026 to July 5, 2026', event_type='btc_sale'
+           WHERE filing_date='2026-07-06' AND total_holdings<>'843,775'"""
+    )
+    if cursor.rowcount > 0:
+        print(f"Migration: repaired {cursor.rowcount} July 6 row(s) → -3,588 BTC / 843,775 holdings")
+
+    # Normalize the sign if the amount was stored unsigned or partial
+    cursor.execute(
+        """UPDATE purchase_history
+           SET btc_acquired='-3,588', event_type='btc_sale'
+           WHERE filing_date='2026-07-06' AND btc_acquired IN ('3,588', '1,363', '-1,363', '2,225', '-2,225')"""
+    )
+
+    # 2. Deduplicate July 13 rows, keeping the earliest
+    cursor.execute(
+        """DELETE FROM purchase_history
+           WHERE filing_date='2026-07-13'
+             AND id NOT IN (SELECT MIN(id) FROM purchase_history WHERE filing_date='2026-07-13')"""
+    )
+
+    # 3. Fix the fabricated July 13 "sale": there was NO BTC transaction that
+    # week, only an MSTR ATM share sale ($466.7M net proceeds)
+    cursor.execute(
+        """UPDATE purchase_history
+           SET btc_acquired='0', purchase_price='-', avg_price='-',
+               total_holdings='843,775', total_cost='$63.69B', avg_cost='$75,476',
+               period='July 6, 2026 to July 12, 2026',
+               financing_source='MSTR ATM Hisse Satışı ($466.7M)', event_type='no_purchase'
+           WHERE filing_date='2026-07-13' AND btc_acquired<>'0'"""
+    )
+    if cursor.rowcount > 0:
+        print(f"Migration: repaired {cursor.rowcount} July 13 row(s) → 0 BTC / MSTR ATM $466.7M")
+
+    # 4. Insert the July 13 row when missing entirely (fresh installs whose
+    # seed predates July 13). TODO: replace the placeholder URL with the
+    # real filing URL once it can be read from EDGAR or the Railway logs.
+    cursor.execute("SELECT COUNT(*) FROM purchase_history WHERE filing_date='2026-07-13'")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute(
+            """INSERT INTO purchase_history
+               (filing_date, period, btc_acquired, purchase_price, avg_price,
+                total_holdings, total_cost, avg_cost, url, total_debt,
+                financing_source, event_type)
+               VALUES ('2026-07-13', 'July 6, 2026 to July 12, 2026', '0', '-', '-',
+                       '843,775', '$63.69B', '$75,476',
+                       'https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001050446&type=8-K',
+                       '$6.7B', 'MSTR ATM Hisse Satışı ($466.7M)', 'no_purchase')"""
+        )
+        print("Migration: inserted missing July 13 row (0 BTC; MSTR ATM $466.7M)")
+
+    conn.commit()
 
 # ----------------- PARSING & SEC SCRAPING -----------------
 
