@@ -1,0 +1,17 @@
+{
+  "cik": 1050446,
+  "taxonomy": "us-gaap",
+  "tag": "CashAndCashEquivalentsAtCarryingValue",
+  "label": "Cash and Cash Equivalents, at Carrying Value",
+  "description": "Amount of currency on hand as well as demand deposits with banks or financial institutions.",
+  "entityName": "MicroStrategy Incorporated",
+  "units": {
+    "USD": [
+      {"end": "2025-09-30", "val": 610000000, "accn": "0001193125-25-111111", "fy": 2025, "fp": "Q3", "form": "10-Q", "filed": "2025-11-01", "frame": "CY2025Q3I"},
+      {"end": "2025-12-31", "val": 2500000000, "accn": "0001193125-26-022222", "fy": 2025, "fp": "FY", "form": "10-K", "filed": "2026-02-15"},
+      {"end": "2025-12-31", "val": 2450000000, "accn": "0001193125-26-055555", "fy": 2026, "fp": "Q1", "form": "10-Q", "filed": "2026-05-05", "frame": "CY2025Q4I"},
+      {"end": "2026-03-31", "val": 3100000000, "accn": "0001193125-26-055555", "fy": 2026, "fp": "Q1", "form": "10-Q", "filed": "2026-05-05"},
+      {"end": "2026-03-31", "val": 3150000000, "accn": "0001193125-26-066666", "fy": 2026, "fp": "Q1", "form": "10-Q/A", "filed": "2026-06-01"}
+    ]
+  }
+}

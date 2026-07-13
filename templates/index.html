@@ -11,8 +11,8 @@
     <!-- FontAwesome icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Chart.js (bundled locally — no CDN dependency) -->
-    <script src="/static/chart.umd.min.js?v=4"></script>
-    <link rel="stylesheet" href="/static/style.css?v=4">
+    <script src="/static/chart.umd.min.js?v=5"></script>
+    <link rel="stylesheet" href="/static/style.css?v=5">
 </head>
 <body>
     <div class="glow-container">
@@ -84,6 +84,18 @@
                     </div>
                 </div>
             </div>
+            <div class="stat-card">
+                <div class="card-inner">
+                    <div class="icon-box green">
+                        <i class="fa-solid fa-sack-dollar"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h3>Nakit Rezervi</h3>
+                        <p class="value" id="statCash">-</p>
+                        <p class="stat-subtext" id="statCashDate"></p>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- Operations Area -->
@@ -125,6 +137,16 @@
                     </div>
                     <div class="chart-container">
                         <canvas id="flowChart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-panel glass-panel" style="margin-top: 1.5rem;">
+                    <div class="panel-header">
+                        <h2><i class="fa-solid fa-sack-dollar"></i> MSTR Nakit Rezervi (Çeyreklik)</h2>
+                        <p>SEC XBRL bilanço verisi (10-Q/10-K) — Nakit ve Nakit Benzerleri. Haftalık 8-K'larda nakit açıklanmaz; seri çeyrekliktir.</p>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="cashChart"></canvas>
+                        <p class="chart-empty-note" id="cashEmptyNote" style="display:none;">Nakit verisi ilk senkronizasyonda yüklenecek.</p>
                     </div>
                 </div>
                 <div class="chart-panel glass-panel" style="margin-top: 1.5rem;">
@@ -174,6 +196,6 @@
     </div>
 
     <!-- Script file -->
-    <script src="/static/dashboard.js?v=4"></script>
+    <script src="/static/dashboard.js?v=5"></script>
 </body>
 </html>

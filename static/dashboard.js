@@ -1,6 +1,7 @@
 let portfolioChart = null;
 let debtChart = null;
 let flowChart = null;
+let cashChart = null;
 
 // Helper to show toast messages
 function showToast(message, isError = false) {
@@ -406,6 +407,107 @@ function renderFlowChart(chartData) {
     });
 }
 
+function formatUsd(v) {
+    if (v >= 1e9) return '$' + (v / 1e9).toLocaleString('tr-TR', { maximumFractionDigits: 2 }) + 'B';
+    if (v >= 1e6) return '$' + Math.round(v / 1e6).toLocaleString('tr-TR') + 'M';
+    return '$' + Math.round(v).toLocaleString('tr-TR');
+}
+
+// Quarterly cash reserves (SEC XBRL balance-sheet data) — chart + stat card.
+// Weekly 8-Ks never disclose cash, so this series is quarterly by nature.
+async function fetchCash() {
+    try {
+        const resp = await fetch('/api/cash');
+        const data = await resp.json();
+
+        const note = document.getElementById('cashEmptyNote');
+        const statCash = document.getElementById('statCash');
+        const statCashDate = document.getElementById('statCashDate');
+
+        if (!Array.isArray(data) || data.length === 0) {
+            if (note) note.style.display = 'flex';
+            if (statCash) statCash.textContent = '-';
+            return;
+        }
+        if (note) note.style.display = 'none';
+
+        const latest = data[data.length - 1];
+        if (statCash) statCash.textContent = formatUsd(latest.value);
+        if (statCashDate) statCashDate.textContent = `${latest.period_end} itibarıyla (çeyreklik)`;
+
+        renderCashChart(data);
+    } catch (e) {
+        console.error('Cash fetch error:', e);
+    }
+}
+
+function renderCashChart(cashData) {
+    const canvas = document.getElementById('cashChart');
+    if (!canvas) return;
+
+    const labels = cashData.map(d => d.period_end);
+    const values = cashData.map(d => d.value);
+
+    const ctx = canvas.getContext('2d');
+    if (cashChart) {
+        cashChart.destroy();
+    }
+
+    const gradient = ctx.createLinearGradient(0, 0, 0, 280);
+    gradient.addColorStop(0, 'rgba(0, 230, 118, 0.35)');
+    gradient.addColorStop(1, 'rgba(0, 230, 118, 0.02)');
+
+    cashChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Nakit ve Nakit Benzerleri',
+                data: values,
+                borderColor: '#00e676',
+                backgroundColor: gradient,
+                borderWidth: 3,
+                fill: true,
+                tension: 0.3,
+                pointRadius: 4,
+                pointBackgroundColor: '#00e676'
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    labels: { color: '#9ca3af', font: { family: 'Inter', size: 11 } }
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            const d = cashData[context.dataIndex];
+                            return `${formatUsd(context.parsed.y)} (${d.form || '10-Q'})`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    grid: { color: 'rgba(255,255,255,0.03)' },
+                    ticks: { color: '#9ca3af', font: { family: 'Inter', size: 10 } }
+                },
+                y: {
+                    grid: { color: 'rgba(255,255,255,0.05)' },
+                    ticks: {
+                        color: '#00e676',
+                        font: { family: 'Inter', size: 10 },
+                        callback: function(value) { return formatUsd(value); }
+                    },
+                    title: { display: true, text: 'Nakit ($)', color: '#00e676' }
+                }
+            }
+        }
+    });
+}
+
 // Render Outstanding Debt Bar Chart using Chart.js
 function renderDebtChart(chartData) {
     const labels = chartData.map(d => d.filing_date);
@@ -543,6 +645,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     fetchStatus();
     fetchHistory();
+    fetchCash();
     setupActions();
 
     // Auto-refresh status and history every 20 seconds

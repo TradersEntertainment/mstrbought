@@ -144,6 +144,18 @@ def init_db():
     )
     """)
 
+    # Quarterly balance-sheet metrics from the SEC XBRL API (e.g. cash reserves)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS financial_metrics (
+        metric TEXT,
+        period_end TEXT,
+        value REAL,
+        form TEXT,
+        filed TEXT,
+        PRIMARY KEY (metric, period_end)
+    )
+    """)
+
     conn.commit()
     
     # Seed database
@@ -1019,6 +1031,97 @@ def financing_source_from_atm(atm):
     if total != "-":
         return f"{tickers} ATM ({total})"
     return f"{tickers} ATM"
+
+# ----------------- CASH RESERVES (SEC XBRL) -----------------
+
+# Weekly 8-Ks never disclose the cash balance; the quarterly 10-Q/10-K
+# balance sheet — exposed by the free XBRL companyconcept API on the same
+# data.sec.gov host we already poll — is the only real source.
+CASH_XBRL_URL = ("https://data.sec.gov/api/xbrl/companyconcept/CIK0001050446/"
+                 "us-gaap/CashAndCashEquivalentsAtCarryingValue.json")
+
+_cash_shape_logged = False
+
+def fetch_cash_reserves():
+    """Fetch the quarterly Cash & Cash Equivalents series from SEC XBRL.
+
+    Entries carrying a `frame` like "CY2026Q1I" are the canonical value for
+    that quarter; otherwise the most recently filed entry per period end
+    wins (10-K comparatives repeat earlier quarters). Returns a
+    chronological list of {end, val, form, filed}; [] on any failure.
+    """
+    global _cash_shape_logged
+    try:
+        resp = http_session.get(CASH_XBRL_URL, timeout=5)
+        if resp.status_code != 200:
+            print(f"Cash XBRL fetch failed: HTTP {resp.status_code}")
+            return []
+        data = resp.json()
+        entries = (data.get("units") or {}).get("USD") or []
+        if entries and not _cash_shape_logged:
+            _cash_shape_logged = True
+            print(f"CASH first-response shape (one-time log): {json.dumps(entries[-1])[:400]}")
+
+        by_end = {}
+        for e in entries:
+            end = e.get("end")
+            val = e.get("val")
+            if not end or val is None:
+                continue
+            frame = e.get("frame") or ""
+            candidate = {
+                "end": end,
+                "val": float(val),
+                "form": e.get("form", "-"),
+                "filed": e.get("filed", ""),
+                "_canonical": bool(re.match(r'^CY\d{4}(Q\d)?I$', frame)),
+            }
+            current = by_end.get(end)
+            if (current is None
+                    or (candidate["_canonical"] and not current["_canonical"])
+                    or (candidate["_canonical"] == current["_canonical"]
+                        and candidate["filed"] > current["filed"])):
+                by_end[end] = candidate
+
+        results = sorted(by_end.values(), key=lambda x: x["end"])
+        for r in results:
+            r.pop("_canonical", None)
+        return results
+    except Exception as e:
+        print(f"Cash XBRL fetch error: {e}")
+        return []
+
+def refresh_cash_reserves():
+    """Upsert the quarterly cash series into financial_metrics (idempotent)."""
+    quarters = fetch_cash_reserves()
+    if not quarters:
+        return 0
+    try:
+        conn = get_db_connection()
+        for q in quarters:
+            conn.execute(
+                """INSERT OR REPLACE INTO financial_metrics (metric, period_end, value, form, filed)
+                   VALUES ('cash_and_equivalents', ?, ?, ?, ?)""",
+                (q["end"], q["val"], q["form"], q["filed"])
+            )
+        conn.commit()
+        conn.close()
+        latest = quarters[-1]
+        print(f"Cash reserves: {len(quarters)} quarter(s) stored "
+              f"(latest: {latest['end']} = ${latest['val']:,.0f})")
+        return len(quarters)
+    except Exception as e:
+        print(f"Cash reserves DB update failed: {e}")
+        return 0
+
+def cash_refresh_loop():
+    """Refresh the quarterly cash data at startup and every 12 hours."""
+    while running:
+        try:
+            refresh_cash_reserves()
+        except Exception as e:
+            print(f"Cash refresh loop error: {e}")
+        time.sleep(12 * 3600)
 
 # ----------------- HISTORICAL ATM BACKFILL -----------------
 
@@ -2076,6 +2179,23 @@ def _safe_json_loads(value):
     except (ValueError, TypeError):
         return None
 
+@app.route('/api/cash')
+def get_cash_reserves():
+    try:
+        conn = get_db_connection()
+        rows = conn.execute(
+            "SELECT period_end, value, form FROM financial_metrics "
+            "WHERE metric = 'cash_and_equivalents' ORDER BY period_end"
+        ).fetchall()
+        conn.close()
+        return jsonify([
+            {"period_end": r["period_end"], "value": r["value"], "form": r["form"]}
+            for r in rows
+        ])
+    except Exception as e:
+        print(f"/api/cash error: {e}")
+        return jsonify([])
+
 @app.route('/api/trigger', methods=['POST'])
 def force_trigger():
     if ADMIN_PASSWORD:
@@ -2346,6 +2466,10 @@ if __name__ == '__main__':
     # Backfill per-security ATM data for historical rows in the background
     backfill_thread = threading.Thread(target=backfill_atm_history, daemon=True)
     backfill_thread.start()
+
+    # Quarterly cash reserves from SEC XBRL (startup + every 12 hours)
+    cash_thread = threading.Thread(target=cash_refresh_loop, daemon=True)
+    cash_thread.start()
 
     # Run Polling Loop in main thread
     try:

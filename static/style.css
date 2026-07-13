@@ -477,6 +477,23 @@ body {
     color: var(--text-secondary);
 }
 
+/* Small sub-note under a stat value (e.g. cash reserve as-of date) */
+.stat-subtext {
+    font-size: 0.68rem;
+    color: var(--text-secondary);
+    margin-top: 0.15rem;
+}
+
+/* Centered note shown inside an empty chart container */
+.chart-empty-note {
+    position: absolute;
+    inset: 0;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+}
+
 /* Per-security ATM sale breakdown under the financing badge */
 .atm-breakdown {
     margin-top: 0.3rem;
