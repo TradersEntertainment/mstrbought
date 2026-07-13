@@ -477,6 +477,25 @@ body {
     color: var(--text-secondary);
 }
 
+/* Per-security ATM sale breakdown under the financing badge */
+.atm-breakdown {
+    margin-top: 0.3rem;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.atm-breakdown .atm-ticker {
+    color: var(--blue-glow);
+    font-weight: 600;
+}
+
+.atm-breakdown strong {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
 .table-link {
     color: #38bdf8;
     text-decoration: none;

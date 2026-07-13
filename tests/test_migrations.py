@@ -93,6 +93,14 @@ def test_migration_repairs_bad_prod_rows(tmp_path, monkeypatch):
     assert july13['event_type'] == 'no_purchase'
     assert 'mstr-20260713.htm' in july13['url']
 
+    # Backfill migration: the dashboard's per-security breakdown data
+    import json as _json
+    atm = _json.loads(july13['atm_sales'])
+    assert atm['sold_tickers'] == ['MSTR']
+    mstr = next(s for s in atm['securities'] if s['ticker'] == 'MSTR')
+    assert mstr['shares_sold'] == '4,818,781'
+    assert mstr['net_proceeds'] == '$466.7M'
+
 
 def test_migration_is_idempotent(tmp_path, monkeypatch):
     db_path = make_db(tmp_path, monkeypatch)

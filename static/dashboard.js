@@ -123,18 +123,19 @@ async function fetchHistory() {
             } else {
                 fBadgeClass = 'badge-source-none';
             }
-            // Per-security ATM breakdown as a hover tooltip when available
+            // Per-security ATM breakdown: visible lines under the badge, so
+            // every report row shows WHICH security raised the cash
             const escAttr = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-            let fTitleAttr = '';
+            let atmBreakdownHtml = '';
             if (item.atm_sales && Array.isArray(item.atm_sales.securities)) {
-                const soldParts = item.atm_sales.securities
+                const soldLines = item.atm_sales.securities
                     .filter(s => (s.shares_sold_num || 0) > 0)
-                    .map(s => `${s.ticker}: ${s.shares_sold} adet → ${s.net_proceeds} net`);
-                if (soldParts.length) {
-                    fTitleAttr = ` title="${escAttr(soldParts.join(' | '))}"`;
+                    .map(s => `<span class="atm-ticker">${escAttr(s.ticker)}</span>: ${escAttr(s.shares_sold)} adet → <strong>${escAttr(s.net_proceeds)}</strong> net`);
+                if (soldLines.length) {
+                    atmBreakdownHtml = `<div class="atm-breakdown">${soldLines.join('<br>')}</div>`;
                 }
             }
-            const financingBadgeHtml = `<span class="badge-source ${fBadgeClass}"${fTitleAttr}>${fSource}</span>`;
+            const financingBadgeHtml = `<span class="badge-source ${fBadgeClass}">${fSource}</span>${atmBreakdownHtml}`;
 
             // Format total holdings safely
             const rawTot = item.total_holdings || '-';

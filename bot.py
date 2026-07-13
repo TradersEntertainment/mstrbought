@@ -259,6 +259,7 @@ def apply_data_migrations(conn):
     """
     migrations = [
         ("2026-07-13-repair-july-rows", _migrate_repair_july_2026_rows),
+        ("2026-07-14-backfill-july13-atm-json", _migrate_backfill_july13_atm_json),
     ]
     cursor = conn.cursor()
     for migration_id, fn in migrations:
@@ -338,6 +339,52 @@ def _migrate_repair_july_2026_rows(conn):
         )
         print("Migration: inserted missing July 13 row (0 BTC; MSTR ATM $466.7M)")
 
+    conn.commit()
+
+# Per-security ATM data of the July 13, 2026 filing (from the filing's ATM
+# table), in the exact shape parse_atm_table produces — backfilled so the
+# dashboard shows WHICH security raised the cash for that week too.
+_JULY13_ATM_JSON = {
+    "period": "July 6, 2026 to July 12, 2026",
+    "securities": [
+        {"ticker": "STRF", "name": "STRF Stock 10.00% Series A Perpetual Strife Preferred Stock",
+         "shares_sold": "-", "notional": "-", "net_proceeds": "-", "available": "$1,619.3M",
+         "shares_sold_num": 0, "net_proceeds_num_m": 0.0},
+        {"ticker": "STRC", "name": "STRC Stock Variable Rate Series A Perpetual Stretch Preferred Stock",
+         "shares_sold": "-", "notional": "-", "net_proceeds": "-", "available": "$17,510.8M",
+         "shares_sold_num": 0, "net_proceeds_num_m": 0.0},
+        {"ticker": "STRK", "name": "STRK Stock 8.00% Series A Perpetual Strike Preferred Stock",
+         "shares_sold": "-", "notional": "-", "net_proceeds": "-", "available": "$2,100.0M",
+         "shares_sold_num": 0, "net_proceeds_num_m": 0.0},
+        {"ticker": "STRD", "name": "STRD Stock 10.00% Series A Perpetual Stride Preferred Stock",
+         "shares_sold": "-", "notional": "-", "net_proceeds": "-", "available": "$4,014.8M",
+         "shares_sold_num": 0, "net_proceeds_num_m": 0.0},
+        {"ticker": "MSTR", "name": "MSTR Stock Class A Common Stock",
+         "shares_sold": "4,818,781", "notional": "-", "net_proceeds": "$466.7M", "available": "$23,790.3M",
+         "shares_sold_num": 4818781, "net_proceeds_num_m": 466.7},
+    ],
+    "sold_tickers": ["MSTR"],
+    "sold_any": True,
+    "total_net_proceeds": "$466.7M",
+}
+
+def _migrate_backfill_july13_atm_json(conn):
+    """Backfill the July 13 row's atm_sales JSON.
+
+    The row was created (live or via repair) before ATM parsing existed, so
+    the dashboard's per-security breakdown had nothing to render for the
+    very filing that motivated the feature. Guarded on atm_sales IS NULL —
+    a live re-parse that already filled it is never overwritten.
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        """UPDATE purchase_history
+           SET atm_sales = ?
+           WHERE filing_date='2026-07-13' AND (atm_sales IS NULL OR atm_sales = '')""",
+        (json.dumps(_JULY13_ATM_JSON, ensure_ascii=False),)
+    )
+    if cursor.rowcount > 0:
+        print(f"Migration: backfilled atm_sales JSON on {cursor.rowcount} July 13 row(s)")
     conn.commit()
 
 # ----------------- PARSING & SEC SCRAPING -----------------
