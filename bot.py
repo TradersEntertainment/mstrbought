@@ -6,7 +6,7 @@ import threading
 import urllib.request
 import re
 from datetime import datetime, timezone, timedelta
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, SoupStrainer
 import telebot
 import requests
 from dotenv import load_dotenv
@@ -219,6 +219,14 @@ def mark_current_filings_processed(conn):
 
 # ----------------- PARSING & SEC SCRAPING -----------------
 
+# lxml is much faster than html.parser on the alert-critical path; fall back
+# gracefully if it isn't installed.
+try:
+    import lxml  # noqa: F401
+    HTML_PARSER = 'lxml'
+except ImportError:
+    HTML_PARSER = 'html.parser'
+
 # Optimization: Highly efficient text cleaning via BeautifulSoup tag decomposition
 def clean_html(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
@@ -304,88 +312,130 @@ def clean_row_values(row):
             final_cleaned.append(item)
     return final_cleaned
 
-def parse_table_fallback(html_content):
-    """Parse all BTC activity and holdings tables from an SEC 8-K filing.
-    
-    Handles filings with multiple sale/purchase periods (e.g., two separate sale tables)
-    by summing quantities and using the latest holdings snapshot.
+def extract_filing_tables(html_content):
+    """Parse the filing HTML once and return per-table cell data.
+
+    Returns a list of tables; each table is a list of rows; each row is a
+    list of non-empty cell strings. Both the BTC parser and the ATM parser
+    consume this output, so the HTML is parsed only once on the alert path.
     """
-    soup = BeautifulSoup(html_content, 'html.parser')
-    tables = soup.find_all('table')
-    
-    # Collect all activity entries (purchases/sales) and holdings snapshots
-    activities = []      # list of dicts: {type, period, btc_count, price, avg_price}
-    holdings_snapshots = []  # list of dicts: {as_of, holdings, total_cost, avg_cost}
-    
-    for table in tables:
-        text = table.get_text()
-        rows = table.find_all('tr')
+    soup = BeautifulSoup(html_content, HTML_PARSER, parse_only=SoupStrainer('table'))
+    all_tables = []
+    for table in soup.find_all('table'):
         row_data = []
-        for r in rows:
+        for r in table.find_all('tr'):
             cols = [col.get_text().strip().replace('\n', ' ') for col in r.find_all(['td', 'th'])]
             cols = [re.sub(r'\s+', ' ', c) for c in cols if c.strip()]
             if cols:
                 row_data.append(cols)
-        
+        if row_data:
+            all_tables.append(row_data)
+    return all_tables
+
+def parse_btc_number(s):
+    """Parse a BTC/share count string like '1,363' or '4,818,781' to int.
+
+    '-', '—' and footnote-only cells parse to 0 (no transaction).
+    """
+    try:
+        cleaned = re.sub(r'\(\d+\)', '', str(s)).replace(',', '').replace(' ', '')
+        return int(cleaned)
+    except (ValueError, AttributeError):
+        return 0
+
+def parse_money(s):
+    """Parse a money string like '$80.8M' or '$2.01B' to a float in millions."""
+    try:
+        s = str(s).replace('$', '').replace(',', '').strip()
+        multiplier = 1
+        if s.endswith('M'):
+            s = s[:-1]
+        elif s.endswith('B'):
+            multiplier = 1000
+            s = s[:-1]
+        return float(s) * multiplier
+    except (ValueError, AttributeError):
+        return 0.0
+
+def parse_table_fallback(html_content):
+    """Back-compat wrapper: extract tables once, then parse the BTC data."""
+    return parse_btc_tables(extract_filing_tables(html_content))
+
+def parse_btc_tables(tables):
+    """Parse BTC activity and holdings tables from pre-extracted table data.
+
+    Event detection is based on the filing's OWN period-activity tables
+    ("BTC Acquired" / "BTC Sold"): they state authoritatively what happened
+    during the covered period. The holdings delta vs the DB is ONLY a
+    consistency check — a stale DB row must never fabricate a buy/sell event
+    (that is exactly what produced the false "-2,225 BTC sold" alert on the
+    July 13, 2026 filing).
+    """
+    # Collect all activity entries (purchases/sales) and holdings snapshots
+    activities = []      # list of dicts: {type, signed_count, period, btc_count, price, avg_price}
+    holdings_snapshots = []  # list of dicts: {as_of, holdings, total_cost, avg_cost}
+
+    for row_data in tables:
         if len(row_data) < 2:
             continue
-            
-        # Detect activity tables: "BTC Sold" or "BTC Acquired" in headers
+
+        table_text = ' '.join(' '.join(r) for r in row_data)
         header_text = ' '.join(row_data[1]) if len(row_data) > 1 else ''
         period_text = row_data[0][0] if row_data[0] else ''
-        
-        is_sold = 'BTC Sold' in header_text or 'BTC Sold' in text
-        is_acquired = 'BTC Acquired' in header_text or 'BTC Acquired' in text
-        is_holdings = 'Aggregate BTC Holdings' in header_text or 'Aggregate BTC Holdings' in text
-        
+
+        is_sold = 'BTC Sold' in header_text or 'BTC Sold' in table_text
+        is_acquired = 'BTC Acquired' in header_text or 'BTC Acquired' in table_text
+        is_holdings = 'Aggregate BTC Holdings' in header_text or 'Aggregate BTC Holdings' in table_text
+
         if (is_sold or is_acquired) and len(row_data) >= 3:
             try:
                 cleaned = clean_row_values(row_data[2])
                 if len(cleaned) < 3:
                     cleaned += ['-'] * (3 - len(cleaned))
-                
+
                 # Clean footnote markers like (1) from BTC count
                 btc_raw = re.sub(r'\(\d+\)', '', cleaned[0]).strip()
-                
+
                 # Detect price unit from header
                 price_header = row_data[1][1].lower() if len(row_data[1]) > 1 else ''
                 unit = "M" if "millions" in price_header else ("B" if "billions" in price_header else "")
                 price_val = cleaned[1]
                 if price_val != '-' and unit and not price_val.endswith(unit):
                     price_val = f"{price_val}{unit}"
-                
+
                 avg_val = cleaned[2]
-                
+
                 # Extract period from row 0
                 period = period_text.replace("During Period ", "").replace("*", "").strip()
-                
+
+                count = parse_btc_number(btc_raw)
                 activities.append({
                     "type": "sale" if is_sold else "purchase",
+                    "signed_count": -count if is_sold else count,
                     "period": period,
                     "btc_count": btc_raw,
                     "price": price_val,
                     "avg_price": avg_val
                 })
-                
-                # Old format: combined table with holdings in columns 3-5
-                # e.g. headers: [BTC Acquired, Price(M), Avg Price, Aggregate BTC Holdings, Price(B), Avg Price]
+
+                # Combined format: one table holding both the period activity
+                # (columns 0-2) and the cumulative holdings (columns 3-5),
+                # e.g. [BTC Acquired, Price(M), Avg Price, Aggregate BTC Holdings, Price(B), Avg Price]
                 if is_holdings and len(cleaned) >= 6:
                     holdings_header_idx = next((h for h, hdr in enumerate(row_data[1]) if 'Aggregate BTC Holdings' in hdr), None)
                     if holdings_header_idx is not None:
                         h_cost_header = row_data[1][holdings_header_idx + 1].lower() if holdings_header_idx + 1 < len(row_data[1]) else ''
                         h_cost_unit = "M" if "millions" in h_cost_header else ("B" if "billions" in h_cost_header else "")
-                        h_cost_val = cleaned[holdings_header_idx]  
-                        # holdings is at index 3, cost at 4, avg cost at 5 for 6-col format
                         h_holdings = cleaned[3]
                         h_cost_val = cleaned[4]
                         if h_cost_val != '-' and h_cost_unit and not h_cost_val.endswith(h_cost_unit):
                             h_cost_val = f"{h_cost_val}{h_cost_unit}"
                         h_avg_cost = cleaned[5] if len(cleaned) > 5 else '-'
-                        
+
                         # Extract "As of" date from period header row
                         as_of_parts = [p for p in row_data[0] if 'As of' in p]
                         as_of_date = as_of_parts[0].replace("As of ", "").replace("*", "").strip() if as_of_parts else period
-                        
+
                         holdings_snapshots.append({
                             "as_of": as_of_date,
                             "holdings": h_holdings,
@@ -394,22 +444,22 @@ def parse_table_fallback(html_content):
                         })
             except Exception as e:
                 print(f"Error parsing activity table: {e}")
-                
+
         elif is_holdings and len(row_data) >= 3:
             try:
                 cleaned = clean_row_values(row_data[2])
                 if len(cleaned) < 3:
                     cleaned += ['-'] * (3 - len(cleaned))
-                
+
                 # Detect cost unit
                 cost_header = row_data[1][1].lower() if len(row_data[1]) > 1 else ''
                 cost_unit = "M" if "millions" in cost_header else ("B" if "billions" in cost_header else "")
                 cost_val = cleaned[1]
                 if cost_val != '-' and cost_unit and not cost_val.endswith(cost_unit):
                     cost_val = f"{cost_val}{cost_unit}"
-                
+
                 as_of = period_text.replace("As of ", "").replace("*", "").strip()
-                
+
                 holdings_snapshots.append({
                     "as_of": as_of,
                     "holdings": cleaned[0],
@@ -418,114 +468,97 @@ def parse_table_fallback(html_content):
                 })
             except Exception as e:
                 print(f"Error parsing holdings table: {e}")
-    
+
     # If no activity or holdings tables found, return None
     if not activities and not holdings_snapshots:
         return None
-    
+
     print(f"Parsed {len(activities)} activity tables and {len(holdings_snapshots)} holdings snapshots.")
-    
-    # Determine event type and aggregate
-    sale_activities = [a for a in activities if a["type"] == "sale"]
-    purchase_activities = [a for a in activities if a["type"] == "purchase"]
-    
-    # Sum up BTC counts
-    def parse_btc_number(s):
-        """Parse a BTC count string like '1,363' or '2,225' to integer."""
-        try:
-            return int(s.replace(',', '').replace(' ', ''))
-        except (ValueError, AttributeError):
-            return 0
-    
-    def parse_money(s):
-        """Parse a money string like '$80.8M' to float for summing."""
-        try:
-            s = s.replace('$', '').replace(',', '').strip()
-            multiplier = 1
-            if s.endswith('M'):
-                multiplier = 1
-                s = s[:-1]
-            elif s.endswith('B'):
-                multiplier = 1000
-                s = s[:-1]
-            return float(s) * multiplier
-        except (ValueError, AttributeError):
-            return 0.0
-    
-    # Use the LAST holdings snapshot (most recent date)
+
+    # Use the LAST holdings snapshot (most recent date) — a filing can carry
+    # several period tables (e.g. the July 6, 2026 filing had two sale periods)
     latest_holdings = holdings_snapshots[-1] if holdings_snapshots else {}
-    
-    # Try to fetch last known holdings, debt & financing from DB
+
+    # Previous cumulative state from the DB. Debt carries forward (it is
+    # cumulative); financing_source does NOT (it must describe THIS filing).
     prev_holdings_num = 0
     last_debt = "$6.7B"
-    last_source = "ATM Hisse Satışı"
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT total_holdings, total_debt, financing_source FROM purchase_history ORDER BY id DESC LIMIT 1")
+        cursor.execute("SELECT total_holdings, total_debt FROM purchase_history ORDER BY id DESC LIMIT 1")
         last_row = cursor.fetchone()
         conn.close()
         if last_row:
             last_debt = last_row["total_debt"] or "$6.7B"
-            last_source = last_row["financing_source"] or "ATM Hisse Satışı"
-            # Parse previous holdings number for comparison
             try:
                 prev_holdings_num = int(str(last_row["total_holdings"]).replace(',', '').replace(' ', ''))
             except (ValueError, TypeError):
                 prev_holdings_num = 0
     except Exception:
         pass
-    
-    # --- PRIMARY EVENT DETECTION: Holdings Comparison ---
-    # This is format-agnostic — doesn't depend on "BTC Sold" or "BTC Acquired" headers
-    current_holdings_str = latest_holdings.get("holdings", "0")
+
     try:
-        current_holdings_num = int(current_holdings_str.replace(',', '').replace(' ', ''))
+        current_holdings_num = int(str(latest_holdings.get("holdings", "0")).replace(',', '').replace(' ', ''))
     except (ValueError, TypeError):
         current_holdings_num = 0
-    
-    holdings_diff = current_holdings_num - prev_holdings_num if prev_holdings_num > 0 else 0
-    
-    print(f"Holdings comparison: Previous={prev_holdings_num:,} → Current={current_holdings_num:,} = Diff={holdings_diff:+,}")
-    
-    # Determine event_type
-    if prev_holdings_num > 0 and current_holdings_num > 0:
-        # PRIMARY: Holdings comparison (format-agnostic, most reliable)
-        if holdings_diff > 0:
-            detected_event = "btc_purchase"
-        elif holdings_diff < 0:
-            detected_event = "btc_sale"
+
+    inferred = False
+    if activities:
+        # PRIMARY: the filing's own activity tables state what happened.
+        # "-" / "—" cells parse to 0, so an explicit "no transaction" week
+        # yields net 0 regardless of what the DB contains.
+        btc_net_signed = sum(a["signed_count"] for a in activities)
+        if btc_net_signed > 0:
+            event_type = "btc_purchase"
+        elif btc_net_signed < 0:
+            event_type = "btc_sale"
         else:
-            detected_event = "no_purchase"
+            event_type = "no_purchase"
+
+        # CONSISTENCY CHECK ONLY — never changes event_type or amounts.
+        # The saved row uses the filing's authoritative snapshot, so the DB
+        # self-heals on this very insert and the mismatch cannot recur.
+        if prev_holdings_num > 0 and current_holdings_num > 0:
+            expected = prev_holdings_num + btc_net_signed
+            if expected != current_holdings_num:
+                print(
+                    f"HOLDINGS CONSISTENCY WARNING: DB previous ({prev_holdings_num:,}) "
+                    f"+ filing net ({btc_net_signed:+,}) = {expected:,}, but the filing "
+                    f"reports {current_holdings_num:,}. The DB was stale; the filing "
+                    f"snapshot is authoritative and will be saved."
+                )
     else:
-        # FALLBACK: Use activity table headers when no previous holdings in DB
-        sale_activities = [a for a in activities if a["type"] == "sale"]
-        purchase_activities = [a for a in activities if a["type"] == "purchase"]
-        if sale_activities:
-            detected_event = "btc_sale"
-        elif purchase_activities:
-            total_bought = sum(parse_btc_number(a["btc_count"]) for a in purchase_activities)
-            detected_event = "btc_purchase" if total_bought > 0 else "no_purchase"
+        # FALLBACK (labeled inference): the filing carries only a holdings
+        # snapshot, no period-activity table. Only here may the delta vs the
+        # DB be used, and the alert must say the amount is an estimate.
+        if prev_holdings_num > 0 and current_holdings_num > 0:
+            btc_net_signed = current_holdings_num - prev_holdings_num
         else:
-            detected_event = "no_purchase"
-    
-    # --- SECONDARY: Use activity tables for price/amount details ---
-    # Aggregate activity data regardless of sale/purchase classification from headers
-    all_activities = activities  # Already collected from both "BTC Sold" and "BTC Acquired" tables
-    
-    # Build combined period string from all activity tables
-    if all_activities:
-        periods = [a["period"] for a in all_activities]
+            btc_net_signed = 0
+        if btc_net_signed > 0:
+            event_type = "btc_purchase"
+            inferred = True
+        elif btc_net_signed < 0:
+            event_type = "btc_sale"
+            inferred = True
+        else:
+            event_type = "no_purchase"
+
+    btc_signed_str = f"{btc_net_signed:,}"
+    btc_abs_str = f"{abs(btc_net_signed):,}"
+
+    if activities:
+        periods = [a["period"] for a in activities]
         combined_period = " & ".join(periods)
-        
-        total_btc = sum(parse_btc_number(a["btc_count"]) for a in all_activities)
-        total_money_m = sum(parse_money(a["price"]) for a in all_activities)
-        
-        # Weighted average price
+
+        total_money_m = sum(parse_money(a["price"]) for a in activities)
+
+        # Weighted average price across all periods
         weighted_sum = 0
         total_btc_for_avg = 0
-        for a in all_activities:
-            btc_n = parse_btc_number(a["btc_count"])
+        for a in activities:
+            btc_n = abs(a["signed_count"])
             try:
                 avg_p = float(a["avg_price"].replace('$', '').replace(',', ''))
             except (ValueError, AttributeError):
@@ -533,12 +566,7 @@ def parse_table_fallback(html_content):
             weighted_sum += btc_n * avg_p
             total_btc_for_avg += btc_n
         weighted_avg = weighted_sum / total_btc_for_avg if total_btc_for_avg else 0
-        
-        # Use absolute value of holdings diff as the BTC count if activity tables show different
-        # (holdings diff is the ground truth)
-        display_btc = abs(holdings_diff) if holdings_diff != 0 else total_btc
-        display_btc_str = f"{display_btc:,}" if display_btc > 0 else "0"
-        
+
         # Format money
         if total_money_m >= 1000:
             display_money = f"${total_money_m/1000:.2f}B"
@@ -546,51 +574,40 @@ def parse_table_fallback(html_content):
             display_money = f"${total_money_m:.1f}M"
         else:
             display_money = "-"
-        
-        result = {
-            "event_type": detected_event,
-            "purchase_period": combined_period,
-            "btc_acquired": display_btc_str,
-            "purchase_price": display_money,
-            "avg_price": f"${weighted_avg:,.0f}" if weighted_avg > 0 else "-",
-            "total_holdings": latest_holdings.get("holdings", "-"),
-            "total_cost": latest_holdings.get("total_cost", "-"),
-            "avg_cost": latest_holdings.get("avg_cost", "-"),
-            "total_debt": last_debt,
-            "financing_details": last_source,
-            "summary_turkish": None,
-            "holdings_diff": holdings_diff
-        }
-        
-        # Add breakdown for display purposes
-        if detected_event == "btc_sale":
-            result["sale_breakdown"] = all_activities
-        elif detected_event == "btc_purchase":
-            result["purchase_breakdown"] = all_activities
-            
-        return result
-    
-    elif holdings_snapshots:
-        # Only holdings tables found, no activity tables
-        display_btc = abs(holdings_diff) if holdings_diff != 0 else 0
-        
-        result = {
-            "event_type": detected_event,
-            "purchase_period": latest_holdings.get("as_of", "-"),
-            "btc_acquired": f"{display_btc:,}" if display_btc > 0 else "0",
-            "purchase_price": "-",
-            "avg_price": "-",
-            "total_holdings": latest_holdings.get("holdings", "-"),
-            "total_cost": latest_holdings.get("total_cost", "-"),
-            "avg_cost": latest_holdings.get("avg_cost", "-"),
-            "total_debt": last_debt,
-            "financing_details": last_source,
-            "summary_turkish": None,
-            "holdings_diff": holdings_diff
-        }
-        return result
-    
-    return None
+    else:
+        combined_period = latest_holdings.get("as_of", "-")
+        display_money = "-"
+        weighted_avg = 0
+
+    result = {
+        "event_type": event_type,
+        "inferred": inferred,
+        "purchase_period": combined_period,
+        "btc_net_signed": btc_net_signed,
+        "btc_signed_str": btc_signed_str,
+        "btc_abs_str": btc_abs_str,
+        # Unsigned amount for templates that add their own +/- prefix
+        "btc_acquired": btc_abs_str,
+        "purchase_price": display_money,
+        "avg_price": f"${weighted_avg:,.0f}" if weighted_avg > 0 else "-",
+        "total_holdings": latest_holdings.get("holdings", "-"),
+        "total_cost": latest_holdings.get("total_cost", "-"),
+        "avg_cost": latest_holdings.get("avg_cost", "-"),
+        "total_debt": last_debt,
+        "financing_details": "-",
+        "summary_turkish": None,
+    }
+
+    # Per-period breakdown for multi-period filings (display + AI context)
+    if activities and any(a["signed_count"] for a in activities):
+        if event_type == "btc_sale":
+            result["sale_breakdown"] = activities
+        elif event_type == "btc_purchase":
+            result["purchase_breakdown"] = activities
+        else:
+            result["mixed_breakdown"] = activities
+
+    return result
 
 # ----------------- GROQ API INTEGRATION -----------------
 
