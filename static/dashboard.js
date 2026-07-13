@@ -512,6 +512,17 @@ function renderCashCalc(flow) {
                     (cal.dividend_source === 'xbrl_actual' ? ' (XBRL gerçek)' : ' (model)'),
                     'calc-info');
     }
+    if (flow.filing_info) {
+        const fi = flow.filing_info;
+        rows += row('Son bilanço raporu',
+                    `${fi.last_form} — ${fi.last_filed} tarihinde geldi (${fi.last_period_end} dönemi)`,
+                    'calc-info');
+        rows += row('Sonraki 10-Q (beklenen)',
+                    `~${fi.expected_next_filed} (${fi.next_quarter_end} çeyreği; son raporların ort. gecikmesi ${fi.avg_lag_days} gün)`,
+                    'calc-info');
+    }
+    rows += `<tr class="calc-info"><td colspan="2">Not: Konvertibl tahvil ihraç/itfaları haftalık 8-K'larda açıklanmaz; ` +
+            `bu akışlar kalibre edilen "diğer" kaleminde emilir. Kesin rakam her çeyrek 10-Q ile yeniden sabitlenir.</td></tr>`;
 
     el.innerHTML = `<table class="calc-table"><tbody>${rows}</tbody></table>`;
 }

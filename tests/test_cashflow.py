@@ -51,11 +51,11 @@ def insert_flow(db_path, date, btc_signed='0', price='-', atm=None):
     conn.close()
 
 
-def insert_metric(db_path, metric, period_end, value):
+def insert_metric(db_path, metric, period_end, value, filed='', form='10-Q'):
     conn = sqlite3.connect(db_path)
     conn.execute(
         "INSERT OR REPLACE INTO financial_metrics (metric, period_end, value, form, filed) "
-        "VALUES (?, ?, ?, '10-Q', '')", (metric, period_end, value))
+        "VALUES (?, ?, ?, ?, ?)", (metric, period_end, value, form, filed))
     conn.commit()
     conn.close()
 
@@ -252,6 +252,27 @@ def test_change_summary_explains_the_move(temp_db):
     assert last['atm_m'] == 10.0
     assert last['btc_m'] == 0.0
     assert last['atm_detail'] == [{'ticker': 'MSTR', 'net_m': 10.0}]
+
+
+def test_filing_calendar_from_stored_filed_dates(temp_db):
+    insert_metric(temp_db, 'cash_and_equivalents', '2026-03-31', 1000e6,
+                  filed='2026-05-05', form='10-Q')
+    insert_metric(temp_db, 'cash_and_equivalents', '2026-06-30', 1200e6,
+                  filed='2026-08-08', form='10-Q')
+
+    fi = bot.compute_cash_estimate()['filing_info']
+    assert fi['last_period_end'] == '2026-06-30'
+    assert fi['last_filed'] == '2026-08-08'
+    assert fi['last_form'] == '10-Q'
+    assert fi['next_quarter_end'] == '2026-09-30'
+    # Lags: 35 and 39 days → avg 37 → expected 2026-09-30 + 37d = 2026-11-06
+    assert fi['avg_lag_days'] == 37
+    assert fi['expected_next_filed'] == '2026-11-06'
+
+
+def test_filing_calendar_absent_without_filed_dates(temp_db):
+    seed_cash_scenario(temp_db)  # inserts metrics with empty filed
+    assert bot.compute_cash_estimate()['filing_info'] is None
 
 
 def test_cash_estimate_without_actuals_is_empty(temp_db):

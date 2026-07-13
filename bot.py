@@ -1329,7 +1329,7 @@ def compute_cash_estimate():
             "SELECT filing_date, btc_acquired, purchase_price, atm_sales "
             "FROM purchase_history ORDER BY filing_date, id").fetchall()
         cash_rows = conn.execute(
-            "SELECT period_end, value FROM financial_metrics "
+            "SELECT period_end, value, form, filed FROM financial_metrics "
             "WHERE metric='cash_and_equivalents' ORDER BY period_end").fetchall()
         div_rows = conn.execute(
             "SELECT period_end, value FROM financial_metrics "
@@ -1486,6 +1486,34 @@ def compute_cash_estimate():
             except (ValueError, TypeError) as e:
                 print(f"Runway date computation failed: {e}")
 
+    # 10-Q calendar: when the last balance-sheet report arrived and when the
+    # next one is expected (next calendar quarter end + the filer's own
+    # average filing lag over recent quarters)
+    filing_info = None
+    dated = [(r["period_end"], r["filed"], r["form"]) for r in cash_rows if r["filed"]]
+    if dated:
+        lags = []
+        for pe, filed, _ in dated[-4:]:
+            try:
+                lags.append((datetime.strptime(filed, "%Y-%m-%d")
+                             - datetime.strptime(pe, "%Y-%m-%d")).days)
+            except (ValueError, TypeError):
+                pass
+        avg_lag = round(sum(lags) / len(lags)) if lags else 40
+        last_pe, last_filed, last_form = dated[-1]
+        try:
+            nq = _next_quarter_end(last_pe)
+            filing_info = {
+                "last_period_end": last_pe,
+                "last_filed": last_filed,
+                "last_form": last_form or "10-Q",
+                "next_quarter_end": nq.strftime("%Y-%m-%d"),
+                "expected_next_filed": (nq + timedelta(days=avg_lag)).strftime("%Y-%m-%d"),
+                "avg_lag_days": avg_lag,
+            }
+        except (ValueError, TypeError) as e:
+            print(f"Filing calendar computation failed: {e}")
+
     return {
         "estimate": estimate,
         "actuals": [{"period_end": a["period_end"], "cash_m": round(a["cash_m"], 1)} for a in actuals],
@@ -1500,7 +1528,17 @@ def compute_cash_estimate():
         "runway": runway,
         "projection": projection,
         "change_summary": change,
+        "filing_info": filing_info,
     }
+
+def _next_quarter_end(period_end):
+    """First calendar quarter end strictly after the given date."""
+    dt = datetime.strptime(period_end, "%Y-%m-%d")
+    for month, day in ((3, 31), (6, 30), (9, 30), (12, 31)):
+        cand = datetime(dt.year, month, day)
+        if cand > dt:
+            return cand
+    return datetime(dt.year + 1, 3, 31)
 
 # ----------------- HISTORICAL ATM BACKFILL -----------------
 
