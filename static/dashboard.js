@@ -443,6 +443,9 @@ async function fetchCash() {
             if (flow && flow.current_estimate) {
                 sub += ` • Tahmini bugün: ${formatUsd(flow.current_estimate.cash_m * 1e6)}`;
             }
+            if (flow && flow.runway) {
+                sub += ` • Dayanma: ${flow.runway.infinite ? '∞' : '~' + flow.runway.weeks + ' hafta'}`;
+            }
             statCashDate.textContent = sub;
         }
 
@@ -457,6 +460,17 @@ function renderBacktestNote(flow) {
     const el = document.getElementById('cashBacktestNote');
     if (!el) return;
     const parts = [];
+    if (flow.runway) {
+        const r = flow.runway;
+        if (r.infinite) {
+            parts.push('✅ <strong>Kalibre edilmiş net akış pozitif:</strong> varlık satışı / ATM olmadan da ' +
+                       'nakit tükenmiyor (işletme girişleri temettü yükünü karşılıyor).');
+        } else if (r.weeks !== null) {
+            parts.push(`🔥 <strong>Varlık satışı / ATM olmadan dayanma: ~${r.weeks} hafta</strong> ` +
+                       `(haftalık net yükümlülük ${formatUsd(r.net_burn_per_week_m * 1e6)} — ` +
+                       `tahmini tükeniş: ${r.depletion_date || '-'})`);
+        }
+    }
     (flow.backtest || []).forEach(b => {
         parts.push(`Geri-test ${b.quarter_end}: tahmin ${formatUsd(b.predicted_m * 1e6)} vs gerçek ` +
                    `${formatUsd(b.actual_m * 1e6)} (sapma %${b.error_pct !== null ? b.error_pct : '-'})`);
@@ -475,18 +489,26 @@ function renderCashChart(actuals, flow) {
     if (!canvas) return;
 
     const estimate = flow.estimate || [];
+    const projection = flow.projection || [];
 
-    // Union of dates: actual quarter-ends + weekly estimate points
+    // Union of dates: actual quarter-ends + weekly estimate + runway projection
     const labelSet = new Set();
     actuals.forEach(a => labelSet.add(a.period_end));
     estimate.forEach(e => labelSet.add(e.date));
+    projection.forEach(p => labelSet.add(p.date));
     const labels = [...labelSet].sort();
 
     const actualByDate = Object.fromEntries(actuals.map(a => [a.period_end, a.value]));
     const estByDate = Object.fromEntries(estimate.map(e => [e.date, e.cash_m * 1e6]));
+    const projByDate = Object.fromEntries(projection.map(p => [p.date, p.cash_m * 1e6]));
+    // Connect the projection to its starting point (the current estimate)
+    if (projection.length && estimate.length) {
+        projByDate[estimate[estimate.length - 1].date] = estimate[estimate.length - 1].cash_m * 1e6;
+    }
 
     const actualSeries = labels.map(l => actualByDate[l] !== undefined ? actualByDate[l] : null);
     const estSeries = labels.map(l => estByDate[l] !== undefined ? estByDate[l] : null);
+    const projSeries = labels.map(l => projByDate[l] !== undefined ? projByDate[l] : null);
 
     const ctx = canvas.getContext('2d');
     if (cashChart) {
@@ -518,6 +540,19 @@ function renderCashChart(actuals, flow) {
             borderDash: [6, 4],
             fill: false,
             tension: 0.2,
+            spanGaps: true,
+            pointRadius: 0
+        });
+    }
+    if (projection.length) {
+        datasets.push({
+            label: 'Dayanma projeksiyonu (yeni finansman yok)',
+            data: projSeries,
+            borderColor: '#ef4444',
+            borderWidth: 2,
+            borderDash: [3, 4],
+            fill: false,
+            tension: 0,
             spanGaps: true,
             pointRadius: 0
         });

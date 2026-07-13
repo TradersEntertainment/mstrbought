@@ -182,6 +182,51 @@ def test_cash_estimate_backtest_and_calibration(temp_db):
     assert result['current_estimate']['date'] == '2026-07-06'
 
 
+def test_runway_infinite_when_net_flow_positive(temp_db):
+    # seed_cash_scenario calibrates other = −43/week; net burn = 3 − 43 < 0
+    seed_cash_scenario(temp_db)
+    result = bot.compute_cash_estimate()
+
+    assert result['runway']['infinite'] is True
+    assert result['runway']['weeks'] is None
+    assert result['projection'] == []
+
+
+def test_runway_finite_weeks_and_projection(temp_db):
+    # Reverse scenario: the raw model OVER-estimates, so calibration yields a
+    # POSITIVE other-outflow term and a finite runway.
+    insert_metric(temp_db, 'cash_and_equivalents', '2026-03-31', 1000e6)
+    insert_metric(temp_db, 'cash_and_equivalents', '2026-06-30', 900e6)
+    insert_metric(temp_db, 'dividends_paid', '2026-03-31', 39e6)   # 3.0/week
+    # Two flows of +50 each inside Q2:
+    # raw predicted = 1000 + 100 − 2*3 = 1094 vs actual 900 → residual −194
+    # → other = +97/week; net burn = 3 + 97 = 100/week
+    insert_flow(temp_db, '2026-04-06',
+                atm=atm_json('MSTR', 'MSTR Stock Class A Common Stock', None, 50.0))
+    insert_flow(temp_db, '2026-05-04',
+                atm=atm_json('MSTR', 'MSTR Stock Class A Common Stock', None, 50.0))
+    # One flow after the anchor: +100 → estimate = 900 + 100 − 3 − 97 = 900
+    insert_flow(temp_db, '2026-07-06',
+                atm=atm_json('MSTR', 'MSTR Stock Class A Common Stock', None, 100.0))
+
+    result = bot.compute_cash_estimate()
+    r = result['runway']
+
+    assert r['infinite'] is False
+    assert r['net_burn_per_week_m'] == 100.0
+    assert r['basis_cash_m'] == 900.0
+    assert r['basis_date'] == '2026-07-06'
+    assert r['weeks'] == 9.0
+    # 9 weeks from 2026-07-06 → 2026-09-07
+    assert r['depletion_date'] == '2026-09-07'
+
+    proj = result['projection']
+    assert proj[0]['date'] == '2026-07-13'
+    assert proj[0]['cash_m'] == 800.0
+    assert proj[-1]['cash_m'] == 0.0
+    assert len(proj) <= 120
+
+
 def test_cash_estimate_without_actuals_is_empty(temp_db):
     insert_flow(temp_db, '2026-04-06',
                 atm=atm_json('MSTR', 'MSTR Stock Class A Common Stock', None, 100.0))

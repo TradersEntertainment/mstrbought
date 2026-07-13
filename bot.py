@@ -1398,6 +1398,51 @@ def compute_cash_estimate():
             cash += f["flow_m"] - weekly_div_m - other_per_week_m
             estimate.append({"date": f["date"], "cash_m": round(cash, 1)})
 
+    # Runway: how many weeks the cash lasts if MSTR sells NO BTC and NO
+    # securities (all financing inflows zeroed) — only the weekly dividend
+    # burn and the calibrated other net flows remain.
+    if estimate:
+        basis_cash_m = estimate[-1]["cash_m"]
+        basis_date = estimate[-1]["date"]
+    elif actuals:
+        basis_cash_m = actuals[-1]["cash_m"]
+        basis_date = actuals[-1]["period_end"]
+    else:
+        basis_cash_m = None
+        basis_date = None
+
+    net_burn_m = weekly_div_m + other_per_week_m
+    runway = None
+    projection = []
+    if basis_cash_m is not None:
+        runway = {
+            "basis_cash_m": round(basis_cash_m, 1),
+            "basis_date": basis_date,
+            "net_burn_per_week_m": round(net_burn_m, 2),
+            "weeks": None,
+            "depletion_date": None,
+            "infinite": net_burn_m <= 0,
+        }
+        if net_burn_m > 0 and basis_cash_m <= 0:
+            # Estimate already at/below zero: no runway left
+            runway["weeks"] = 0.0
+            runway["depletion_date"] = basis_date
+        if net_burn_m > 0 and basis_cash_m > 0:
+            weeks = basis_cash_m / net_burn_m
+            runway["weeks"] = round(weeks, 1)
+            try:
+                base_dt = datetime.strptime(basis_date, "%Y-%m-%d")
+                runway["depletion_date"] = (base_dt + timedelta(weeks=weeks)).strftime("%Y-%m-%d")
+                # Weekly linear decline for the chart (display-capped)
+                display_weeks = min(int(weeks) + 1, 120)
+                for w in range(1, display_weeks + 1):
+                    projection.append({
+                        "date": (base_dt + timedelta(weeks=w)).strftime("%Y-%m-%d"),
+                        "cash_m": round(max(basis_cash_m - net_burn_m * w, 0.0), 1),
+                    })
+            except (ValueError, TypeError) as e:
+                print(f"Runway date computation failed: {e}")
+
     return {
         "estimate": estimate,
         "actuals": [{"period_end": a["period_end"], "cash_m": round(a["cash_m"], 1)} for a in actuals],
@@ -1408,6 +1453,8 @@ def compute_cash_estimate():
             "dividend_source": dividend_source,
         },
         "current_estimate": estimate[-1] if estimate else None,
+        "runway": runway,
+        "projection": projection,
     }
 
 # ----------------- HISTORICAL ATM BACKFILL -----------------
