@@ -484,6 +484,31 @@ body {
     margin-top: 0.15rem;
 }
 
+/* Right column: history table + dividend panel stacked */
+.right-column {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    min-width: 0;
+}
+
+/* Small footnote under a panel (backtest / dividend summaries) */
+.panel-footnote {
+    margin-top: 0.9rem;
+    font-size: 0.76rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+.div-freq {
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+}
+
+.dividend-total-row td {
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
 /* Centered note shown inside an empty chart container */
 .chart-empty-note {
     position: absolute;

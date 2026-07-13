@@ -413,40 +413,80 @@ function formatUsd(v) {
     return '$' + Math.round(v).toLocaleString('tr-TR');
 }
 
-// Quarterly cash reserves (SEC XBRL balance-sheet data) — chart + stat card.
-// Weekly 8-Ks never disclose cash, so this series is quarterly by nature.
+// Cash reserves: quarterly ACTUALS (SEC XBRL balance sheet) + weekly
+// ESTIMATE (ATM proceeds + BTC sales − BTC buys − dividends − calibrated
+// other outflows), backtested against the reported quarters.
 async function fetchCash() {
     try {
-        const resp = await fetch('/api/cash');
-        const data = await resp.json();
+        const [cashResp, flowResp] = await Promise.all([
+            fetch('/api/cash'),
+            fetch('/api/cashflow')
+        ]);
+        const actuals = await cashResp.json();
+        const flow = await flowResp.json();
 
         const note = document.getElementById('cashEmptyNote');
         const statCash = document.getElementById('statCash');
         const statCashDate = document.getElementById('statCashDate');
 
-        if (!Array.isArray(data) || data.length === 0) {
+        if (!Array.isArray(actuals) || actuals.length === 0) {
             if (note) note.style.display = 'flex';
             if (statCash) statCash.textContent = '-';
             return;
         }
         if (note) note.style.display = 'none';
 
-        const latest = data[data.length - 1];
+        const latest = actuals[actuals.length - 1];
         if (statCash) statCash.textContent = formatUsd(latest.value);
-        if (statCashDate) statCashDate.textContent = `${latest.period_end} itibarıyla (çeyreklik)`;
+        if (statCashDate) {
+            let sub = `${latest.period_end} itibarıyla (çeyreklik)`;
+            if (flow && flow.current_estimate) {
+                sub += ` • Tahmini bugün: ${formatUsd(flow.current_estimate.cash_m * 1e6)}`;
+            }
+            statCashDate.textContent = sub;
+        }
 
-        renderCashChart(data);
+        renderCashChart(actuals, flow || {});
+        renderBacktestNote(flow || {});
     } catch (e) {
         console.error('Cash fetch error:', e);
     }
 }
 
-function renderCashChart(cashData) {
+function renderBacktestNote(flow) {
+    const el = document.getElementById('cashBacktestNote');
+    if (!el) return;
+    const parts = [];
+    (flow.backtest || []).forEach(b => {
+        parts.push(`Geri-test ${b.quarter_end}: tahmin ${formatUsd(b.predicted_m * 1e6)} vs gerçek ` +
+                   `${formatUsd(b.actual_m * 1e6)} (sapma %${b.error_pct !== null ? b.error_pct : '-'})`);
+    });
+    if (flow.calibration) {
+        const c = flow.calibration;
+        parts.push(`Temettü: ${formatUsd(c.weekly_dividend_m * 1e6)}/hafta ` +
+                   `(${c.dividend_source === 'xbrl_actual' ? 'XBRL gerçek' : 'model'})` +
+                   ` • Kalibre diğer giderler: ${formatUsd(Math.abs(c.other_outflow_per_week_m) * 1e6)}/hafta`);
+    }
+    el.innerHTML = parts.join('<br>');
+}
+
+function renderCashChart(actuals, flow) {
     const canvas = document.getElementById('cashChart');
     if (!canvas) return;
 
-    const labels = cashData.map(d => d.period_end);
-    const values = cashData.map(d => d.value);
+    const estimate = flow.estimate || [];
+
+    // Union of dates: actual quarter-ends + weekly estimate points
+    const labelSet = new Set();
+    actuals.forEach(a => labelSet.add(a.period_end));
+    estimate.forEach(e => labelSet.add(e.date));
+    const labels = [...labelSet].sort();
+
+    const actualByDate = Object.fromEntries(actuals.map(a => [a.period_end, a.value]));
+    const estByDate = Object.fromEntries(estimate.map(e => [e.date, e.cash_m * 1e6]));
+
+    const actualSeries = labels.map(l => actualByDate[l] !== undefined ? actualByDate[l] : null);
+    const estSeries = labels.map(l => estByDate[l] !== undefined ? estByDate[l] : null);
 
     const ctx = canvas.getContext('2d');
     if (cashChart) {
@@ -454,37 +494,51 @@ function renderCashChart(cashData) {
     }
 
     const gradient = ctx.createLinearGradient(0, 0, 0, 280);
-    gradient.addColorStop(0, 'rgba(0, 230, 118, 0.35)');
+    gradient.addColorStop(0, 'rgba(0, 230, 118, 0.30)');
     gradient.addColorStop(1, 'rgba(0, 230, 118, 0.02)');
+
+    const datasets = [{
+        label: 'Gerçek (çeyreklik bilanço)',
+        data: actualSeries,
+        borderColor: '#00e676',
+        backgroundColor: gradient,
+        borderWidth: 3,
+        fill: true,
+        tension: 0.3,
+        spanGaps: true,
+        pointRadius: 5,
+        pointBackgroundColor: '#00e676'
+    }];
+    if (estimate.length) {
+        datasets.push({
+            label: 'Tahmini (haftalık)',
+            data: estSeries,
+            borderColor: '#00e5ff',
+            borderWidth: 2,
+            borderDash: [6, 4],
+            fill: false,
+            tension: 0.2,
+            spanGaps: true,
+            pointRadius: 0
+        });
+    }
 
     cashChart = new Chart(ctx, {
         type: 'line',
-        data: {
-            labels: labels,
-            datasets: [{
-                label: 'Nakit ve Nakit Benzerleri',
-                data: values,
-                borderColor: '#00e676',
-                backgroundColor: gradient,
-                borderWidth: 3,
-                fill: true,
-                tension: 0.3,
-                pointRadius: 4,
-                pointBackgroundColor: '#00e676'
-            }]
-        },
+        data: { labels: labels, datasets: datasets },
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
             plugins: {
                 legend: {
                     labels: { color: '#9ca3af', font: { family: 'Inter', size: 11 } }
                 },
                 tooltip: {
+                    filter: (item) => item.parsed.y !== null,
                     callbacks: {
                         label: function(context) {
-                            const d = cashData[context.dataIndex];
-                            return `${formatUsd(context.parsed.y)} (${d.form || '10-Q'})`;
+                            return `${context.dataset.label}: ${formatUsd(context.parsed.y)}`;
                         }
                     }
                 }
@@ -492,7 +546,11 @@ function renderCashChart(cashData) {
             scales: {
                 x: {
                     grid: { color: 'rgba(255,255,255,0.03)' },
-                    ticks: { color: '#9ca3af', font: { family: 'Inter', size: 10 } }
+                    ticks: {
+                        color: '#9ca3af',
+                        font: { family: 'Inter', size: 10 },
+                        maxTicksLimit: 12
+                    }
                 },
                 y: {
                     grid: { color: 'rgba(255,255,255,0.05)' },
@@ -506,6 +564,54 @@ function renderCashChart(cashData) {
             }
         }
     });
+}
+
+// Dividend-paying products (preferred series) + total monthly expense
+async function fetchDividends() {
+    try {
+        const d = await (await fetch('/api/dividends')).json();
+        const tbody = document.getElementById('dividendTableBody');
+        if (!tbody) return;
+
+        if (!d.series || !d.series.length) {
+            tbody.innerHTML = '<tr><td colspan="4" class="loading-cell">Temettü verisi bulunamadı.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = d.series.map(s => `
+            <tr>
+                <td><span class="atm-ticker">${s.ticker}</span> <span class="div-freq">(${s.frequency})</span></td>
+                <td>%${(s.rate * 100).toFixed(2)}</td>
+                <td>$${s.outstanding_notional_m.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}M</td>
+                <td><strong>$${s.monthly_cost_m.toLocaleString('tr-TR', { maximumFractionDigits: 2 })}M</strong></td>
+            </tr>`).join('') + `
+            <tr class="dividend-total-row">
+                <td colspan="3"><strong>Model Toplam (aylık)</strong></td>
+                <td><strong>$${d.model_monthly_total_m.toLocaleString('tr-TR', { maximumFractionDigits: 2 })}M</strong></td>
+            </tr>`;
+
+        const sum = document.getElementById('dividendSummary');
+        if (sum) {
+            let html = '';
+            if (d.actual_last_quarter) {
+                html += `Gerçek ödenen (XBRL, ${d.actual_last_quarter.period_end} çeyreği): ` +
+                        `${formatUsd(d.actual_last_quarter.paid_usd)} → aylık ort. ` +
+                        `<strong>${formatUsd(d.actual_last_quarter.monthly_avg_usd)}</strong>`;
+                if (d.model_vs_actual_pct !== null && d.model_vs_actual_pct !== undefined) {
+                    html += ` • Model sapması: %${d.model_vs_actual_pct}`;
+                }
+            } else {
+                html += 'Gerçek temettü verisi ilk XBRL senkronunda yüklenecek.';
+            }
+            if (!d.baselines_configured) {
+                html += '<br>Not: IPO baz nominalleri yapılandırılmadı — model yalnızca izlenen ATM satışlarını ' +
+                        'sayar (env: STRF_BASELINE_M, STRK_BASELINE_M, STRD_BASELINE_M, STRC_BASELINE_M).';
+            }
+            sum.innerHTML = html;
+        }
+    } catch (e) {
+        console.error('Dividend fetch error:', e);
+    }
 }
 
 // Render Outstanding Debt Bar Chart using Chart.js
@@ -646,6 +752,7 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchStatus();
     fetchHistory();
     fetchCash();
+    fetchDividends();
     setupActions();
 
     // Auto-refresh status and history every 20 seconds

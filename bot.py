@@ -1114,14 +1114,301 @@ def refresh_cash_reserves():
         print(f"Cash reserves DB update failed: {e}")
         return 0
 
+def fetch_xbrl_concept(tag):
+    """Fetch a raw us-gaap companyconcept payload; None on failure."""
+    url = f"https://data.sec.gov/api/xbrl/companyconcept/CIK0001050446/us-gaap/{tag}.json"
+    try:
+        resp = http_session.get(url, timeout=5)
+        if resp.status_code != 200:
+            return None
+        return resp.json()
+    except Exception as e:
+        print(f"XBRL fetch error for {tag}: {e}")
+        return None
+
+def _quarterly_duration_series(entries):
+    """Convert XBRL duration entries (quarterly + FY) into quarterly values.
+
+    Entries with quarterly frames ("CY2026Q1") are canonical. A missing Q4
+    is derived from FY − (Q1+Q2+Q3) when all three are present (10-Ks only
+    report the annual total).
+    """
+    quarters = {}
+    fiscal_years = {}
+    for e in entries:
+        val = e.get("val")
+        end = e.get("end")
+        if val is None or not end:
+            continue
+        frame = e.get("frame") or ""
+        m = re.match(r'^CY(\d{4})Q(\d)$', frame)
+        if m:
+            quarters[(int(m.group(1)), int(m.group(2)))] = {
+                "end": end, "val": float(val), "form": e.get("form", "-")}
+            continue
+        m = re.match(r'^CY(\d{4})$', frame)
+        if m:
+            fiscal_years[int(m.group(1))] = float(val)
+
+    for year, total in fiscal_years.items():
+        if (year, 4) not in quarters and all((year, q) in quarters for q in (1, 2, 3)):
+            q123 = sum(quarters[(year, q)]["val"] for q in (1, 2, 3))
+            quarters[(year, 4)] = {"end": f"{year}-12-31", "val": total - q123, "form": "10-K (derived)"}
+
+    return [v for _, v in sorted(quarters.items())]
+
+# Preferred dividends actually PAID per quarter (cash-flow statement).
+# Tag names vary between filers; try candidates in order.
+DIVIDEND_TAG_CANDIDATES = [
+    "PaymentsOfDividendsPreferredStockAndPreferenceStock",
+    "PaymentsOfDividends",
+    "DividendsPreferredStock",
+]
+
+def refresh_dividends():
+    """Upsert the quarterly dividends-paid series from SEC XBRL."""
+    for tag in DIVIDEND_TAG_CANDIDATES:
+        data = fetch_xbrl_concept(tag)
+        entries = ((data or {}).get("units") or {}).get("USD") or []
+        series = _quarterly_duration_series(entries)
+        if not series:
+            continue
+        try:
+            conn = get_db_connection()
+            for s in series:
+                conn.execute(
+                    """INSERT OR REPLACE INTO financial_metrics (metric, period_end, value, form, filed)
+                       VALUES ('dividends_paid', ?, ?, ?, ?)""",
+                    (s["end"], s["val"], s["form"], tag)
+                )
+            conn.commit()
+            conn.close()
+            print(f"Dividends: {len(series)} quarter(s) stored from {tag} "
+                  f"(latest: {series[-1]['end']} = ${series[-1]['val']:,.0f})")
+            return len(series)
+        except Exception as e:
+            print(f"Dividends DB update failed: {e}")
+            return 0
+    print("Dividends: no usable XBRL tag returned data")
+    return 0
+
 def cash_refresh_loop():
-    """Refresh the quarterly cash data at startup and every 12 hours."""
+    """Refresh the quarterly cash + dividend data at startup and every 12 hours."""
     while running:
         try:
             refresh_cash_reserves()
+            refresh_dividends()
         except Exception as e:
             print(f"Cash refresh loop error: {e}")
         time.sleep(12 * 3600)
+
+# ----------------- DIVIDEND MODEL & CASH ESTIMATE -----------------
+
+# Dividend model configuration. Baselines = outstanding face value ($M) of
+# each preferred series BEFORE our ATM data window begins — set them from
+# the latest 10-Q via env; 0 means the model only counts the ATM sales we
+# observed ourselves. STRC's rate is variable (announced monthly by MSTR),
+# so it comes from config; the fixed-rate series' rates are parsed from the
+# security names stored in atm_sales (e.g. "10.00% Series A ... Strife").
+PREFERRED_BASELINE_AS_OF = os.getenv("PREFERRED_BASELINE_AS_OF", "2026-02-01")
+PREFERRED_BASELINE_NOTIONAL_M = {
+    "STRF": float(os.getenv("STRF_BASELINE_M", "0")),
+    "STRK": float(os.getenv("STRK_BASELINE_M", "0")),
+    "STRD": float(os.getenv("STRD_BASELINE_M", "0")),
+    "STRC": float(os.getenv("STRC_BASELINE_M", "0")),
+}
+STRC_ANNUAL_RATE = float(os.getenv("STRC_ANNUAL_RATE", "0.10"))
+PREFERRED_RATE_DEFAULTS = {"STRF": 0.10, "STRK": 0.08, "STRD": 0.10}
+
+def compute_dividend_model():
+    """Per-series dividend cost model + comparison to actual paid dividends.
+
+    Outstanding face value = configured baseline + cumulative ATM notional
+    sold since PREFERRED_BASELINE_AS_OF (the ATM table's "Notional Value"
+    column is exactly the face value dividends accrue on — footnote 2 of
+    the filings). MSTR common pays no dividend and is excluded.
+    """
+    series = {t: {"ticker": t, "rate": None, "rate_source": None, "atm_notional_m": 0.0}
+              for t in ("STRF", "STRK", "STRD", "STRC")}
+    latest_actual = None
+    rows = []
+    try:
+        conn = get_db_connection()
+        rows = conn.execute(
+            "SELECT filing_date, atm_sales FROM purchase_history "
+            "WHERE atm_sales IS NOT NULL AND atm_sales <> '' ORDER BY filing_date").fetchall()
+        actual = conn.execute(
+            "SELECT period_end, value FROM financial_metrics "
+            "WHERE metric='dividends_paid' ORDER BY period_end DESC LIMIT 1").fetchone()
+        conn.close()
+        if actual:
+            latest_actual = {"period_end": actual["period_end"], "paid_usd": actual["value"]}
+    except Exception as e:
+        print(f"compute_dividend_model DB error: {e}")
+
+    for row in rows:
+        atm = _safe_json_loads(row["atm_sales"]) or {}
+        for s in atm.get("securities", []):
+            t = s.get("ticker")
+            if t not in series:
+                continue
+            e = series[t]
+            if e["rate"] is None:
+                m = re.search(r'(\d+(?:\.\d+)?)\s*%', s.get("name") or "")
+                if m:
+                    e["rate"] = float(m.group(1)) / 100.0
+                    e["rate_source"] = "filing_name"
+            if (s.get("shares_sold_num") or 0) > 0 and row["filing_date"] >= PREFERRED_BASELINE_AS_OF:
+                notional_m = parse_money(s.get("notional", "-"))
+                if not notional_m:
+                    # Some rows only carry net proceeds — close approximation
+                    notional_m = parse_money(s.get("net_proceeds", "-"))
+                e["atm_notional_m"] += notional_m
+
+    out = []
+    total_monthly_m = 0.0
+    for t in ("STRF", "STRK", "STRD", "STRC"):
+        e = series[t]
+        rate = e["rate"]
+        rate_source = e["rate_source"]
+        if rate is None:
+            if t == "STRC":
+                rate = STRC_ANNUAL_RATE
+                rate_source = "config (variable)"
+            else:
+                rate = PREFERRED_RATE_DEFAULTS.get(t, 0.0)
+                rate_source = "default"
+        baseline_m = PREFERRED_BASELINE_NOTIONAL_M.get(t, 0.0)
+        outstanding_m = baseline_m + e["atm_notional_m"]
+        monthly_m = outstanding_m * rate / 12.0
+        total_monthly_m += monthly_m
+        out.append({
+            "ticker": t,
+            "rate": rate,
+            "rate_source": rate_source,
+            "frequency": "aylık" if t == "STRC" else "çeyreklik",
+            "baseline_notional_m": baseline_m,
+            "atm_notional_m": round(e["atm_notional_m"], 1),
+            "outstanding_notional_m": round(outstanding_m, 1),
+            "monthly_cost_m": round(monthly_m, 2),
+        })
+
+    result = {
+        "series": out,
+        "model_monthly_total_m": round(total_monthly_m, 2),
+        "baselines_configured": any(v > 0 for v in PREFERRED_BASELINE_NOTIONAL_M.values()),
+        "actual_last_quarter": None,
+        "model_vs_actual_pct": None,
+    }
+    if latest_actual:
+        result["actual_last_quarter"] = {
+            "period_end": latest_actual["period_end"],
+            "paid_usd": latest_actual["paid_usd"],
+            "monthly_avg_usd": latest_actual["paid_usd"] / 3.0,
+        }
+        if latest_actual["paid_usd"]:
+            model_quarter_usd = total_monthly_m * 3 * 1e6
+            result["model_vs_actual_pct"] = round(
+                (model_quarter_usd - latest_actual["paid_usd"]) / latest_actual["paid_usd"] * 100, 1)
+    return result
+
+def compute_cash_estimate():
+    """Weekly estimated cash series, backtested against reported quarters.
+
+    Weekly flow = ATM net proceeds + BTC sale proceeds − BTC purchase cost
+    − dividend burn − calibrated other outflows. The dividend burn comes
+    from the latest ACTUAL quarter (XBRL) when available, else the model.
+    The estimate re-anchors at every reported quarterly balance; the raw
+    (uncalibrated) prediction error per past quarter is reported as the
+    backtest, and its average residual becomes the "other outflows" term —
+    the user's requested calibrate-against-10-K loop.
+    """
+    try:
+        conn = get_db_connection()
+        hist = conn.execute(
+            "SELECT filing_date, btc_acquired, purchase_price, atm_sales "
+            "FROM purchase_history ORDER BY filing_date, id").fetchall()
+        cash_rows = conn.execute(
+            "SELECT period_end, value FROM financial_metrics "
+            "WHERE metric='cash_and_equivalents' ORDER BY period_end").fetchall()
+        div_rows = conn.execute(
+            "SELECT period_end, value FROM financial_metrics "
+            "WHERE metric='dividends_paid' ORDER BY period_end").fetchall()
+        conn.close()
+    except Exception as e:
+        print(f"compute_cash_estimate DB error: {e}")
+        return None
+
+    flows = []
+    for r in hist:
+        atm = _safe_json_loads(r["atm_sales"]) or {}
+        atm_m = sum((s.get("net_proceeds_num_m") or 0.0) for s in atm.get("securities", []))
+        btc_signed = parse_btc_number(r["btc_acquired"])
+        money_m = parse_money(r["purchase_price"])
+        if btc_signed > 0:
+            btc_m = -money_m   # cash spent buying BTC
+        elif btc_signed < 0:
+            btc_m = money_m    # BTC sale proceeds
+        else:
+            btc_m = 0.0
+        flows.append({"date": r["filing_date"], "flow_m": atm_m + btc_m})
+
+    if div_rows:
+        weekly_div_m = (div_rows[-1]["value"] / 1e6) / 13.0
+        dividend_source = "xbrl_actual"
+    else:
+        weekly_div_m = compute_dividend_model()["model_monthly_total_m"] * 12.0 / 52.0
+        dividend_source = "model"
+
+    actuals = [{"period_end": r["period_end"], "cash_m": r["value"] / 1e6} for r in cash_rows]
+
+    # Backtest the RAW model between consecutive reported quarters
+    backtest = []
+    residuals_per_week = []
+    for a0, a1 in zip(actuals, actuals[1:]):
+        seg = [f for f in flows if a0["period_end"] < f["date"] <= a1["period_end"]]
+        if not seg:
+            continue
+        predicted = a0["cash_m"] + sum(f["flow_m"] for f in seg) - weekly_div_m * len(seg)
+        error_m = predicted - a1["cash_m"]
+        backtest.append({
+            "quarter_end": a1["period_end"],
+            "predicted_m": round(predicted, 1),
+            "actual_m": round(a1["cash_m"], 1),
+            "error_m": round(error_m, 1),
+            "error_pct": round(error_m / a1["cash_m"] * 100, 1) if a1["cash_m"] else None,
+            "weeks": len(seg),
+        })
+        residuals_per_week.append((a1["cash_m"] - predicted) / len(seg))
+
+    # Calibration: the average historical residual (dividends/opex/interest
+    # we can't see weekly) becomes a constant weekly outflow term
+    other_per_week_m = (-sum(residuals_per_week) / len(residuals_per_week)) if residuals_per_week else 0.0
+
+    estimate = []
+    if actuals and flows:
+        anchor_idx = 0
+        cash = None
+        for f in flows:
+            while anchor_idx < len(actuals) and actuals[anchor_idx]["period_end"] < f["date"]:
+                cash = actuals[anchor_idx]["cash_m"]   # re-anchor at each reported quarter
+                anchor_idx += 1
+            if cash is None:
+                continue   # no reported balance before our data window yet
+            cash += f["flow_m"] - weekly_div_m - other_per_week_m
+            estimate.append({"date": f["date"], "cash_m": round(cash, 1)})
+
+    return {
+        "estimate": estimate,
+        "actuals": [{"period_end": a["period_end"], "cash_m": round(a["cash_m"], 1)} for a in actuals],
+        "backtest": backtest,
+        "calibration": {
+            "weekly_dividend_m": round(weekly_div_m, 2),
+            "other_outflow_per_week_m": round(other_per_week_m, 2),
+            "dividend_source": dividend_source,
+        },
+        "current_estimate": estimate[-1] if estimate else None,
+    }
 
 # ----------------- HISTORICAL ATM BACKFILL -----------------
 
@@ -2195,6 +2482,22 @@ def get_cash_reserves():
     except Exception as e:
         print(f"/api/cash error: {e}")
         return jsonify([])
+
+@app.route('/api/cashflow')
+def get_cashflow():
+    try:
+        return jsonify(compute_cash_estimate() or {})
+    except Exception as e:
+        print(f"/api/cashflow error: {e}")
+        return jsonify({})
+
+@app.route('/api/dividends')
+def get_dividends():
+    try:
+        return jsonify(compute_dividend_model())
+    except Exception as e:
+        print(f"/api/dividends error: {e}")
+        return jsonify({"series": [], "model_monthly_total_m": 0})
 
 @app.route('/api/trigger', methods=['POST'])
 def force_trigger():

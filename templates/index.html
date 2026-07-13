@@ -11,8 +11,8 @@
     <!-- FontAwesome icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Chart.js (bundled locally — no CDN dependency) -->
-    <script src="/static/chart.umd.min.js?v=5"></script>
-    <link rel="stylesheet" href="/static/style.css?v=5">
+    <script src="/static/chart.umd.min.js?v=6"></script>
+    <link rel="stylesheet" href="/static/style.css?v=6">
 </head>
 <body>
     <div class="glow-container">
@@ -141,13 +141,14 @@
                 </div>
                 <div class="chart-panel glass-panel" style="margin-top: 1.5rem;">
                     <div class="panel-header">
-                        <h2><i class="fa-solid fa-sack-dollar"></i> MSTR Nakit Rezervi (Çeyreklik)</h2>
-                        <p>SEC XBRL bilanço verisi (10-Q/10-K) — Nakit ve Nakit Benzerleri. Haftalık 8-K'larda nakit açıklanmaz; seri çeyrekliktir.</p>
+                        <h2><i class="fa-solid fa-sack-dollar"></i> MSTR Nakit Rezervi — Gerçek vs Tahmini</h2>
+                        <p>Yeşil: gerçek çeyreklik bilanço (SEC XBRL, 10-Q/10-K). Kesikli cyan: haftalık tahmin (ATM geliri + BTC satışı − BTC alımı − temettü − kalibre edilmiş diğer giderler); her gerçek çeyrekte yeniden sabitlenir.</p>
                     </div>
                     <div class="chart-container">
                         <canvas id="cashChart"></canvas>
                         <p class="chart-empty-note" id="cashEmptyNote" style="display:none;">Nakit verisi ilk senkronizasyonda yüklenecek.</p>
                     </div>
+                    <p class="panel-footnote" id="cashBacktestNote"></p>
                 </div>
                 <div class="chart-panel glass-panel" style="margin-top: 1.5rem;">
                     <div class="panel-header">
@@ -160,30 +161,56 @@
                 </div>
             </div>
 
-            <!-- Right Panel: History Table -->
-            <div class="history-panel glass-panel">
-                <div class="panel-header">
-                    <h2><i class="fa-solid fa-list-check"></i> Son SEC Bildirim Logları</h2>
-                    <p>En son Form 8-K ve Bitcoin alım bildirimleri.</p>
+            <!-- Right Column: History Table + Dividends -->
+            <div class="right-column">
+                <div class="history-panel glass-panel">
+                    <div class="panel-header">
+                        <h2><i class="fa-solid fa-list-check"></i> Son SEC Bildirim Logları</h2>
+                        <p>En son Form 8-K ve Bitcoin alım bildirimleri.</p>
+                    </div>
+                    <div class="table-container">
+                        <table class="history-table">
+                            <thead>
+                                <tr>
+                                    <th>Tarih</th>
+                                    <th>Alınan BTC</th>
+                                    <th>Ort. Fiyat</th>
+                                    <th>Toplam Portföy</th>
+                                    <th>Finansman Kaynağı</th>
+                                    <th>Filing</th>
+                                </tr>
+                            </thead>
+                            <tbody id="historyTableBody">
+                                <tr>
+                                    <td colspan="6" class="loading-cell">Veriler yükleniyor...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
-                <div class="table-container">
-                    <table class="history-table">
-                        <thead>
-                            <tr>
-                                <th>Tarih</th>
-                                <th>Alınan BTC</th>
-                                <th>Ort. Fiyat</th>
-                                <th>Toplam Portföy</th>
-                                <th>Finansman Kaynağı</th>
-                                <th>Filing</th>
-                            </tr>
-                        </thead>
-                        <tbody id="historyTableBody">
-                            <tr>
-                                <td colspan="6" class="loading-cell">Veriler yükleniyor...</td>
-                            </tr>
-                        </tbody>
-                    </table>
+                <div class="history-panel glass-panel">
+                    <div class="panel-header">
+                        <h2><i class="fa-solid fa-hand-holding-dollar"></i> Temettü Ödeyen Ürünler &amp; Aylık Gider</h2>
+                        <p>İmtiyazlı seriler — oranlar filing'lerdeki ürün adlarından, nominal tutarlar izlenen ATM satışlarından; gerçek ödenen temettü SEC XBRL'den.</p>
+                    </div>
+                    <div class="table-container">
+                        <table class="history-table">
+                            <thead>
+                                <tr>
+                                    <th>Ürün</th>
+                                    <th>Oran</th>
+                                    <th>Nominal (tah.)</th>
+                                    <th>Aylık Gider</th>
+                                </tr>
+                            </thead>
+                            <tbody id="dividendTableBody">
+                                <tr>
+                                    <td colspan="4" class="loading-cell">Yükleniyor...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p class="panel-footnote" id="dividendSummary"></p>
                 </div>
             </div>
         </div>
@@ -196,6 +223,6 @@
     </div>
 
     <!-- Script file -->
-    <script src="/static/dashboard.js?v=5"></script>
+    <script src="/static/dashboard.js?v=6"></script>
 </body>
 </html>
