@@ -161,15 +161,10 @@ def init_db():
 
     conn.close()
 
-def seed_database(conn):
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM purchase_history")
-    count = cursor.fetchone()[0]
-    if count == 0:
-        print("Seeding database with historical purchase data...")
-        # TODO: replace the July 13 placeholder URL with the real filing URL
-        # once it can be read from EDGAR or the Railway logs.
-        history = [
+# Historical seed data (only applied to an EMPTY purchase_history table).
+# TODO: replace the July 13 placeholder URL with the real filing URL
+# once it can be read from EDGAR or the Railway logs.
+SEED_HISTORY = [
             ("2026-07-13", "July 6, 2026 to July 12, 2026", "0", "-", "-", "843,775", "$63.69B", "$75,476", "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001050446&type=8-K", "$6.7B", "MSTR ATM Hisse Satışı ($466.7M)"),
             ("2026-07-06", "June 29, 2026 to July 5, 2026", "-3,588", "$216.0M", "$60,197", "843,775", "$63.69B", "$75,476", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526295586/mstr-20260706.htm", "$6.7B", "İmtiyazlı Hisse (STRC) Temettüsü"),
             ("2026-06-29", "June 22, 2026 to June 28, 2026", "0", "$0M", "$0", "847,363", "$64.10B", "$75,651", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526286871/mstr-20260629.htm", "$6.7B", "-"),
@@ -190,8 +185,15 @@ def seed_database(conn):
             ("2026-02-23", "February 17, 2026 to February 22, 2026", "592", "$39.8M", "$67,286", "717,722", "$54.56B", "$76,020", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526062489/mstr-20260223.htm", "$8.2B", "ATM Hisse Satışı"),
             ("2026-02-17", "February 9, 2026 to February 16, 2026", "2,486", "$168.4M", "$67,710", "717,131", "$54.52B", "$76,027", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526053105/mstr-20260105.htm", "$8.2B", "ATM Hisse Satışı"),
             ("2026-02-09", "February 2, 2026 to February 8, 2026", "1,142", "$90.0M", "$78,815", "714,644", "$54.35B", "$76,056", "https://www.sec.gov/Archives/edgar/data/1050446/000119312526041944/mstr-20260105.htm", "$8.2B", "ATM Hisse Satışı")
-        ]
-        for item in reversed(history):
+]
+
+def seed_database(conn):
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM purchase_history")
+    count = cursor.fetchone()[0]
+    if count == 0:
+        print("Seeding database with historical purchase data...")
+        for item in reversed(SEED_HISTORY):
             cursor.execute(
                 """INSERT INTO purchase_history 
                    (filing_date, period, btc_acquired, purchase_price, avg_price, total_holdings, total_cost, avg_cost, url, total_debt, financing_source) 
