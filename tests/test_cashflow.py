@@ -227,6 +227,32 @@ def test_runway_finite_weeks_and_projection(temp_db):
     assert len(proj) <= 120
 
 
+def test_change_summary_explains_the_move(temp_db):
+    seed_cash_scenario(temp_db)
+    result = bot.compute_cash_estimate()
+    c = result['change_summary']
+
+    # After the last re-anchor (2026-06-30 @ 1200): one week, +10 MSTR ATM,
+    # no BTC, −3 dividends, −(−43) other → 1250
+    assert c['since'] == '2026-06-30'
+    assert c['from_cash_m'] == 1200.0
+    assert c['to_cash_m'] == 1250.0
+    assert c['delta_m'] == 50.0
+    assert c['weeks'] == 1
+    assert c['atm_by_ticker'] == {'MSTR': 10.0}
+    assert c['atm_total_m'] == 10.0
+    assert c['btc_buys_m'] == 0.0
+    assert c['btc_sales_m'] == 0.0
+    assert c['dividends_m'] == 3.0
+    assert c['other_m'] == -43.0
+
+    # Per-week driver breakdown is exposed on every estimate point
+    last = result['estimate'][-1]
+    assert last['atm_m'] == 10.0
+    assert last['btc_m'] == 0.0
+    assert last['atm_detail'] == [{'ticker': 'MSTR', 'net_m': 10.0}]
+
+
 def test_cash_estimate_without_actuals_is_empty(temp_db):
     insert_flow(temp_db, '2026-04-06',
                 atm=atm_json('MSTR', 'MSTR Stock Class A Common Stock', None, 100.0))

@@ -475,6 +475,30 @@ function renderBacktestNote(flow) {
         parts.push(`Geri-test ${b.quarter_end}: tahmin ${formatUsd(b.predicted_m * 1e6)} vs gerçek ` +
                    `${formatUsd(b.actual_m * 1e6)} (sapma %${b.error_pct !== null ? b.error_pct : '-'})`);
     });
+    if (flow.change_summary) {
+        // The chart explains its own movement: what drove the cash change
+        // since the last reported balance
+        const c = flow.change_summary;
+        const bits = [];
+        const atmParts = Object.entries(c.atm_by_ticker || {})
+            .filter(([, v]) => v > 0)
+            .sort((a, b) => b[1] - a[1])
+            .map(([t, v]) => `${t} ${formatUsd(v * 1e6)}`);
+        if (c.atm_total_m > 0) {
+            bits.push(`+${formatUsd(c.atm_total_m * 1e6)} ATM hisse satışı (${atmParts.join(', ')})`);
+        }
+        if (c.btc_sales_m > 0) bits.push(`+${formatUsd(c.btc_sales_m * 1e6)} BTC satışı`);
+        if (c.btc_buys_m > 0) bits.push(`−${formatUsd(c.btc_buys_m * 1e6)} BTC alımı`);
+        if (c.dividends_m > 0) bits.push(`−${formatUsd(c.dividends_m * 1e6)} temettü`);
+        if (c.other_m !== 0) {
+            bits.push(`${c.other_m > 0 ? '−' : '+'}${formatUsd(Math.abs(c.other_m) * 1e6)} diğer net giderler`);
+        }
+        const dir = c.delta_m >= 0 ? 'arttı' : 'azaldı';
+        const sign = c.delta_m >= 0 ? '+' : '−';
+        parts.push(`📈 <strong>Neden ${dir}?</strong> Son bilançodan (${c.since}, ${formatUsd(c.from_cash_m * 1e6)}) ` +
+                   `bu yana ${c.weeks} haftada: ${bits.join(' ')} → bugün ` +
+                   `${formatUsd(c.to_cash_m * 1e6)} (${sign}${formatUsd(Math.abs(c.delta_m) * 1e6)})`);
+    }
     if (flow.calibration) {
         const c = flow.calibration;
         parts.push(`Temettü: ${formatUsd(c.weekly_dividend_m * 1e6)}/hafta ` +
@@ -500,6 +524,7 @@ function renderCashChart(actuals, flow) {
 
     const actualByDate = Object.fromEntries(actuals.map(a => [a.period_end, a.value]));
     const estByDate = Object.fromEntries(estimate.map(e => [e.date, e.cash_m * 1e6]));
+    const estDetail = Object.fromEntries(estimate.map(e => [e.date, e]));
     const projByDate = Object.fromEntries(projection.map(p => [p.date, p.cash_m * 1e6]));
     // Connect the projection to its starting point (the current estimate)
     if (projection.length && estimate.length) {
@@ -574,6 +599,23 @@ function renderCashChart(actuals, flow) {
                     callbacks: {
                         label: function(context) {
                             return `${context.dataset.label}: ${formatUsd(context.parsed.y)}`;
+                        },
+                        // Weekly driver breakdown: WHY the estimate moved
+                        afterBody: function(items) {
+                            const e = items.length ? estDetail[items[0].label] : null;
+                            if (!e) return [];
+                            const lines = ['— Bu haftanın kalemleri —'];
+                            (e.atm_detail || []).forEach(d => {
+                                lines.push(`+ ATM ${d.ticker}: ${formatUsd(d.net_m * 1e6)}`);
+                            });
+                            if (e.btc_m > 0) lines.push(`+ BTC satışı: ${formatUsd(e.btc_m * 1e6)}`);
+                            if (e.btc_m < 0) lines.push(`− BTC alımı: ${formatUsd(Math.abs(e.btc_m) * 1e6)}`);
+                            if (!e.atm_detail?.length && e.btc_m === 0) lines.push('İşlem yok');
+                            if (e.div_m > 0) lines.push(`− Temettü: ${formatUsd(e.div_m * 1e6)}`);
+                            if (e.other_m !== 0) {
+                                lines.push(`${e.other_m > 0 ? '−' : '+'} Diğer: ${formatUsd(Math.abs(e.other_m) * 1e6)}`);
+                            }
+                            return lines;
                         }
                     }
                 }

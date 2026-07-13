@@ -1342,7 +1342,12 @@ def compute_cash_estimate():
     flows = []
     for r in hist:
         atm = _safe_json_loads(r["atm_sales"]) or {}
-        atm_m = sum((s.get("net_proceeds_num_m") or 0.0) for s in atm.get("securities", []))
+        atm_detail = [
+            {"ticker": s.get("ticker"), "net_m": round(s.get("net_proceeds_num_m") or 0.0, 1)}
+            for s in atm.get("securities", [])
+            if (s.get("shares_sold_num") or 0) > 0 and (s.get("net_proceeds_num_m") or 0) > 0
+        ]
+        atm_m = sum(d["net_m"] for d in atm_detail)
         btc_signed = parse_btc_number(r["btc_acquired"])
         money_m = parse_money(r["purchase_price"])
         if btc_signed > 0:
@@ -1351,7 +1356,8 @@ def compute_cash_estimate():
             btc_m = money_m    # BTC sale proceeds
         else:
             btc_m = 0.0
-        flows.append({"date": r["filing_date"], "flow_m": atm_m + btc_m})
+        flows.append({"date": r["filing_date"], "flow_m": atm_m + btc_m,
+                      "atm_m": atm_m, "btc_m": btc_m, "atm_detail": atm_detail})
 
     if div_rows:
         weekly_div_m = (div_rows[-1]["value"] / 1e6) / 13.0
@@ -1385,18 +1391,55 @@ def compute_cash_estimate():
     # we can't see weekly) becomes a constant weekly outflow term
     other_per_week_m = (-sum(residuals_per_week) / len(residuals_per_week)) if residuals_per_week else 0.0
 
+    # Walk forward weekly, tracking WHY the cash moved since the last
+    # reported balance so the chart can explain its own rises and falls.
     estimate = []
+    change = None
     if actuals and flows:
         anchor_idx = 0
         cash = None
+        seg_since = None
+        seg_from = None
+        acc = {"atm_by_ticker": {}, "btc_buys_m": 0.0, "btc_sales_m": 0.0, "weeks": 0}
         for f in flows:
             while anchor_idx < len(actuals) and actuals[anchor_idx]["period_end"] < f["date"]:
                 cash = actuals[anchor_idx]["cash_m"]   # re-anchor at each reported quarter
+                seg_since = actuals[anchor_idx]["period_end"]
+                seg_from = cash
+                acc = {"atm_by_ticker": {}, "btc_buys_m": 0.0, "btc_sales_m": 0.0, "weeks": 0}
                 anchor_idx += 1
             if cash is None:
                 continue   # no reported balance before our data window yet
             cash += f["flow_m"] - weekly_div_m - other_per_week_m
-            estimate.append({"date": f["date"], "cash_m": round(cash, 1)})
+            estimate.append({
+                "date": f["date"], "cash_m": round(cash, 1),
+                "atm_m": round(f["atm_m"], 1), "btc_m": round(f["btc_m"], 1),
+                "div_m": round(weekly_div_m, 2), "other_m": round(other_per_week_m, 2),
+                "atm_detail": f["atm_detail"],
+            })
+            acc["weeks"] += 1
+            for d in f["atm_detail"]:
+                acc["atm_by_ticker"][d["ticker"]] = round(
+                    acc["atm_by_ticker"].get(d["ticker"], 0.0) + d["net_m"], 1)
+            if f["btc_m"] > 0:
+                acc["btc_sales_m"] += f["btc_m"]
+            elif f["btc_m"] < 0:
+                acc["btc_buys_m"] += -f["btc_m"]
+
+        if estimate and seg_since is not None:
+            change = {
+                "since": seg_since,
+                "from_cash_m": round(seg_from, 1),
+                "to_cash_m": estimate[-1]["cash_m"],
+                "delta_m": round(estimate[-1]["cash_m"] - seg_from, 1),
+                "atm_by_ticker": acc["atm_by_ticker"],
+                "atm_total_m": round(sum(acc["atm_by_ticker"].values()), 1),
+                "btc_buys_m": round(acc["btc_buys_m"], 1),
+                "btc_sales_m": round(acc["btc_sales_m"], 1),
+                "dividends_m": round(weekly_div_m * acc["weeks"], 1),
+                "other_m": round(other_per_week_m * acc["weeks"], 1),
+                "weeks": acc["weeks"],
+            }
 
     # Runway: how many weeks the cash lasts if MSTR sells NO BTC and NO
     # securities (all financing inflows zeroed) — only the weekly dividend
@@ -1455,6 +1498,7 @@ def compute_cash_estimate():
         "current_estimate": estimate[-1] if estimate else None,
         "runway": runway,
         "projection": projection,
+        "change_summary": change,
     }
 
 # ----------------- HISTORICAL ATM BACKFILL -----------------
