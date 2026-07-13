@@ -120,6 +120,27 @@ def test_backfill_no_atm_table_writes_sentinel_once(temp_db, monkeypatch):
     assert len(calls) == 1
 
 
+def test_backfill_reparses_pre_fmt2_rows(temp_db, monkeypatch):
+    """Rows stored before the period_scoped guard get re-fetched once."""
+    old_json = json.dumps({"sold_any": True, "securities": [],
+                           "sold_tickers": ["STRC"]})  # no fmt marker
+    row_id = insert_row(temp_db, ARCHIVES_URL, atm_sales=old_json)
+
+    monkeypatch.setattr(bot, 'fetch_html', lambda url: load_fixture('june22_purchase.html'))
+    bot.backfill_atm_history(sleep_seconds=0)
+
+    row = get_row(temp_db, row_id)
+    atm = json.loads(row['atm_sales'])
+    assert atm['fmt'] == 2
+    assert atm['period_scoped'] is True
+
+    # fmt-2 rows are not fetched again
+    def must_not_fetch(url):
+        raise AssertionError('fmt-2 rows must not be re-fetched')
+    monkeypatch.setattr(bot, 'fetch_html', must_not_fetch)
+    bot.backfill_atm_history(sleep_seconds=0)
+
+
 def test_backfill_placeholder_url_no_fetch(temp_db, monkeypatch):
     row_id = insert_row(
         temp_db, 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001050446&type=8-K')

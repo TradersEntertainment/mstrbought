@@ -29,8 +29,10 @@ def temp_db(tmp_path, monkeypatch):
     return db_path
 
 
-def atm_json(ticker, name, notional_m, net_m):
+def atm_json(ticker, name, notional_m, net_m, period_scoped=True):
     return json.dumps({
+        "fmt": 2,
+        "period_scoped": period_scoped,
         "securities": [{
             "ticker": ticker, "name": name,
             "shares_sold": "1,000", "shares_sold_num": 1000,
@@ -252,6 +254,36 @@ def test_change_summary_explains_the_move(temp_db):
     assert last['atm_m'] == 10.0
     assert last['btc_m'] == 0.0
     assert last['atm_detail'] == [{'ticker': 'MSTR', 'net_m': 10.0}]
+
+
+def test_cumulative_atm_excluded_from_cash_and_dividends(temp_db, monkeypatch):
+    """A stored cumulative-table parse must not inflate cash flows or the
+    dividend model's outstanding notional."""
+    monkeypatch.setattr(bot, 'PREFERRED_BASELINE_NOTIONAL_M',
+                        {"STRF": 0.0, "STRK": 0.0, "STRD": 0.0, "STRC": 0.0})
+    insert_metric(temp_db, 'cash_and_equivalents', '2026-03-31', 1000e6)
+    # Weekly (counted) + cumulative (must be ignored)
+    insert_flow(temp_db, '2026-04-06',
+                atm=atm_json('STRC', 'STRC Stock Variable Rate ...', 50.0, 49.5))
+    insert_flow(temp_db, '2026-04-13',
+                atm=atm_json('STRC', 'STRC Stock Variable Rate ...', 2410.5, 2410.5,
+                             period_scoped=False))
+
+    result = bot.compute_cash_estimate()
+    # Only the weekly 49.5 counts; the 2,410.5 cumulative snapshot does not
+    assert result['change_summary']['atm_by_ticker'] == {'STRC': 49.5}
+
+    model = bot.compute_dividend_model()
+    strc = next(s for s in model['series'] if s['ticker'] == 'STRC')
+    assert strc['atm_notional_m'] == 50.0
+
+    # The audit trail shows both, with the cumulative one marked un-counted
+    client = bot.app.test_client()
+    audit = client.get('/api/atm_audit').get_json()
+    by_date = {w['filing_date']: w for w in audit['weeks']}
+    assert by_date['2026-04-06']['counted_in_estimate'] is True
+    assert by_date['2026-04-13']['counted_in_estimate'] is False
+    assert audit['counted_totals_by_ticker_m'] == {'STRC': 49.5}
 
 
 def test_filing_calendar_from_stored_filed_dates(temp_db):

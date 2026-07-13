@@ -47,6 +47,22 @@ def test_no_atm_table_returns_none():
     assert atm is None
 
 
+def test_weekly_table_is_period_scoped():
+    atm = bot.parse_atm_table(load_tables('july13_hold_atm.html'))
+    assert atm['period_scoped'] is True
+    assert atm['fmt'] == 2
+
+
+def test_cumulative_program_table_is_not_period_scoped():
+    """'Inception to date' summaries match the same headers but must never
+    be treated as one week's sales — the source of inflated ATM totals."""
+    atm = bot.parse_atm_table(load_tables('cumulative_atm.html'))
+    assert atm is not None
+    assert atm['period'] is None
+    assert atm['period_scoped'] is False
+    assert atm['sold_tickers'] == ['STRC']  # parsed, but flagged
+
+
 def test_financing_source_from_atm():
     atm = bot.parse_atm_table(load_tables('july13_hold_atm.html'))
     assert bot.financing_source_from_atm(atm) == 'MSTR ATM ($466.7M)'

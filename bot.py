@@ -358,6 +358,8 @@ def _migrate_repair_july_2026_rows(conn):
 # table), in the exact shape parse_atm_table produces — backfilled so the
 # dashboard shows WHICH security raised the cash for that week too.
 _JULY13_ATM_JSON = {
+    "fmt": 2,
+    "period_scoped": True,
     "period": "July 6, 2026 to July 12, 2026",
     "securities": [
         {"ticker": "STRF", "name": "STRF Stock 10.00% Series A Perpetual Strife Preferred Stock",
@@ -1014,7 +1016,15 @@ def parse_atm_table(tables):
                 total_net_proceeds = f"${total_m:.1f}M"
 
         return {
+            # fmt 2 = carries period_scoped; the backfill re-parses any
+            # stored JSON older than this format
+            "fmt": 2,
             "period": period,
+            # Only tables covering a "During Period" window are weekly
+            # sales. Cumulative program summaries ("sold to date") match
+            # the same column headers but must NEVER be counted as one
+            # week's proceeds — that inflates the cash estimate massively.
+            "period_scoped": bool(period),
             "securities": securities,
             "sold_tickers": [s["ticker"] for s in sold],
             "sold_any": bool(sold),
@@ -1248,6 +1258,7 @@ def compute_dividend_model():
 
     for row in rows:
         atm = _safe_json_loads(row["atm_sales"]) or {}
+        period_scoped = atm.get("period_scoped") is not False
         for s in atm.get("securities", []):
             t = s.get("ticker")
             if t not in series:
@@ -1258,7 +1269,8 @@ def compute_dividend_model():
                 if m:
                     e["rate"] = float(m.group(1)) / 100.0
                     e["rate_source"] = "filing_name"
-            if (s.get("shares_sold_num") or 0) > 0 and row["filing_date"] >= PREFERRED_BASELINE_AS_OF:
+            # Cumulative tables must not be added as weekly issuance
+            if period_scoped and (s.get("shares_sold_num") or 0) > 0 and row["filing_date"] >= PREFERRED_BASELINE_AS_OF:
                 notional_m = parse_money(s.get("notional", "-"))
                 if not notional_m:
                     # Some rows only carry net proceeds — close approximation
@@ -1342,6 +1354,10 @@ def compute_cash_estimate():
     flows = []
     for r in hist:
         atm = _safe_json_loads(r["atm_sales"]) or {}
+        # Cumulative program tables (period_scoped False) are NOT one
+        # week's proceeds — never count them as cash inflow
+        if atm.get("period_scoped") is False:
+            atm = {}
         atm_detail = [
             {"ticker": s.get("ticker"), "net_m": round(s.get("net_proceeds_num_m") or 0.0, 1)}
             for s in atm.get("securities", [])
@@ -1542,8 +1558,8 @@ def _next_quarter_end(period_end):
 
 # ----------------- HISTORICAL ATM BACKFILL -----------------
 
-ATM_SENTINEL_NO_TABLE = {"sold_any": False, "securities": [], "note": "no_atm_table"}
-ATM_SENTINEL_NO_DOC = {"sold_any": False, "securities": [], "note": "no_fetchable_doc"}
+ATM_SENTINEL_NO_TABLE = {"fmt": 2, "sold_any": False, "securities": [], "note": "no_atm_table"}
+ATM_SENTINEL_NO_DOC = {"fmt": 2, "sold_any": False, "securities": [], "note": "no_fetchable_doc"}
 
 def backfill_atm_history(sleep_seconds=1.5):
     """Re-read historical filings and fill missing per-security ATM data.
@@ -1556,9 +1572,12 @@ def backfill_atm_history(sleep_seconds=1.5):
     """
     try:
         conn = get_db_connection()
+        # Also re-parse rows stored before fmt 2 (adds the period_scoped
+        # guard that keeps cumulative program tables out of weekly flows)
         rows = conn.execute(
             "SELECT id, url, financing_source FROM purchase_history "
-            "WHERE atm_sales IS NULL OR atm_sales = ''"
+            "WHERE atm_sales IS NULL OR atm_sales = '' "
+            "   OR atm_sales NOT LIKE '%\"fmt\": 2%'"
         ).fetchall()
         conn.close()
     except Exception as e:
@@ -1592,7 +1611,8 @@ def backfill_atm_history(sleep_seconds=1.5):
                 # Fill the badge only when the row has no description yet —
                 # existing Turkish notes (e.g. convertible debt) carry info
                 # the ATM table doesn't and must be preserved.
-                if (row["financing_source"] or "-").strip() in ("-", "") and atm.get("sold_any"):
+                if ((row["financing_source"] or "-").strip() in ("-", "")
+                        and atm.get("sold_any") and atm.get("period_scoped", True)):
                     financing = financing_source_from_atm(atm)
             else:
                 atm_json = json.dumps(ATM_SENTINEL_NO_TABLE)
@@ -2236,7 +2256,7 @@ def process_filing(accession, date, form, url):
         # Table is present! We can determine event and statistics instantly without Groq.
         print("BTC update table found in filing! Bypassing synchronous Groq call for instant alert.")
 
-        if atm_data:
+        if atm_data and atm_data.get("period_scoped", True):
             fallback_data["atm"] = atm_data
             fallback_data["financing_details"] = financing_source_from_atm(atm_data)
 
@@ -2264,7 +2284,7 @@ def process_filing(accession, date, form, url):
                 args=(cleaned_text, url, main_msg_id, fallback_data),
                 daemon=True
             ).start()
-    elif atm_data and atm_data.get("sold_any"):
+    elif atm_data and atm_data.get("sold_any") and atm_data.get("period_scoped", True):
         # ATM-only filing: shares were sold but there is no BTC table.
         # Send an instant financing alert from the parsed ATM data; do NOT
         # add a purchase_history row (no holdings snapshot → would corrupt
@@ -2621,6 +2641,54 @@ def get_cashflow():
         print(f"/api/cashflow error: {e}")
         return jsonify({})
 
+@app.route('/api/atm_audit')
+def get_atm_audit():
+    """Week-by-week ATM audit trail: every parsed sale with its filing URL,
+    implied per-share price, and whether it is counted in the cash estimate
+    — so any suspicious number can be verified against the source filing."""
+    try:
+        conn = get_db_connection()
+        rows = conn.execute(
+            "SELECT filing_date, url, atm_sales FROM purchase_history "
+            "WHERE atm_sales IS NOT NULL AND atm_sales <> '' ORDER BY filing_date DESC").fetchall()
+        conn.close()
+
+        out = []
+        totals = {}
+        for r in rows:
+            atm = _safe_json_loads(r["atm_sales"]) or {}
+            counted = atm.get("period_scoped") is not False
+            secs = []
+            for s in atm.get("securities", []):
+                shares = s.get("shares_sold_num") or 0
+                if shares <= 0:
+                    continue
+                net_usd = (s.get("net_proceeds_num_m") or 0.0) * 1e6
+                secs.append({
+                    "ticker": s.get("ticker"),
+                    "shares_sold": s.get("shares_sold"),
+                    "notional": s.get("notional"),
+                    "net_proceeds": s.get("net_proceeds"),
+                    "implied_price_usd": round(net_usd / shares, 2) if shares and net_usd else None,
+                })
+                if counted:
+                    totals[s.get("ticker")] = round(
+                        totals.get(s.get("ticker"), 0.0) + (s.get("net_proceeds_num_m") or 0.0), 1)
+            if secs or atm.get("note"):
+                out.append({
+                    "filing_date": r["filing_date"],
+                    "url": r["url"],
+                    "period": atm.get("period"),
+                    "period_scoped": atm.get("period_scoped"),
+                    "counted_in_estimate": counted,
+                    "note": atm.get("note"),
+                    "securities": secs,
+                })
+        return jsonify({"weeks": out, "counted_totals_by_ticker_m": totals})
+    except Exception as e:
+        print(f"/api/atm_audit error: {e}")
+        return jsonify({"weeks": [], "counted_totals_by_ticker_m": {}})
+
 @app.route('/api/dividends')
 def get_dividends():
     try:
@@ -2683,7 +2751,7 @@ def force_trigger():
             test_tables = extract_filing_tables(html_content)
             fallback_data = parse_btc_tables(test_tables)
             test_atm = parse_atm_table(test_tables)
-            if fallback_data and test_atm:
+            if fallback_data and test_atm and test_atm.get("period_scoped", True):
                 fallback_data["atm"] = test_atm
                 fallback_data["financing_details"] = financing_source_from_atm(test_atm)
             parsed_data = None
@@ -2706,7 +2774,7 @@ def force_trigger():
                             parsed_data[key] = fallback_data[key]
                 else:
                     parsed_data = fallback_data
-            elif test_atm and test_atm.get("sold_any") and not parsed_data:
+            elif test_atm and test_atm.get("sold_any") and test_atm.get("period_scoped", True) and not parsed_data:
                 parsed_data = {
                     "event_type": "financing",
                     "atm": test_atm,

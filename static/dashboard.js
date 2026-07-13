@@ -522,7 +522,8 @@ function renderCashCalc(flow) {
                     'calc-info');
     }
     rows += `<tr class="calc-info"><td colspan="2">Not: Konvertibl tahvil ihraç/itfaları haftalık 8-K'larda açıklanmaz; ` +
-            `bu akışlar kalibre edilen "diğer" kaleminde emilir. Kesin rakam her çeyrek 10-Q ile yeniden sabitlenir.</td></tr>`;
+            `bu akışlar kalibre edilen "diğer" kaleminde emilir. Kesin rakam her çeyrek 10-Q ile yeniden sabitlenir. ` +
+            `ATM rakamlarını hafta hafta, filing linkleriyle denetlemek için: <a href="/api/atm_audit" target="_blank" class="table-link">/api/atm_audit</a></td></tr>`;
 
     el.innerHTML = `<table class="calc-table"><tbody>${rows}</tbody></table>`;
 }
