@@ -543,3 +543,171 @@ body {
     font-size: 0.9rem;
     font-weight: 500;
 }
+
+/* ============================================================
+   READABILITY POLISH (all screens)
+   ============================================================ */
+
+/* Aligned digits in numeric cells and stat values */
+.history-table td,
+.stat-info .value {
+    font-variant-numeric: tabular-nums;
+}
+
+/* Dates never wrap */
+.history-table td:first-child {
+    white-space: nowrap;
+}
+
+/* Subtle zebra striping + clearer hover */
+.history-table tbody tr:nth-child(even) {
+    background-color: rgba(255, 255, 255, 0.015);
+}
+
+.history-table tbody tr:hover {
+    background-color: rgba(0, 229, 255, 0.045);
+}
+
+/* Stat values shrink gracefully instead of overflowing */
+.stat-info .value {
+    font-size: clamp(1.1rem, 0.95rem + 0.8vw, 1.45rem);
+    overflow-wrap: anywhere;
+}
+
+.table-container {
+    -webkit-overflow-scrolling: touch;
+}
+
+/* ============================================================
+   RESPONSIVE — TABLET & PHONE
+   ============================================================ */
+
+@media (max-width: 768px) {
+    .app-container {
+        padding: 1.25rem 0.9rem;
+        gap: 1.25rem;
+    }
+
+    .dashboard-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.9rem;
+        padding-bottom: 1rem;
+    }
+
+    .logo-icon {
+        font-size: 2rem;
+    }
+
+    .logo-text h1 {
+        font-size: 1.35rem;
+    }
+
+    .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.75rem;
+    }
+
+    .stat-card {
+        padding: 1rem;
+        border-radius: 12px;
+    }
+
+    .card-inner {
+        gap: 0.75rem;
+    }
+
+    .icon-box {
+        width: 40px;
+        height: 40px;
+        font-size: 1.05rem;
+        border-radius: 10px;
+        flex-shrink: 0;
+    }
+
+    .stat-info h3 {
+        font-size: 0.68rem;
+        letter-spacing: 0.3px;
+    }
+
+    .glass-panel {
+        padding: 1.1rem;
+        border-radius: 14px;
+    }
+
+    .panel-header {
+        margin-bottom: 1rem;
+    }
+
+    .panel-header h2 {
+        font-size: 1.05rem;
+    }
+
+    .panel-header p {
+        font-size: 0.8rem;
+    }
+
+    .buttons-row {
+        flex-direction: column;
+        gap: 0.6rem;
+    }
+
+    .btn {
+        width: 100%;
+        justify-content: center;
+        min-height: 44px; /* comfortable tap target */
+    }
+
+    .chart-container {
+        height: 260px;
+    }
+
+    .toast {
+        left: 1rem;
+        right: 1rem;
+        bottom: 1rem;
+        justify-content: center;
+    }
+}
+
+@media (max-width: 480px) {
+    .stats-grid {
+        gap: 0.6rem;
+    }
+
+    .stat-info .value {
+        font-size: 1.05rem;
+    }
+
+    .history-table {
+        font-size: 0.78rem;
+    }
+
+    .history-table th {
+        padding: 0.5rem 0.6rem;
+        font-size: 0.68rem;
+    }
+
+    .history-table td {
+        padding: 0.6rem;
+    }
+
+    /* Let the breakdown wrap on narrow screens instead of forcing
+       a very wide horizontal scroll */
+    .atm-breakdown {
+        white-space: normal;
+        font-size: 0.68rem;
+    }
+
+    .badge-source {
+        font-size: 0.72rem;
+    }
+
+    .console-box {
+        font-size: 0.75rem;
+    }
+
+    .chart-container {
+        height: 230px;
+    }
+}

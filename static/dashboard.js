@@ -1,5 +1,6 @@
 let portfolioChart = null;
 let debtChart = null;
+let flowChart = null;
 
 // Helper to show toast messages
 function showToast(message, isError = false) {
@@ -157,13 +158,20 @@ async function fetchHistory() {
         });
 
         // Initialize / Update Charts
+        // Charts are rendered independently: a chart failure must never
+        // wipe the already-populated table.
         const chartData = [...data].reverse(); // Chronological order
-        renderPortfolioChart(chartData);
-        renderDebtChart(chartData);
+        try {
+            renderPortfolioChart(chartData);
+            renderFlowChart(chartData);
+            renderDebtChart(chartData);
+        } catch (chartError) {
+            console.error('Chart render error:', chartError);
+        }
 
     } catch (error) {
         console.error('History fetch error:', error);
-        document.getElementById('historyTableBody').innerHTML = `<tr><td colspan="5" class="loading-cell" style="color: #ef4444;">Veriler yüklenirken hata oluştu!</td></tr>`;
+        document.getElementById('historyTableBody').innerHTML = `<tr><td colspan="6" class="loading-cell" style="color: #ef4444;">Veriler yüklenirken hata oluştu!</td></tr>`;
     }
 }
 
@@ -249,6 +257,149 @@ function renderPortfolioChart(chartData) {
                         callback: function(value) { return '$' + value + 'B'; }
                     },
                     title: { display: true, text: 'Maliyet ($ Milyar)', color: '#2979ff' }
+                }
+            }
+        }
+    });
+}
+
+// Render the BTC flow vs ATM financing chart: BTC change as up/down bars
+// (left axis, BTC) and per-security ATM net proceeds as DOWNWARD stacked
+// bars (right axis, $M) — "security sold → cash raised → bar goes down",
+// so weeks like "BTC bought, financed by STRC sales" read at a glance.
+function renderFlowChart(chartData) {
+    const canvas = document.getElementById('flowChart');
+    if (!canvas) return;
+
+    const labels = chartData.map(d => d.filing_date);
+    const btcDeltas = chartData.map(d => {
+        const num = parseFloat(String(d.btc_acquired || '0').replace(/,/g, ''));
+        return isNaN(num) ? 0 : num;
+    });
+
+    const TICKER_COLORS = {
+        MSTR: '#2979ff',
+        STRC: '#00e5ff',
+        STRK: '#7c4dff',
+        STRF: '#00e676',
+        STRD: '#fbbf24'
+    };
+
+    const tickerData = {};
+    const tickerShares = {};
+    Object.keys(TICKER_COLORS).forEach(t => {
+        tickerData[t] = new Array(chartData.length).fill(0);
+        tickerShares[t] = new Array(chartData.length).fill(null);
+    });
+    chartData.forEach((d, i) => {
+        const secs = (d.atm_sales && Array.isArray(d.atm_sales.securities)) ? d.atm_sales.securities : [];
+        secs.forEach(s => {
+            if ((s.shares_sold_num || 0) > 0 && TICKER_COLORS[s.ticker]) {
+                tickerData[s.ticker][i] = -(s.net_proceeds_num_m || 0);
+                tickerShares[s.ticker][i] = s.shares_sold;
+            }
+        });
+    });
+
+    const atmDatasets = Object.keys(TICKER_COLORS)
+        .filter(t => tickerData[t].some(v => v !== 0))
+        .map(t => ({
+            label: `${t} ATM Satışı`,
+            data: tickerData[t],
+            backgroundColor: TICKER_COLORS[t] + 'B3',
+            borderColor: TICKER_COLORS[t],
+            borderWidth: 1.5,
+            borderRadius: 4,
+            stack: 'atm',
+            yAxisID: 'yMoney',
+            maxBarThickness: 26,
+            _shares: tickerShares[t]
+        }));
+
+    // Symmetric ranges align both zero lines at mid-height: BTC bars rise
+    // from the shared baseline, ATM sale bars hang below it (mirror view)
+    const btcPeak = Math.max(1, ...btcDeltas.map(v => Math.abs(v)));
+    const moneyPeak = Math.max(1, ...Object.values(tickerData).flat().map(v => Math.abs(v)));
+
+    const ctx = canvas.getContext('2d');
+    if (flowChart) {
+        flowChart.destroy();
+    }
+
+    flowChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: 'BTC Değişimi',
+                    data: btcDeltas,
+                    backgroundColor: btcDeltas.map(v => v >= 0 ? 'rgba(0, 230, 118, 0.55)' : 'rgba(239, 68, 68, 0.55)'),
+                    borderColor: btcDeltas.map(v => v >= 0 ? '#00e676' : '#ef4444'),
+                    borderWidth: 1.5,
+                    borderRadius: 4,
+                    stack: 'btc',
+                    yAxisID: 'yBtc',
+                    maxBarThickness: 26
+                },
+                ...atmDatasets
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: {
+                    labels: { color: '#9ca3af', font: { family: 'Inter', size: 11 } }
+                },
+                tooltip: {
+                    filter: (item) => item.parsed.y !== 0,
+                    callbacks: {
+                        label: function(context) {
+                            const ds = context.dataset;
+                            const v = context.parsed.y;
+                            if (ds.yAxisID === 'yBtc') {
+                                return `BTC: ${v > 0 ? '+' : ''}${v.toLocaleString('tr-TR')}`;
+                            }
+                            const shares = ds._shares ? ds._shares[context.dataIndex] : null;
+                            const amount = Math.abs(v).toLocaleString('tr-TR', { maximumFractionDigits: 1 });
+                            return `${ds.label}: $${amount}M net` + (shares ? ` (${shares} adet)` : '');
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    stacked: true,
+                    grid: { color: 'rgba(255,255,255,0.03)' },
+                    ticks: { color: '#9ca3af', font: { family: 'Inter', size: 10 } }
+                },
+                yBtc: {
+                    position: 'left',
+                    min: -btcPeak * 1.15,
+                    max: btcPeak * 1.15,
+                    grid: { color: 'rgba(255,255,255,0.05)' },
+                    ticks: {
+                        color: '#00e676',
+                        font: { family: 'Inter', size: 10 },
+                        callback: function(value) { return value.toLocaleString('tr-TR'); }
+                    },
+                    title: { display: true, text: 'BTC Değişimi', color: '#00e676' }
+                },
+                yMoney: {
+                    position: 'right',
+                    stacked: true,
+                    min: -moneyPeak * 1.15,
+                    max: moneyPeak * 1.15,
+                    grid: { drawOnChartArea: false },
+                    ticks: {
+                        color: '#2979ff',
+                        font: { family: 'Inter', size: 10 },
+                        // Only the downward (sale) half is meaningful
+                        callback: function(value) { return value > 0 ? '' : '$' + Math.abs(value) + 'M'; }
+                    },
+                    title: { display: true, text: 'ATM Net Geliri ($M) ↓', color: '#2979ff' }
                 }
             }
         }
