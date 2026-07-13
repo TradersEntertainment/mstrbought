@@ -627,6 +627,118 @@ def parse_btc_tables(tables):
 
     return result
 
+ATM_TICKER_RE = re.compile(r'\b(MSTR|STRF|STRC|STRK|STRD)\b')
+
+def parse_atm_table(tables):
+    """Parse the at-the-market (ATM) offering table from pre-extracted tables.
+
+    The table lists per-security share sales (MSTR common plus the
+    STRF/STRC/STRK/STRD preferred series): Shares Sold, Notional Value,
+    Net Proceeds and Available for Issuance. Returns None when the filing
+    carries no ATM table.
+    """
+    for row_data in tables:
+        header_idx = None
+        for i, row in enumerate(row_data[:4]):
+            joined = ' '.join(row)
+            if 'Shares Sold' in joined and ('Net Proceeds' in joined or 'Available for Issuance' in joined):
+                header_idx = i
+                break
+        if header_idx is None:
+            continue
+
+        # Period, if present in the rows above the column headers
+        period = None
+        for row in row_data[:header_idx]:
+            for cell in row:
+                if 'During Period' in cell:
+                    period = cell.replace('During Period ', '').replace('*', '').strip()
+                    break
+
+        # Column order after the security-name cell, with money units
+        value_keys = []
+        for h in row_data[header_idx]:
+            h = re.sub(r'\(\d+\)', '', h).strip()
+            hl = h.lower()
+            unit = "M" if "millions" in hl else ("B" if "billions" in hl else "")
+            if 'shares sold' in hl:
+                value_keys.append(('shares_sold', ''))
+            elif 'notional' in hl:
+                value_keys.append(('notional', unit))
+            elif 'net proceeds' in hl:
+                value_keys.append(('net_proceeds', unit))
+            elif 'available' in hl:
+                value_keys.append(('available', unit))
+        if not value_keys:
+            continue
+        proceeds_unit = dict(value_keys).get('net_proceeds', 'M')
+
+        securities = []
+        total_net_proceeds = "-"
+        for row in row_data[header_idx + 1:]:
+            first = row[0].strip()
+            if first.lower().startswith('total'):
+                cleaned = clean_row_values(row[1:])
+                money = next((c for c in cleaned if c not in ('-', '')), None)
+                if money:
+                    if proceeds_unit and money.startswith('$') and not money.endswith(proceeds_unit):
+                        money = f"{money}{proceeds_unit}"
+                    total_net_proceeds = money
+                continue
+
+            m = ATM_TICKER_RE.search(first)
+            if m:
+                ticker = m.group(1)
+            elif 'Common Stock' in first:
+                ticker = 'MSTR'
+            else:
+                # Description-continuation row (e.g. "10.00% Series A ...")
+                continue
+
+            cleaned = clean_row_values(row[1:])
+            while len(cleaned) < len(value_keys):
+                cleaned.append('-')
+
+            entry = {"ticker": ticker, "name": re.sub(r'\s+', ' ', first)}
+            for (key, unit), val in zip(value_keys, cleaned):
+                val = re.sub(r'\(\d+\)', '', val).strip() or '-'
+                if val != '-' and unit and val.startswith('$') and not val.endswith(unit):
+                    val = f"{val}{unit}"
+                entry[key] = val
+            entry["shares_sold_num"] = parse_btc_number(entry.get("shares_sold", "-"))
+            entry["net_proceeds_num_m"] = parse_money(entry.get("net_proceeds", "-"))
+            securities.append(entry)
+
+        if not securities:
+            continue
+
+        sold = [s for s in securities if s["shares_sold_num"] > 0]
+        if total_net_proceeds == "-" and sold:
+            total_m = sum(s["net_proceeds_num_m"] for s in sold)
+            if total_m >= 1000:
+                total_net_proceeds = f"${total_m/1000:.2f}B"
+            elif total_m > 0:
+                total_net_proceeds = f"${total_m:.1f}M"
+
+        return {
+            "period": period,
+            "securities": securities,
+            "sold_tickers": [s["ticker"] for s in sold],
+            "sold_any": bool(sold),
+            "total_net_proceeds": total_net_proceeds,
+        }
+    return None
+
+def financing_source_from_atm(atm):
+    """Dashboard/DB badge text derived from THIS filing's ATM table only."""
+    if not atm or not atm.get("sold_any"):
+        return "-"
+    tickers = " & ".join(atm["sold_tickers"])
+    total = atm.get("total_net_proceeds") or "-"
+    if total != "-":
+        return f"{tickers} ATM ({total})"
+    return f"{tickers} ATM"
+
 # ----------------- GROQ API INTEGRATION -----------------
 
 # Groq API Keys Rotation Support
@@ -796,25 +908,41 @@ Return ONLY the raw JSON object."""
     table_context = ""
     if table_data:
         event = table_data.get("event_type", "unknown")
-        btc = table_data.get("btc_acquired", "-")
+        btc = table_data.get("btc_signed_str") or table_data.get("btc_acquired", "-")
         price = table_data.get("purchase_price", "-")
         avg = table_data.get("avg_price", "-")
         holdings = table_data.get("total_holdings", "-")
-        breakdown = table_data.get("sale_breakdown") or table_data.get("purchase_breakdown") or []
-        
+        breakdown = (table_data.get("sale_breakdown")
+                     or table_data.get("purchase_breakdown")
+                     or table_data.get("mixed_breakdown") or [])
+
         table_context = f"""
-Parsed table data:
+Parsed table data (authoritative — from the filing's own tables):
 - Event type: {event}
-- Total BTC: {btc}
+- Net BTC change during the period: {btc}
 - Total amount: {price}
 - Weighted avg price: {avg}
 - Current holdings: {holdings} BTC
 """
+        if table_data.get("inferred"):
+            table_context += "- NOTE: the amount was INFERRED from the holdings delta (no activity table in the filing) — present it as an estimate.\n"
         if breakdown:
             table_context += "Period breakdown:\n"
             for b in breakdown:
                 table_context += f"  - {b['period']}: {b['btc_count']} BTC @ {b['avg_price']} (total: {b['price']})\n"
-    
+
+        atm = table_data.get("atm")
+        if atm:
+            table_context += "ATM offering activity this period (per security):\n"
+            for s in atm.get("securities", []):
+                if s.get("shares_sold_num", 0) > 0:
+                    table_context += (f"  - {s['ticker']}: {s.get('shares_sold', '-')} shares sold, "
+                                      f"net proceeds {s.get('net_proceeds', '-')}, "
+                                      f"remaining capacity {s.get('available', '-')}\n")
+                else:
+                    table_context += f"  - {s['ticker']}: no shares sold (remaining capacity {s.get('available', '-')})\n"
+            table_context += f"  Total net proceeds: {atm.get('total_net_proceeds', '-')}\n"
+
     pass2_prompt = f"""Sen bir uzman finans analistsin. Aşağıdaki verileri kullanarak MicroStrategy (Strategy Inc.) hakkında kapsamlı bir Türkçe analiz yaz.
 
 Çıkarılan veriler (Pass 1):
@@ -826,12 +954,13 @@ SEC Bildirimi URL: {url}
 Şu JSON formatında yanıt ver:
 - "summary_turkish": (string) 4-6 cümlelik detaylı Türkçe analiz. Şunları içermeli:
   1. Ne oldu? (BTC alım/satım/değişiklik yok) - Eğer birden fazla dönem varsa HEPSİNİ belirt
-  2. Neden oldu? (Temettü ödemesi, fon oluşturma, tercihli hisse dağıtımı vs.)
+  2. Neden oldu? (Temettü ödemesi, fon oluşturma, tercihli hisse dağıtımı vs.) - Eğer BTC alınmadıysa ama ATM hisse satışı varsa bunu mutlaka vurgula (örn: "BTC almadı; MSTR hissesi satarak $466.7M nakit topladı"). Alım ATM satışıyla finanse edildiyse hangi menkul kıymetle olduğunu belirt (örn: "STRC satışıyla finanse edilen alım")
   3. Portföy etkisi (toplam BTC, maliyet değişimi)
   4. Yatırımcı için ne anlama geliyor?
 - "market_impact": (string) 1-2 cümle, bu haberin piyasaya potansiyel etkisi
 - "risk_note": (string) 1 cümle, dikkat edilmesi gereken risk veya önemli not
 
+ÖNEMLİ: "Parsed table data" bölümündeki rakamlar filing tablolarından doğrudan alınmıştır ve KESİNDİR — bu rakamlarla çelişme. Event type "no_purchase" ise BTC satıldı/alındı DEME.
 Sadece ham JSON döndür, markdown veya açıklama ekleme."""
 
     pass2_result = groq_api_call(pass2_prompt, temperature=0.3)
@@ -916,87 +1045,113 @@ def send_telegram_alert(message_text, reply_to_message_id=None):
         print(f"Error sending Telegram alert: {e}")
         return None
 
+def _abs_amount(parsed_data):
+    """Unsigned display amount; templates add their own +/- prefix."""
+    val = parsed_data.get("btc_abs_str")
+    if val:
+        return val
+    raw = str(parsed_data.get("btc_acquired") or "-")
+    return raw.lstrip('+-') or "-"
+
+def _atm_sold_lines(parsed_data):
+    """Per-security ATM sale lines for Telegram (tickers only).
+
+    Returns None when the filing had no ATM table, [] when the table exists
+    but nothing was sold, otherwise one line per sold security.
+    """
+    atm = parsed_data.get("atm")
+    if not atm:
+        return None
+    lines = []
+    for s in atm.get("securities", []):
+        if s.get("shares_sold_num", 0) > 0:
+            lines.append(f"{s['ticker']}: {s.get('shares_sold', '-')} adet → **{s.get('net_proceeds', '-')}** net")
+    return lines
+
+def _atm_block(parsed_data, emoji="💸"):
+    """Compact ATM section shared by the alert templates."""
+    lines = _atm_sold_lines(parsed_data)
+    if lines is None:
+        source = parsed_data.get("financing_source_turkish") or parsed_data.get("financing_details")
+        if source and source != "-":
+            return f"{emoji} Finansman: {source}"
+        return f"{emoji} ATM Satışı: Yok"
+    if not lines:
+        return f"{emoji} ATM Satışı: Yok"
+    atm = parsed_data.get("atm") or {}
+    unsold = [s["ticker"] for s in atm.get("securities", []) if s.get("shares_sold_num", 0) <= 0]
+    block = f"{emoji} **ATM Satışı VAR:** " + "\n   ".join(lines)
+    if unsold:
+        block += f"\n   {' / '.join(unsold)}: satış yok"
+    return block
+
+def _breakdown_lines(parsed_data):
+    """Per-period activity lines for multi-period filings."""
+    breakdown = (parsed_data.get("sale_breakdown")
+                 or parsed_data.get("purchase_breakdown")
+                 or parsed_data.get("mixed_breakdown")
+                 or [])
+    if len(breakdown) < 2:
+        return ""
+    text = ""
+    for b in breakdown:
+        sign = "-" if b.get("type") == "sale" else "+"
+        text += f"\n  ↳ {b['period']}: {sign}{b['btc_count']} BTC @ {b['avg_price']} ({b['price']})"
+    return text
+
 def format_alert(parsed_data, url):
     event_type = parsed_data.get("event_type")
-    
-    if event_type == "btc_purchase":
-        acquired = parsed_data.get('btc_acquired') or '-'
-        price = parsed_data.get('purchase_price') or parsed_data.get('purchase_price_usd') or '-'
-        avg = parsed_data.get('avg_price') or parsed_data.get('avg_purchase_price') or '-'
-        holdings = parsed_data.get('total_holdings') or parsed_data.get('total_btc_holdings') or '-'
-        
-        return f"""🚀 **MSTR BTC ALDI: +{acquired} BTC!** (Tutar: {price} | Ort: {avg})
-ℹ️ Toplam Portföy: {holdings} BTC'ye ulaştı.
+    abs_amount = _abs_amount(parsed_data)
+    price = parsed_data.get('purchase_price') or parsed_data.get('purchase_price_usd') or '-'
+    avg = parsed_data.get('avg_price') or parsed_data.get('avg_purchase_price') or '-'
+    holdings = parsed_data.get('total_holdings') or parsed_data.get('total_btc_holdings') or '-'
+    total_cost = parsed_data.get('total_cost') or parsed_data.get('total_cost_usd') or '-'
+    avg_cost = parsed_data.get('avg_cost') or parsed_data.get('avg_cost_per_btc') or '-'
+    debt = parsed_data.get('total_debt') or parsed_data.get('total_debt_usd') or '-'
+    period = parsed_data.get('purchase_period') or 'Belirtilmemiş'
+    inferred_note = " (bilanço farkından tahmini)" if parsed_data.get("inferred") else ""
 
-**Detaylı Rapor:**
-- 📅 **Dönem**: {parsed_data.get('purchase_period') or 'Belirtilmemiş'}
-- 🪙 **Miktar**: {acquired} BTC
-- 💰 **Ödenen Tutar**: {price}
-- 🏷️ **Ortalama Fiyat**: {avg}
-- 📊 **Toplam Portföy**: {holdings} BTC
-- 📉 **Toplam Maliyet**: {parsed_data.get('total_cost') or parsed_data.get('total_cost_usd') or 'Belirtilmemiş'}
-- 🎯 **Ortalama Maliyet**: {parsed_data.get('avg_cost') or parsed_data.get('avg_cost_per_btc') or 'Belirtilmemiş'}
-- 🏦 **Toplam Borç (Tahvil)**: {parsed_data.get('total_debt') or parsed_data.get('total_debt_usd') or 'Belirtilmemiş'}
-- 💸 **Nakit Kaynağı / Seyreltme**: {parsed_data.get('financing_source_turkish') or parsed_data.get('financing_details') or 'Belirtilmemiş'}
+    # Guard against "+-" when the amount is unknown (LLM-only data)
+    plus_amt = f"+{abs_amount}" if abs_amount not in ("-", "0") else abs_amount
+    minus_amt = f"-{abs_amount}" if abs_amount not in ("-", "0") else abs_amount
+
+    if event_type == "btc_purchase":
+        return f"""🚀 **MSTR BTC ALDI: {plus_amt} BTC!**{inferred_note} (Tutar: {price} | Ort: {avg}){_breakdown_lines(parsed_data)}
+📊 Portföy: {holdings} BTC | Maliyet: {total_cost} (Ort: {avg_cost})
+{_atm_block(parsed_data)}
+🏦 Toplam Borç (Tahvil): {debt}
+📅 Dönem: {period}
 
 🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
 
     elif event_type == "btc_sale":
-        acquired = parsed_data.get('btc_acquired') or '-'
-        price = parsed_data.get('purchase_price') or parsed_data.get('purchase_price_usd') or '-'
-        avg = parsed_data.get('avg_price') or parsed_data.get('avg_purchase_price') or '-'
-        holdings = parsed_data.get('total_holdings') or parsed_data.get('total_btc_holdings') or '-'
-        
-        # Build period breakdown for multi-period sales
-        breakdown = parsed_data.get('sale_breakdown', [])
-        if len(breakdown) > 1:
-            breakdown_text = ""
-            for b in breakdown:
-                breakdown_text += f"\n  ↳ {b['period']}: {b['btc_count']} BTC @ {b['avg_price']} ({b['price']})"
-            period_line = f"- 📅 **Dönem**: {parsed_data.get('purchase_period') or 'Belirtilmemiş'}{breakdown_text}"
-        else:
-            period_line = f"- 📅 **Dönem**: {parsed_data.get('purchase_period') or 'Belirtilmemiş'}"
-        
-        return f"""🚨 **MSTR BITCOIN SATTI: -{acquired} BTC!** (Tutar: {price} | Ort: {avg})
-ℹ️ Kalan Toplam Portföy: {holdings} BTC.
-
-**Detaylı Rapor:**
-{period_line}
-- 🪙 **Toplam Satılan**: -{acquired} BTC
-- 💰 **Toplam Elde Edilen**: {price}
-- 🏷️ **Ağırlıklı Ort. Satış Fiyatı**: {avg}
-- 📊 **Kalan Toplam Portföy**: {holdings} BTC
-- 📉 **Toplam Kümülatif Maliyet**: {parsed_data.get('total_cost') or parsed_data.get('total_cost_usd') or 'Belirtilmemiş'}
-- 🎯 **Ortalama Maliyet**: {parsed_data.get('avg_cost') or parsed_data.get('avg_cost_per_btc') or 'Belirtilmemiş'}
-- 🏦 **Toplam Borç (Tahvil)**: {parsed_data.get('total_debt') or parsed_data.get('total_debt_usd') or 'Belirtilmemiş'}
+        return f"""🚨 **MSTR BTC SATTI: {minus_amt} BTC!**{inferred_note} (Elde Edilen: {price} | Ort: {avg}){_breakdown_lines(parsed_data)}
+📊 Kalan Portföy: {holdings} BTC | Maliyet: {total_cost} (Ort: {avg_cost})
+{_atm_block(parsed_data)}
+🏦 Toplam Borç (Tahvil): {debt}
+📅 Dönem: {period}
 
 🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
 
     elif event_type == "no_purchase":
-        holdings = parsed_data.get('total_holdings') or parsed_data.get('total_btc_holdings') or '-'
-        return f"""ℹ️ **MSTR Bu Hafta Alım Yapmadı.** (Toplam Portföy: {holdings} BTC)
-MicroStrategy, yeni SEC bildirimine göre bu hafta Bitcoin alımı gerçekleştirmedi.
-
-**Detaylı Rapor:**
-- 📅 **Dönem**: {parsed_data.get('purchase_period') or 'Belirtilmemiş'}
-- 📊 **Toplam Portföy**: {holdings} BTC
-- 📉 **Toplam Maliyet**: {parsed_data.get('total_cost') or parsed_data.get('total_cost_usd') or 'Belirtilmemiş'}
-- 🎯 **Ortalama Maliyet**: {parsed_data.get('avg_cost') or parsed_data.get('avg_cost_per_btc') or 'Belirtilmemiş'}
-- 🏦 **Toplam Borç (Tahvil)**: {parsed_data.get('total_debt') or parsed_data.get('total_debt_usd') or 'Belirtilmemiş'}
-- 💸 **Nakit Kaynağı / Seyreltme**: {parsed_data.get('financing_source_turkish') or parsed_data.get('financing_details') or 'Belirtilmemiş'}
+        return f"""⏸️ **MSTR BTC ALMADI / SATMADI (0 BTC)** — Portföy: {holdings} BTC sabit{_breakdown_lines(parsed_data)}
+{_atm_block(parsed_data, emoji="💵")}
+📊 Maliyet: {total_cost} (Ort: {avg_cost}) | Borç: {debt}
+📅 Dönem: {period}
 
 🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
 
     elif event_type == "financing":
-        source = parsed_data.get('financing_source_turkish') or parsed_data.get('financing_details') or 'Finansman Bildirimi'
-        summary = parsed_data.get('summary_turkish') or 'Detaylar bildirilmeyi bekliyor.'
-        
-        return f"""💵 **MSTR Yeni Finansman/Hisse İhraç:** {source}
-ℹ️ Rapor Analizi: {summary[:120]}...
-
-**Özet (Analist Yorumu):**
-{summary}
-
+        atm_lines = _atm_sold_lines(parsed_data)
+        if atm_lines:
+            source_block = "💵 **ATM Satışı VAR:** " + "\n   ".join(atm_lines)
+        else:
+            source = parsed_data.get('financing_source_turkish') or parsed_data.get('financing_details') or 'Finansman Bildirimi'
+            source_block = f"💵 **MSTR Yeni Finansman/Hisse İhraç:** {source}"
+        summary = parsed_data.get('summary_turkish')
+        summary_block = f"\n**Özet (Analist Yorumu):**\n{summary}\n" if summary else ""
+        return f"""{source_block}
+{summary_block}
 🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
 
     elif event_type == "corporate_update":
@@ -1071,51 +1226,74 @@ def async_groq_analysis(cleaned_text, url, reply_to_id, table_data=None):
     parsed_data = analyze_filing_deep_groq(cleaned_text, url, table_data=table_data)
     if parsed_data and parsed_data.get("summary_turkish"):
         summary = parsed_data["summary_turkish"]
-        
+
         # Merge stats for the second detailed report
-        acquired = (table_data or {}).get("btc_acquired") or "-"
-        price = (table_data or {}).get("purchase_price") or "-"
-        avg = (table_data or {}).get("avg_price") or "-"
-        holdings = (table_data or {}).get("total_holdings") or "-"
-        cost = (table_data or {}).get("total_cost") or "-"
-        avg_cost = (table_data or {}).get("avg_cost") or "-"
-        debt = (table_data or {}).get("total_debt") or "-"
-        source = (table_data or {}).get("financing_source") or "-"
-        period = (table_data or {}).get("purchase_period") or "-"
-        
-        event_type = (table_data or {}).get("event_type") or "no_purchase"
-        
+        table_data = table_data or {}
+        acquired = _abs_amount(table_data)
+        price = table_data.get("purchase_price") or "-"
+        avg = table_data.get("avg_price") or "-"
+        holdings = table_data.get("total_holdings") or "-"
+        cost = table_data.get("total_cost") or "-"
+        avg_cost = table_data.get("avg_cost") or "-"
+        debt = table_data.get("total_debt") or "-"
+        source = table_data.get("financing_details") or table_data.get("financing_source") or "-"
+        period = table_data.get("purchase_period") or "-"
+
+        atm = table_data.get("atm") or {}
+        sold_lines = _atm_sold_lines(table_data)
+        if sold_lines:
+            atm_summary = "; ".join(l.replace("**", "") for l in sold_lines)
+        elif sold_lines is not None:
+            atm_summary = "Yok"
+        else:
+            atm_summary = source if source != "-" else "Yok"
+
+        event_type = table_data.get("event_type") or "no_purchase"
+
+        # Guard against "+-" when the amount is unknown
+        plus_amt = f"+{acquired}" if acquired not in ("-", "0") else acquired
+        minus_amt = f"-{acquired}" if acquired not in ("-", "0") else acquired
+
         if event_type == "btc_purchase":
-            title = f"💡 **[AI Analizi] MSTR BTC ALDI: +{acquired} BTC!**"
+            title = f"💡 **[AI Analizi] MSTR BTC ALDI: {plus_amt} BTC!**"
             stats_block = f"""**Finansal Detaylar:**
 - 📅 **Dönem**: {period}
-- 🪙 **Satın Alınan**: +{acquired} BTC
+- 🪙 **Satın Alınan**: {plus_amt} BTC
 - 💰 **Ödenen Tutar**: {price}
 - 🏷️ **Ortalama Fiyat**: {avg}
 - 📊 **Toplam Portföy**: {holdings} BTC
 - 📉 **Kümülatif Maliyet**: {cost}
 - 🎯 **Ortalama Maliyet**: {avg_cost}
 - 🏦 **Toplam Borç (Tahvil)**: {debt}
-- 💸 **Finansman Kaynağı**: {source}"""
+- 💵 **ATM Satışları**: {atm_summary}"""
         elif event_type == "btc_sale":
-            title = f"💡 **[AI Analizi] MSTR BTC SATTI: -{acquired} BTC!**"
+            title = f"💡 **[AI Analizi] MSTR BTC SATTI: {minus_amt} BTC!**"
             stats_block = f"""**Finansal Detaylar:**
 - 📅 **Dönem**: {period}
-- 🪙 **Satılan Miktar**: -{acquired} BTC
+- 🪙 **Satılan Miktar**: {minus_amt} BTC
 - 💰 **Elde Edilen Tutar**: {price}
 - 🏷️ **Ortalama Satış Fiyatı**: {avg}
 - 📊 **Kalan Toplam Portföy**: {holdings} BTC
 - 📉 **Kümülatif Maliyet**: {cost}
-- 🏦 **Toplam Borç (Tahvil)**: {debt}"""
+- 🏦 **Toplam Borç (Tahvil)**: {debt}
+- 💵 **ATM Satışları**: {atm_summary}"""
+        elif event_type == "financing":
+            title = f"💡 **[AI Analizi] MSTR Finansman: {atm.get('total_net_proceeds') or source}**"
+            stats_block = f"""**Finansal Detaylar:**
+- 📅 **Dönem**: {period}
+- 💵 **ATM Satışları**: {atm_summary}"""
         else:
-            title = "💡 **[AI Analizi] MSTR Bu Hafta Alım Yapmadı**"
+            if atm.get("sold_any"):
+                title = f"💡 **[AI Analizi] MSTR Alım Yapmadı — {atm.get('total_net_proceeds', '-')} ATM Geliri**"
+            else:
+                title = "💡 **[AI Analizi] MSTR Bu Hafta Alım Yapmadı**"
             stats_block = f"""**Finansal Detaylar:**
 - 📅 **Dönem**: {period}
 - 📊 **Toplam Portföy**: {holdings} BTC
 - 📉 **Toplam Maliyet**: {cost}
 - 🎯 **Ortalama Maliyet**: {avg_cost}
 - 🏦 **Toplam Borç (Tahvil)**: {debt}
-- 💸 **Finansman Kaynağı**: {source}"""
+- 💵 **ATM Satışları**: {atm_summary}"""
 
         analysis_text = f"""{title}
 
@@ -1150,26 +1328,33 @@ def process_filing(accession, date, form, url):
         print(f"Could not load HTML for {url}")
         return
         
-    # First, run local table parser (offline, instant, 100% reliable)
-    fallback_data = parse_table_fallback(html_content)
-    
+    # First, run the local table parsers (offline, instant, no LLM):
+    # one HTML parse feeds both the BTC parser and the ATM parser.
+    tables = extract_filing_tables(html_content)
+    fallback_data = parse_btc_tables(tables)
+    atm_data = parse_atm_table(tables)
+
     if fallback_data:
         # Table is present! We can determine event and statistics instantly without Groq.
         print("BTC update table found in filing! Bypassing synchronous Groq call for instant alert.")
-        
+
+        if atm_data:
+            fallback_data["atm"] = atm_data
+            fallback_data["financing_details"] = financing_source_from_atm(atm_data)
+
         # SPEED: Send Telegram FIRST, then save to DB async
         main_msg_id = None
         if should_alert:
             alert_text = format_alert(fallback_data, url)
             main_msg_id = send_telegram_alert(alert_text)
-        
+
         # Save to DB in background — don't block the alert pipeline
         threading.Thread(
             target=save_to_database,
             args=(date, fallback_data, url, accession, form),
             daemon=True
         ).start()
-            
+
         # Run Groq in the background asynchronously for the interpretation summary
         if groq_keys and should_alert:
             cleaned_text = clean_html(html_content)
@@ -1178,11 +1363,47 @@ def process_filing(accession, date, form, url):
                 args=(cleaned_text, url, main_msg_id, fallback_data),
                 daemon=True
             ).start()
+    elif atm_data and atm_data.get("sold_any"):
+        # ATM-only filing: shares were sold but there is no BTC table.
+        # Send an instant financing alert from the parsed ATM data; do NOT
+        # add a purchase_history row (no holdings snapshot → would corrupt
+        # the charts), only mark the filing as processed.
+        print("ATM table found (no BTC table). Sending instant financing alert...")
+        cleaned_text = clean_html(html_content)
+
+        atm_parsed = {
+            "event_type": "financing",
+            "atm": atm_data,
+            "financing_details": financing_source_from_atm(atm_data),
+            "purchase_period": atm_data.get("period"),
+        }
+
+        main_msg_id = None
+        if should_alert:
+            main_msg_id = send_telegram_alert(format_alert(atm_parsed, url))
+
+        try:
+            conn = get_db_connection()
+            conn.execute(
+                "INSERT OR IGNORE INTO processed_filings (accession_number, filing_date, form, url) VALUES (?, ?, ?, ?)",
+                (accession, date, form, url)
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"Error marking ATM-only filing processed: {e}")
+
+        if groq_keys and should_alert:
+            threading.Thread(
+                target=async_groq_analysis,
+                args=(cleaned_text, url, main_msg_id, atm_parsed),
+                daemon=True
+            ).start()
     else:
         # No table found — but we MUST still send an immediate alert, then analyze async
         print("No BTC table found. Sending immediate alert, then running async Groq analysis...")
         cleaned_text = clean_html(html_content)
-        
+
         main_msg_id = None
         if should_alert:
             # Send an immediate "new filing detected" alert — don't wait for Groq
@@ -1204,20 +1425,20 @@ def process_filing(accession, date, form, url):
                 try:
                     conn2 = get_db_connection()
                     cursor2 = conn2.cursor()
-                    cursor2.execute("SELECT total_debt, financing_source FROM purchase_history ORDER BY id DESC LIMIT 1")
+                    cursor2.execute("SELECT total_debt FROM purchase_history ORDER BY id DESC LIMIT 1")
                     last_row = cursor2.fetchone()
                     conn2.close()
                     last_debt = last_row["total_debt"] if last_row else "$6.7B"
-                    last_source = last_row["financing_source"] if last_row else "ATM Hisse Satışı"
                 except Exception:
                     last_debt = "$6.7B"
-                    last_source = "ATM Hisse Satışı"
-                    
+
+                # Debt carries forward (cumulative); financing_source must
+                # describe THIS filing, so it is never carried forward.
                 parsed_data = {
                     "event_type": "corporate_update",
                     "summary_turkish": "Filtrelenemeyen veya tablo içermeyen yeni 8-K bildirimi.",
                     "total_debt_usd": last_debt,
-                    "financing_source_turkish": last_source
+                    "financing_source_turkish": "-"
                 }
                 
             save_to_database(date, parsed_data, url, accession, form)
@@ -1460,26 +1681,40 @@ def force_trigger():
                 return jsonify({"status": "error", "message": "Test HTML'i SEC EDGAR'dan çekilemedi."}), 500
                 
             cleaned_text = clean_html(html_content)
-            fallback_data = parse_table_fallback(html_content)
+            test_tables = extract_filing_tables(html_content)
+            fallback_data = parse_btc_tables(test_tables)
+            test_atm = parse_atm_table(test_tables)
+            if fallback_data and test_atm:
+                fallback_data["atm"] = test_atm
+                fallback_data["financing_details"] = financing_source_from_atm(test_atm)
             parsed_data = None
-            
+
             if groq_keys:
                 parsed_data = analyze_filing_with_groq(cleaned_text, test_url)
-                
+
             if fallback_data:
                 if parsed_data:
+                    # The locally parsed table data is authoritative — Groq
+                    # output only fills the narrative fields.
                     if parsed_data.get("event_type") in ["corporate_update", "financing", None]:
                         parsed_data["event_type"] = fallback_data["event_type"]
-                    parsed_data["purchase_period"] = fallback_data.get("purchase_period") or parsed_data.get("purchase_period")
-                    parsed_data["btc_acquired"] = fallback_data.get("btc_acquired") or parsed_data.get("btc_acquired")
-                    parsed_data["purchase_price"] = fallback_data.get("purchase_price") or fallback_data.get("purchase_price_usd") or parsed_data.get("purchase_price")
-                    parsed_data["avg_price"] = fallback_data.get("avg_price") or fallback_data.get("avg_purchase_price") or parsed_data.get("avg_price")
-                    parsed_data["total_holdings"] = fallback_data.get("total_holdings") or fallback_data.get("total_btc_holdings") or parsed_data.get("total_holdings")
-                    parsed_data["total_cost"] = fallback_data.get("total_cost") or fallback_data.get("total_cost_usd") or parsed_data.get("total_cost")
-                    parsed_data["avg_cost"] = fallback_data.get("avg_cost") or fallback_data.get("avg_cost_per_btc") or parsed_data.get("avg_cost")
+                    for key in ("purchase_period", "btc_acquired", "btc_signed_str",
+                                "btc_abs_str", "btc_net_signed", "purchase_price",
+                                "avg_price", "total_holdings", "total_cost", "avg_cost",
+                                "total_debt", "atm", "financing_details", "inferred",
+                                "sale_breakdown", "purchase_breakdown", "mixed_breakdown"):
+                        if fallback_data.get(key) is not None:
+                            parsed_data[key] = fallback_data[key]
                 else:
                     parsed_data = fallback_data
-                    
+            elif test_atm and test_atm.get("sold_any") and not parsed_data:
+                parsed_data = {
+                    "event_type": "financing",
+                    "atm": test_atm,
+                    "financing_details": financing_source_from_atm(test_atm),
+                    "purchase_period": test_atm.get("period"),
+                }
+
             if parsed_data:
                 if "total_debt" not in parsed_data and "total_debt_usd" not in parsed_data:
                     parsed_data["total_debt"] = "$6.7B"
@@ -1620,6 +1855,8 @@ if bot:
             
             if acquired == '0' or acquired == '-':
                 summary += f"{idx+1}. 📅 {date} | Alım yapılmadı ℹ️\n"
+            elif str(acquired).startswith('-'):
+                summary += f"{idx+1}. 📅 {date} | **{acquired} BTC** (Ort. {avg_price}) 🔻\n"
             else:
                 summary += f"{idx+1}. 📅 {date} | **+{acquired} BTC** (Ort. {avg_price}) 🚀\n"
                 

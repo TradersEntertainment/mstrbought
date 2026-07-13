@@ -1,0 +1,63 @@
+import os
+import sys
+
+import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import bot
+
+FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixtures')
+
+
+def load_tables(name):
+    with open(os.path.join(FIXTURES, name), encoding='utf-8') as f:
+        return bot.extract_filing_tables(f.read())
+
+
+def test_july13_atm_table_mstr_only():
+    atm = bot.parse_atm_table(load_tables('july13_hold_atm.html'))
+    assert atm is not None
+    assert atm['sold_any'] is True
+    assert atm['sold_tickers'] == ['MSTR']
+    assert atm['total_net_proceeds'] == '$466.7M'
+    assert atm['period'] == 'July 6, 2026 to July 12, 2026'
+
+    by_ticker = {s['ticker']: s for s in atm['securities']}
+    assert set(by_ticker) == {'MSTR', 'STRF', 'STRC', 'STRK', 'STRD'}
+    mstr = by_ticker['MSTR']
+    assert mstr['shares_sold'] == '4,818,781'
+    assert mstr['shares_sold_num'] == 4818781
+    assert mstr['net_proceeds'] == '$466.7M'
+    assert by_ticker['STRC']['shares_sold_num'] == 0
+    assert by_ticker['STRC']['available'] == '$17,510.8M'
+
+
+def test_atm_only_filing_strc_sale():
+    atm = bot.parse_atm_table(load_tables('atm_only.html'))
+    assert atm['sold_tickers'] == ['STRC']
+    assert atm['total_net_proceeds'] == '$119.4M'
+    strc = next(s for s in atm['securities'] if s['ticker'] == 'STRC')
+    assert strc['shares_sold_num'] == 1200000
+    assert strc['net_proceeds'] == '$119.4M'
+    assert strc['notional'] == '$120.0M'
+
+
+def test_no_atm_table_returns_none():
+    atm = bot.parse_atm_table(load_tables('july06_double_sale.html'))
+    assert atm is None
+
+
+def test_financing_source_from_atm():
+    atm = bot.parse_atm_table(load_tables('july13_hold_atm.html'))
+    assert bot.financing_source_from_atm(atm) == 'MSTR ATM ($466.7M)'
+    assert bot.financing_source_from_atm(None) == '-'
+    assert bot.financing_source_from_atm({'sold_any': False}) == '-'
+
+
+def test_financing_source_multiple_tickers():
+    atm = {
+        'sold_any': True,
+        'sold_tickers': ['STRC', 'STRK'],
+        'total_net_proceeds': '$120.3M',
+    }
+    assert bot.financing_source_from_atm(atm) == 'STRC & STRK ATM ($120.3M)'
