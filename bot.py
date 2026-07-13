@@ -260,6 +260,7 @@ def apply_data_migrations(conn):
     migrations = [
         ("2026-07-13-repair-july-rows", _migrate_repair_july_2026_rows),
         ("2026-07-14-backfill-july13-atm-json", _migrate_backfill_july13_atm_json),
+        ("2026-07-14-backfill-event-types", _migrate_backfill_event_types),
     ]
     cursor = conn.cursor()
     for migration_id, fn in migrations:
@@ -385,6 +386,24 @@ def _migrate_backfill_july13_atm_json(conn):
     )
     if cursor.rowcount > 0:
         print(f"Migration: backfilled atm_sales JSON on {cursor.rowcount} July 13 row(s)")
+    conn.commit()
+
+def _migrate_backfill_event_types(conn):
+    """Classify historical rows so charts/tooltips can rely on event_type.
+
+    Rows are stored with signed amounts (seed included), so the sign is a
+    reliable classifier. Only NULL rows are touched.
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        """UPDATE purchase_history SET event_type =
+             CASE WHEN btc_acquired IN ('0', '-') THEN 'no_purchase'
+                  WHEN btc_acquired LIKE '-%' THEN 'btc_sale'
+                  ELSE 'btc_purchase' END
+           WHERE event_type IS NULL"""
+    )
+    if cursor.rowcount > 0:
+        print(f"Migration: classified event_type on {cursor.rowcount} historical row(s)")
     conn.commit()
 
 # ----------------- PARSING & SEC SCRAPING -----------------
@@ -1000,6 +1019,85 @@ def financing_source_from_atm(atm):
     if total != "-":
         return f"{tickers} ATM ({total})"
     return f"{tickers} ATM"
+
+# ----------------- HISTORICAL ATM BACKFILL -----------------
+
+ATM_SENTINEL_NO_TABLE = {"sold_any": False, "securities": [], "note": "no_atm_table"}
+ATM_SENTINEL_NO_DOC = {"sold_any": False, "securities": [], "note": "no_fetchable_doc"}
+
+def backfill_atm_history(sleep_seconds=1.5):
+    """Re-read historical filings and fill missing per-security ATM data.
+
+    Runs in a background daemon thread at startup so deploys are never
+    blocked. Only rows with empty atm_sales are touched; fetch failures stay
+    NULL and are retried on the next boot, while filings without an ATM
+    table get a sentinel so they are never fetched again. Requests are
+    spaced by sleep_seconds to respect the SEC fair-use limit.
+    """
+    try:
+        conn = get_db_connection()
+        rows = conn.execute(
+            "SELECT id, url, financing_source FROM purchase_history "
+            "WHERE atm_sales IS NULL OR atm_sales = ''"
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        print(f"ATM backfill: could not list rows: {e}")
+        return
+
+    if not rows:
+        return
+
+    print(f"ATM backfill: {len(rows)} historical row(s) without per-security data — starting...")
+    filled = no_table = failed = 0
+    for row in rows:
+        url = row["url"] or ""
+        atm_json = None
+        financing = None
+
+        if '/Archives/edgar/data/' not in url:
+            # Placeholder/non-document URL: nothing to fetch, ever
+            atm_json = json.dumps(ATM_SENTINEL_NO_DOC)
+            no_table += 1
+        else:
+            html = fetch_html(url)
+            if not html:
+                failed += 1
+                time.sleep(sleep_seconds)
+                continue
+            atm = parse_atm_table(extract_filing_tables(html))
+            if atm:
+                atm_json = json.dumps(atm, ensure_ascii=False)
+                filled += 1
+                # Fill the badge only when the row has no description yet —
+                # existing Turkish notes (e.g. convertible debt) carry info
+                # the ATM table doesn't and must be preserved.
+                if (row["financing_source"] or "-").strip() in ("-", "") and atm.get("sold_any"):
+                    financing = financing_source_from_atm(atm)
+            else:
+                atm_json = json.dumps(ATM_SENTINEL_NO_TABLE)
+                no_table += 1
+            time.sleep(sleep_seconds)
+
+        try:
+            conn = get_db_connection()
+            if financing:
+                conn.execute(
+                    "UPDATE purchase_history SET atm_sales = ?, financing_source = ? WHERE id = ?",
+                    (atm_json, financing, row["id"])
+                )
+            else:
+                conn.execute(
+                    "UPDATE purchase_history SET atm_sales = ? WHERE id = ?",
+                    (atm_json, row["id"])
+                )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"ATM backfill: DB update failed for row {row['id']}: {e}")
+
+    print(f"ATM backfill done: {filled} filled, {no_table} without ATM data, {failed} fetch failure(s)"
+          + (" — failures retry on next boot" if failed else ""))
 
 # ----------------- GROQ API INTEGRATION -----------------
 
@@ -2244,6 +2342,10 @@ if __name__ == '__main__':
     # Keep connections warm during the ultra-critical window
     warmer_thread = threading.Thread(target=connection_warmer_loop, daemon=True)
     warmer_thread.start()
+
+    # Backfill per-security ATM data for historical rows in the background
+    backfill_thread = threading.Thread(target=backfill_atm_history, daemon=True)
+    backfill_thread.start()
 
     # Run Polling Loop in main thread
     try:

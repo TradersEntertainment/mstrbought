@@ -160,6 +160,33 @@ def test_migration_dedupes_july13_rows(tmp_path, monkeypatch):
     assert rows[0]['btc_acquired'] == '0'
 
 
+def test_event_type_backfill_classifies_by_sign(tmp_path, monkeypatch):
+    db_path = make_db(tmp_path, monkeypatch)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    create_schema(conn)
+    conn.executemany(
+        """INSERT INTO purchase_history (filing_date, btc_acquired, total_holdings, event_type)
+           VALUES (?, ?, '800,000', ?)""",
+        [('2026-05-18', '24,869', None),
+         ('2026-06-01', '-32', None),
+         ('2026-06-29', '0', None),
+         ('2026-04-06', '-', None),
+         ('2026-07-13', '0', 'no_purchase')])  # already classified: untouched
+    conn.commit()
+
+    bot.apply_data_migrations(conn)
+    rows = {r['filing_date']: r['event_type'] for r in
+            conn.execute("SELECT filing_date, event_type FROM purchase_history")}
+    conn.close()
+
+    assert rows['2026-05-18'] == 'btc_purchase'
+    assert rows['2026-06-01'] == 'btc_sale'
+    assert rows['2026-06-29'] == 'no_purchase'
+    assert rows['2026-04-06'] == 'no_purchase'
+    assert rows['2026-07-13'] == 'no_purchase'
+
+
 def test_full_init_db_on_fresh_install(tmp_path, monkeypatch):
     """Fresh install: seed provides correct data; migration must not duplicate."""
     db_path = make_db(tmp_path, monkeypatch)
