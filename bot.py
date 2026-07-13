@@ -1506,7 +1506,7 @@ def process_filing(accession, date, form, url):
     html_content = fetch_html(url)
     if not html_content:
         print(f"Could not load HTML for {url}")
-        return
+        return False
     t_fetch = time.time()
 
     # First, run the local table parsers (offline, instant, no LLM):
@@ -1637,6 +1637,8 @@ def process_filing(accession, date, form, url):
                 
         threading.Thread(target=async_no_table_analysis, daemon=True).start()
 
+    return True
+
 # Cache for processed filings — avoid DB query every 250ms
 _processed_cache = set()
 _processed_cache_time = 0
@@ -1674,7 +1676,7 @@ def check_for_new_filings():
     # index is polled every tick (conditional GET makes unchanged responses
     # cheap 304s); EFTS is staggered to at most once per second to stay well
     # under the SEC's 10 req/s fair-use limit at 4 ticks/s.
-    global _last_efts_time
+    global _last_efts_time, _submissions_etag, _submissions_last_modified
     run_efts = time.time() - _last_efts_time >= 1.0
 
     submissions_result = [None]
@@ -1725,10 +1727,22 @@ def check_for_new_filings():
             seen_accessions.add(acc)
                 
     for acc, date, form, url in reversed(new_filings_found):
-        process_filing(acc, date, form, url)
-        # Immediately add to cache so we don't re-process
-        _processed_cache.add(acc)
-        
+        ok = False
+        try:
+            ok = process_filing(acc, date, form, url)
+        except Exception as e:
+            print(f"Error processing filing {acc}: {e}")
+        if ok:
+            # Immediately add to cache so we don't re-process
+            _processed_cache.add(acc)
+        else:
+            # Invalidate the conditional-GET state: without this, the next
+            # polls would get 304 (index unchanged) and never retry this
+            # filing until the index changes again.
+            _submissions_etag = None
+            _submissions_last_modified = None
+            print(f"Filing {acc} not fully processed — will retry on the next poll.")
+
     return len(new_filings_found)
 
 def connection_warmer_loop():

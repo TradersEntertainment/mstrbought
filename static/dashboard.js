@@ -123,7 +123,17 @@ async function fetchHistory() {
             } else {
                 fBadgeClass = 'badge-source-none';
             }
-            const financingBadgeHtml = `<span class="badge-source ${fBadgeClass}">${fSource}</span>`;
+            // Per-security ATM breakdown as a hover tooltip when available
+            let fTitleAttr = '';
+            if (item.atm_sales && Array.isArray(item.atm_sales.securities)) {
+                const soldParts = item.atm_sales.securities
+                    .filter(s => (s.shares_sold_num || 0) > 0)
+                    .map(s => `${s.ticker}: ${s.shares_sold} adet → ${s.net_proceeds} net`);
+                if (soldParts.length) {
+                    fTitleAttr = ` title="${soldParts.join(' | ')}"`;
+                }
+            }
+            const financingBadgeHtml = `<span class="badge-source ${fBadgeClass}"${fTitleAttr}>${fSource}</span>`;
 
             // Format total holdings safely
             const rawTot = item.total_holdings || '-';
