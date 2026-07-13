@@ -220,7 +220,7 @@ def seed_database(conn):
 def mark_current_filings_processed(conn):
     cursor = conn.cursor()
     print("Marking all existing SEC filings in EDGAR index as processed to prevent backfilling...")
-    data = fetch_mstr_filings()
+    data = fetch_mstr_filings(use_conditional=False)
     if data:
         recent = data.get('filings', {}).get('recent', {})
         forms = recent.get('form', [])
@@ -356,40 +356,115 @@ def clean_html(html_content):
     text = soup.get_text(separator=' ')
     return re.sub(r'\s+', ' ', text).strip()
 
-def fetch_mstr_filings():
+# SEC fair-use limit is 10 req/s: on 403/429 back off per source
+# exponentially (1s → 60s) instead of hammering through a throttle.
+_sec_backoff = {}
+
+def _register_sec_throttle(source, status):
+    if status in (403, 429):
+        prev = _sec_backoff.get(source, {}).get('delay', 0)
+        delay = min(max(prev * 2, 1), 60)
+        _sec_backoff[source] = {'until': time.time() + delay, 'delay': delay}
+        print(f"SEC {source} returned {status}; backing off {delay}s")
+
+def _sec_blocked(source):
+    entry = _sec_backoff.get(source)
+    return bool(entry and time.time() < entry['until'])
+
+def _sec_clear_backoff(source):
+    _sec_backoff.pop(source, None)
+
+# Conditional-GET state for the (large) submissions JSON
+_submissions_etag = None
+_submissions_last_modified = None
+
+def fetch_mstr_filings(use_conditional=True):
+    """Fetch the EDGAR submissions index.
+
+    With use_conditional (polling path), sends If-None-Match/If-Modified-Since
+    so an unchanged index returns 304 and skips download + JSON parse of the
+    multi-MB payload. Callers that NEED the data (startup marking, test
+    route) pass use_conditional=False.
+    """
+    global _submissions_etag, _submissions_last_modified
+    if _sec_blocked('submissions'):
+        return None
     cik = "0001050446"
     url = f"https://data.sec.gov/submissions/CIK{cik}.json"
+    headers = {}
+    if use_conditional and _submissions_etag:
+        headers['If-None-Match'] = _submissions_etag
+    if use_conditional and _submissions_last_modified:
+        headers['If-Modified-Since'] = _submissions_last_modified
     try:
-        resp = http_session.get(url, timeout=3)
+        resp = http_session.get(url, timeout=3, headers=headers)
         if resp.status_code == 200:
+            _sec_clear_backoff('submissions')
+            _submissions_etag = resp.headers.get('ETag')
+            _submissions_last_modified = resp.headers.get('Last-Modified')
             return resp.json()
+        elif resp.status_code == 304:
+            # Index unchanged since the last poll — nothing new
+            return None
+        else:
+            _register_sec_throttle('submissions', resp.status_code)
     except Exception as e:
         print(f"Error fetching SEC JSON: {e}")
     return None
 
+_efts_shape_logged = False
+
 def fetch_mstr_filings_efts():
-    """Query EDGAR Full-Text Search (EFTS) API — often indexes 30-60s before submissions API."""
+    """Query EDGAR Full-Text Search (EFTS) — often indexes before the submissions API.
+
+    Real EFTS hits look like:
+      {"_id": "0001193125-26-295586:mstr-20260706.htm",
+       "_source": {"ciks": ["0001050446"], "file_date": "2026-07-06", ...}}
+    The dashed accession in _id matches the format the submissions path
+    stores in processed_filings. Parsing is defensive (also accepts the
+    legacy shape previously assumed here) and the first live hit is logged
+    once so the real response shape can be verified after deploy. Always
+    returns [] on failure — the submissions path is unaffected.
+    """
+    global _efts_shape_logged
+    if _sec_blocked('efts'):
+        return []
     today = datetime.now().strftime("%Y-%m-%d")
-    url = f"https://efts.sec.gov/LATEST/search-index?q=%22bitcoin%22&dateRange=custom&startdt={today}&enddt={today}&forms=8-K&entities=0001050446"
+    url = (f"https://efts.sec.gov/LATEST/search-index?q=%22bitcoin%22"
+           f"&forms=8-K&ciks=0001050446&startdt={today}&enddt={today}")
     try:
         resp = http_session.get(url, timeout=3)
-        if resp.status_code == 200:
-            data = resp.json()
-            hits = data.get("hits", {}).get("hits", [])
-            results = []
-            for hit in hits:
-                source = hit.get("_source", {})
-                acc = source.get("file_num") or hit.get("_id", "")
-                # Extract accession number from the filing URL
-                filing_url = source.get("file_url", "")
-                filing_date = source.get("file_date", today)
-                if filing_url and acc:
-                    results.append({
-                        "accession": acc,
-                        "date": filing_date,
-                        "url": filing_url
-                    })
-            return results
+        if resp.status_code != 200:
+            _register_sec_throttle('efts', resp.status_code)
+            return []
+        _sec_clear_backoff('efts')
+        data = resp.json()
+        hits = data.get("hits", {}).get("hits", [])
+        if hits and not _efts_shape_logged:
+            _efts_shape_logged = True
+            print(f"EFTS first-hit shape (one-time log): {json.dumps(hits[0])[:800]}")
+        results = []
+        for hit in hits:
+            source = hit.get("_source", {}) or {}
+            filing_date = source.get("file_date", today)
+            hit_id = hit.get("_id", "")
+            if re.match(r'^\d{10}-\d{2}-\d{6}:', hit_id):
+                acc, _, filename = hit_id.partition(':')
+                acc_no_dash = acc.replace('-', '')
+                results.append({
+                    "accession": acc,
+                    "date": filing_date,
+                    "url": f"https://www.sec.gov/Archives/edgar/data/1050446/{acc_no_dash}/{filename}"
+                })
+                continue
+            # Legacy/unknown shape fallback
+            filing_url = source.get("file_url", "")
+            acc = source.get("adsh") or source.get("file_num") or hit_id
+            if filing_url and acc:
+                results.append({"accession": acc, "date": filing_date, "url": filing_url})
+            elif hit_id:
+                print(f"EFTS: unrecognized hit shape, _id={hit_id[:120]}")
+        return results
     except Exception as e:
         print(f"EFTS query error (non-critical): {e}")
     return []
@@ -1425,16 +1500,19 @@ def process_filing(accession, date, form, url):
         print(f"Error parsing filing date for spam check: {e}")
         should_alert = False
         
+    t_start = time.time()
     html_content = fetch_html(url)
     if not html_content:
         print(f"Could not load HTML for {url}")
         return
-        
+    t_fetch = time.time()
+
     # First, run the local table parsers (offline, instant, no LLM):
     # one HTML parse feeds both the BTC parser and the ATM parser.
     tables = extract_filing_tables(html_content)
     fallback_data = parse_btc_tables(tables)
     atm_data = parse_atm_table(tables)
+    t_parse = time.time()
 
     if fallback_data:
         # Table is present! We can determine event and statistics instantly without Groq.
@@ -1449,6 +1527,9 @@ def process_filing(accession, date, form, url):
         if should_alert:
             alert_text = format_alert(fallback_data, url)
             main_msg_id = send_telegram_alert(alert_text)
+            print(f"Alert latency: fetch {(t_fetch-t_start)*1000:.0f}ms | "
+                  f"parse {(t_parse-t_fetch)*1000:.0f}ms | "
+                  f"telegram {(time.time()-t_parse)*1000:.0f}ms")
 
         # Save to DB in background — don't block the alert pipeline
         threading.Thread(
@@ -1558,6 +1639,9 @@ def process_filing(accession, date, form, url):
 _processed_cache = set()
 _processed_cache_time = 0
 
+# EFTS polls are staggered to at most 1/s (see check_for_new_filings)
+_last_efts_time = 0.0
+
 def _refresh_processed_cache():
     """Refresh the processed filings cache from DB. Called sparingly."""
     global _processed_cache, _processed_cache_time
@@ -1583,22 +1667,32 @@ def check_for_new_filings():
     
     new_filings_found = []
     seen_accessions = set()
-    
-    # Run BOTH sources in parallel threads for maximum speed
+
+    # Run BOTH sources in parallel threads for maximum speed. The submissions
+    # index is polled every tick (conditional GET makes unchanged responses
+    # cheap 304s); EFTS is staggered to at most once per second to stay well
+    # under the SEC's 10 req/s fair-use limit at 4 ticks/s.
+    global _last_efts_time
+    run_efts = time.time() - _last_efts_time >= 1.0
+
     submissions_result = [None]
     efts_result = [[]]
-    
+
     def _fetch_submissions():
         submissions_result[0] = fetch_mstr_filings()
     def _fetch_efts():
         efts_result[0] = fetch_mstr_filings_efts()
-    
+
     t1 = threading.Thread(target=_fetch_submissions, daemon=True)
-    t2 = threading.Thread(target=_fetch_efts, daemon=True)
     t1.start()
-    t2.start()
+    t2 = None
+    if run_efts:
+        _last_efts_time = time.time()
+        t2 = threading.Thread(target=_fetch_efts, daemon=True)
+        t2.start()
     t1.join(timeout=4)
-    t2.join(timeout=4)
+    if t2:
+        t2.join(timeout=4)
     
     # Process submissions results
     data = submissions_result[0]
@@ -1634,6 +1728,37 @@ def check_for_new_filings():
         _processed_cache.add(acc)
         
     return len(new_filings_found)
+
+def connection_warmer_loop():
+    """Keep TCP/TLS connections hot during the ultra-critical window.
+
+    A tiny request every ~50s to www.sec.gov (the Archives host used by
+    fetch_html) and to the Telegram API keeps the pooled connections open,
+    so the first real fetch/alert skips both handshakes (~0.02 req/s cost).
+    """
+    trt_tz = timezone(timedelta(hours=3))
+    while running:
+        try:
+            now_trt = datetime.now(timezone.utc).astimezone(trt_tz)
+            in_window = now_trt.weekday() < 5 and (
+                (now_trt.hour == 14 and now_trt.minute >= 30) or
+                (now_trt.hour == 15 and now_trt.minute <= 15)
+            )
+            if in_window:
+                try:
+                    http_session.get("https://www.sec.gov/robots.txt", timeout=3)
+                except Exception:
+                    pass
+                if TELEGRAM_BOT_TOKEN:
+                    try:
+                        http_session.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMe", timeout=3)
+                    except Exception:
+                        pass
+                time.sleep(50)
+            else:
+                time.sleep(30)
+        except Exception:
+            time.sleep(30)
 
 def polling_loop():
     global current_mode, running
@@ -1758,7 +1883,7 @@ def force_trigger():
         test_url = "https://www.sec.gov/Archives/edgar/data/1050446/000119312526276717/mstr-20260504.htm" # Default fallback
         try:
             try:
-                data = fetch_mstr_filings()
+                data = fetch_mstr_filings(use_conditional=False)
                 if data:
                     recent = data.get('filings', {}).get('recent', {})
                     forms = recent.get('form', [])
@@ -1994,7 +2119,11 @@ if __name__ == '__main__':
     # Start Flask Web Server Thread
     web_thread = threading.Thread(target=run_web_server, daemon=True)
     web_thread.start()
-        
+
+    # Keep connections warm during the ultra-critical window
+    warmer_thread = threading.Thread(target=connection_warmer_loop, daemon=True)
+    warmer_thread.start()
+
     # Run Polling Loop in main thread
     try:
         polling_loop()
