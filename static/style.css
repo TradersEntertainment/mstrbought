@@ -492,6 +492,52 @@ body {
     min-width: 0;
 }
 
+/* Step-by-step cash reconciliation table under the cash chart */
+.cash-calc {
+    margin-top: 1rem;
+}
+
+.calc-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.calc-table td {
+    padding: 0.4rem 0.6rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    color: var(--text-primary);
+}
+
+.calc-amount {
+    text-align: right;
+    white-space: nowrap;
+}
+
+.calc-base td {
+    color: var(--text-secondary);
+}
+
+.calc-sub td {
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+    border-bottom: none;
+    padding-top: 0;
+    padding-bottom: 0.2rem;
+}
+
+.calc-total td {
+    border-top: 1px solid rgba(255, 255, 255, 0.15);
+    border-bottom: none;
+}
+
+.calc-info td {
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+    border-bottom: none;
+}
+
 /* Small footnote under a panel (backtest / dividend summaries) */
 .panel-footnote {
     margin-top: 0.9rem;

@@ -172,6 +172,7 @@ def test_cash_estimate_backtest_and_calibration(temp_db):
     # correction, i.e. the raw model under-estimated)
     assert result['calibration']['other_outflow_per_week_m'] == -43.0
     assert result['calibration']['weekly_dividend_m'] == 3.0
+    assert result['calibration']['monthly_dividend_m'] == 13.0
     assert result['calibration']['dividend_source'] == 'xbrl_actual'
 
     # Calibrated walk converges to the actual at quarter end...

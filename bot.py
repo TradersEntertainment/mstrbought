@@ -1492,6 +1492,7 @@ def compute_cash_estimate():
         "backtest": backtest,
         "calibration": {
             "weekly_dividend_m": round(weekly_div_m, 2),
+            "monthly_dividend_m": round(weekly_div_m * 52.0 / 12.0, 2),
             "other_outflow_per_week_m": round(other_per_week_m, 2),
             "dividend_source": dividend_source,
         },

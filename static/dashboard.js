@@ -450,10 +450,70 @@ async function fetchCash() {
         }
 
         renderCashChart(actuals, flow || {});
+        renderCashCalc(flow || {});
         renderBacktestNote(flow || {});
     } catch (e) {
         console.error('Cash fetch error:', e);
     }
+}
+
+// Step-by-step reconciliation: from the last reported 10-Q/10-K cash down
+// to today's estimate and the runway — every line item spelled out.
+function renderCashCalc(flow) {
+    const el = document.getElementById('cashCalc');
+    if (!el) return;
+    const c = flow.change_summary;
+    const r = flow.runway;
+    const cal = flow.calibration || {};
+    if (!c) {
+        el.innerHTML = '';
+        return;
+    }
+
+    const money = (m) => formatUsd(Math.abs(m) * 1e6);
+    const row = (label, val, cls = '') =>
+        `<tr class="${cls}"><td>${label}</td><td class="calc-amount">${val}</td></tr>`;
+
+    let rows = '';
+    rows += row(`Son bilanço nakdi (10-Q/10-K, ${c.since})`, formatUsd(c.from_cash_m * 1e6), 'calc-base');
+
+    if (c.atm_total_m > 0) {
+        rows += row(`+ ATM hisse satışları (${c.weeks} hafta)`, '+' + money(c.atm_total_m));
+        Object.entries(c.atm_by_ticker || {})
+            .filter(([, v]) => v > 0)
+            .sort((a, b) => b[1] - a[1])
+            .forEach(([t, v]) => {
+                rows += row(`&nbsp;&nbsp;&nbsp;↳ ${t}`, money(v), 'calc-sub');
+            });
+    } else {
+        rows += row('+ ATM hisse satışları', 'Yok', 'calc-base');
+    }
+    rows += row('+ BTC satış geliri', c.btc_sales_m > 0 ? '+' + money(c.btc_sales_m) : 'Yok',
+                c.btc_sales_m > 0 ? '' : 'calc-base');
+    rows += row('− BTC alımları', c.btc_buys_m > 0 ? '−' + money(c.btc_buys_m) : 'Yok',
+                c.btc_buys_m > 0 ? '' : 'calc-base');
+    rows += row(`− Pref. temettü (${c.weeks} hafta × ${money(cal.weekly_dividend_m || 0)})`,
+                '−' + money(c.dividends_m));
+    if (c.other_m !== 0) {
+        const otherLabel = c.other_m > 0 ? '− Diğer net giderler (kalibre)' : '+ Diğer net girişler (kalibre)';
+        rows += row(otherLabel, (c.other_m > 0 ? '−' : '+') + money(c.other_m));
+    }
+    rows += row('<strong>= Tahmini nakit (bugün)</strong>',
+                `<strong>${formatUsd(c.to_cash_m * 1e6)}</strong>`, 'calc-total');
+    if (r) {
+        const runwayText = r.infinite
+            ? '∞ (net akış pozitif)'
+            : `<strong>~${r.weeks} hafta</strong> (tükeniş: ${r.depletion_date || '-'})`;
+        rows += row('<strong>→ Satış/ATM olmadan dayanma</strong>', runwayText, 'calc-total');
+    }
+    if (cal.monthly_dividend_m) {
+        rows += row('Pref. hisselere aylık temettü yükü',
+                    `${formatUsd(cal.monthly_dividend_m * 1e6)}/ay` +
+                    (cal.dividend_source === 'xbrl_actual' ? ' (XBRL gerçek)' : ' (model)'),
+                    'calc-info');
+    }
+
+    el.innerHTML = `<table class="calc-table"><tbody>${rows}</tbody></table>`;
 }
 
 function renderBacktestNote(flow) {
@@ -475,30 +535,6 @@ function renderBacktestNote(flow) {
         parts.push(`Geri-test ${b.quarter_end}: tahmin ${formatUsd(b.predicted_m * 1e6)} vs gerçek ` +
                    `${formatUsd(b.actual_m * 1e6)} (sapma %${b.error_pct !== null ? b.error_pct : '-'})`);
     });
-    if (flow.change_summary) {
-        // The chart explains its own movement: what drove the cash change
-        // since the last reported balance
-        const c = flow.change_summary;
-        const bits = [];
-        const atmParts = Object.entries(c.atm_by_ticker || {})
-            .filter(([, v]) => v > 0)
-            .sort((a, b) => b[1] - a[1])
-            .map(([t, v]) => `${t} ${formatUsd(v * 1e6)}`);
-        if (c.atm_total_m > 0) {
-            bits.push(`+${formatUsd(c.atm_total_m * 1e6)} ATM hisse satışı (${atmParts.join(', ')})`);
-        }
-        if (c.btc_sales_m > 0) bits.push(`+${formatUsd(c.btc_sales_m * 1e6)} BTC satışı`);
-        if (c.btc_buys_m > 0) bits.push(`−${formatUsd(c.btc_buys_m * 1e6)} BTC alımı`);
-        if (c.dividends_m > 0) bits.push(`−${formatUsd(c.dividends_m * 1e6)} temettü`);
-        if (c.other_m !== 0) {
-            bits.push(`${c.other_m > 0 ? '−' : '+'}${formatUsd(Math.abs(c.other_m) * 1e6)} diğer net giderler`);
-        }
-        const dir = c.delta_m >= 0 ? 'arttı' : 'azaldı';
-        const sign = c.delta_m >= 0 ? '+' : '−';
-        parts.push(`📈 <strong>Neden ${dir}?</strong> Son bilançodan (${c.since}, ${formatUsd(c.from_cash_m * 1e6)}) ` +
-                   `bu yana ${c.weeks} haftada: ${bits.join(' ')} → bugün ` +
-                   `${formatUsd(c.to_cash_m * 1e6)} (${sign}${formatUsd(Math.abs(c.delta_m) * 1e6)})`);
-    }
     if (flow.calibration) {
         const c = flow.calibration;
         parts.push(`Temettü: ${formatUsd(c.weekly_dividend_m * 1e6)}/hafta ` +
@@ -832,8 +868,16 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchDividends();
     setupActions();
 
-    // Auto-refresh status and history every 20 seconds
+    // Auto-refresh status every 20 seconds
     setInterval(() => {
         fetchStatus();
     }, 20000);
+
+    // Refresh the data panels every 60s so new filings/quarters and the
+    // recalculated estimate appear without a manual reload
+    setInterval(() => {
+        fetchHistory();
+        fetchCash();
+        fetchDividends();
+    }, 60000);
 });
