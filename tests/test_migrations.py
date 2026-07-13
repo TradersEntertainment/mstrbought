@@ -82,6 +82,7 @@ def test_migration_repairs_bad_prod_rows(tmp_path, monkeypatch):
     assert july6['avg_price'] == '$60,197'
     assert july6['period'] == 'June 29, 2026 to July 5, 2026'
     assert july6['event_type'] == 'btc_sale'
+    assert july6['financing_source'] == 'İmtiyazlı Hisse (STRC) Temettüsü'
     # The original prod URL must be preserved
     assert 'mstr-20260706.htm' in july6['url']
 

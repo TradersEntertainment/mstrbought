@@ -124,13 +124,14 @@ async function fetchHistory() {
                 fBadgeClass = 'badge-source-none';
             }
             // Per-security ATM breakdown as a hover tooltip when available
+            const escAttr = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
             let fTitleAttr = '';
             if (item.atm_sales && Array.isArray(item.atm_sales.securities)) {
                 const soldParts = item.atm_sales.securities
                     .filter(s => (s.shares_sold_num || 0) > 0)
                     .map(s => `${s.ticker}: ${s.shares_sold} adet → ${s.net_proceeds} net`);
                 if (soldParts.length) {
-                    fTitleAttr = ` title="${soldParts.join(' | ')}"`;
+                    fTitleAttr = ` title="${escAttr(soldParts.join(' | '))}"`;
                 }
             }
             const financingBadgeHtml = `<span class="badge-source ${fBadgeClass}"${fTitleAttr}>${fSource}</span>`;

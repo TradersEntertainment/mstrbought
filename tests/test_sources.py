@@ -72,7 +72,7 @@ def test_efts_backs_off_after_throttle(monkeypatch):
     assert len(calls) == 1
 
 
-def test_submissions_conditional_get(monkeypatch):
+def test_submissions_conditional_get_commits_after_consume(monkeypatch):
     seen_headers = []
 
     def fake_get(url, timeout=None, headers=None):
@@ -83,12 +83,41 @@ def test_submissions_conditional_get(monkeypatch):
 
     monkeypatch.setattr(bot.http_session, 'get', fake_get)
 
-    assert bot.fetch_mstr_filings() is not None
+    data, state = bot.fetch_mstr_filings(return_state=True)
+    assert data is not None
     assert seen_headers[0].get('If-None-Match') is None
+    # The fetch itself must NOT store the validators...
+    assert bot._submissions_etag is None
+    # ...only an explicit commit after the payload has been consumed does
+    bot._commit_submissions_state(state)
+    assert bot._submissions_etag == '"abc"'
 
-    # Second poll sends the stored ETag and treats 304 as "nothing new"
-    assert bot.fetch_mstr_filings() is None
+    # Next poll sends the stored ETag and treats 304 as "nothing new"
+    data2, state2 = bot.fetch_mstr_filings(return_state=True)
+    assert data2 is None and state2 is None
     assert seen_headers[1]['If-None-Match'] == '"abc"'
+
+
+def test_submissions_dropped_payload_does_not_poison_etag(monkeypatch):
+    """Regression for the confirmed review finding: a poll that abandons a
+    slow fetch must not leave the new ETag behind, or every later poll would
+    304 past the filing carried by the dropped payload."""
+    seen_headers = []
+
+    def fake_get(url, timeout=None, headers=None):
+        seen_headers.append(headers or {})
+        return FakeResp(200, {"filings": {"recent": {}}}, {'ETag': '"new"'})
+
+    monkeypatch.setattr(bot.http_session, 'get', fake_get)
+
+    # check_for_new_filings timed out: the state tuple is never committed
+    bot.fetch_mstr_filings(return_state=True)
+    assert bot._submissions_etag is None
+
+    # The next poll therefore re-fetches unconditionally and gets a full 200
+    data, _ = bot.fetch_mstr_filings(return_state=True)
+    assert data is not None
+    assert 'If-None-Match' not in seen_headers[1]
 
 
 def test_submissions_unconditional_skips_etag(monkeypatch):

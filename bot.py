@@ -287,7 +287,8 @@ def _migrate_repair_july_2026_rows(conn):
         """UPDATE purchase_history
            SET btc_acquired='-3,588', purchase_price='$216.0M', avg_price='$60,197',
                total_holdings='843,775', total_cost='$63.69B', avg_cost='$75,476',
-               period='June 29, 2026 to July 5, 2026', event_type='btc_sale'
+               period='June 29, 2026 to July 5, 2026', event_type='btc_sale',
+               financing_source='İmtiyazlı Hisse (STRC) Temettüsü'
            WHERE filing_date='2026-07-06' AND total_holdings<>'843,775'"""
     )
     if cursor.rowcount > 0:
@@ -380,17 +381,38 @@ def _sec_clear_backoff(source):
 _submissions_etag = None
 _submissions_last_modified = None
 
-def fetch_mstr_filings(use_conditional=True):
+def _commit_submissions_state(state):
+    """Remember the conditional-GET validators for the NEXT poll.
+
+    Must only be called after the payload has actually been consumed. If the
+    ETag were stored inside the fetch (as it originally was), a poll that
+    times out waiting for a slow download would discard the payload while
+    the fetch thread stored the new ETag — every later poll would then get
+    304 and the filing carried by the dropped payload would stay invisible
+    until the index changed again.
+    """
+    global _submissions_etag, _submissions_last_modified
+    if state:
+        _submissions_etag = state.get('etag')
+        _submissions_last_modified = state.get('last_modified')
+
+def fetch_mstr_filings(use_conditional=True, return_state=False):
     """Fetch the EDGAR submissions index.
 
     With use_conditional (polling path), sends If-None-Match/If-Modified-Since
     so an unchanged index returns 304 and skips download + JSON parse of the
     multi-MB payload. Callers that NEED the data (startup marking, test
     route) pass use_conditional=False.
+
+    This function never writes the conditional-GET globals itself. The
+    polling path passes return_state=True, receives (data, state), and
+    commits the state via _commit_submissions_state ONLY after scanning the
+    filing list. One-shot consumers must not commit at all — a stored ETag
+    from e.g. the admin test route would make the scanner 304 past a filing
+    it never saw.
     """
-    global _submissions_etag, _submissions_last_modified
     if _sec_blocked('submissions'):
-        return None
+        return (None, None) if return_state else None
     cik = "0001050446"
     url = f"https://data.sec.gov/submissions/CIK{cik}.json"
     headers = {}
@@ -402,17 +424,20 @@ def fetch_mstr_filings(use_conditional=True):
         resp = http_session.get(url, timeout=3, headers=headers)
         if resp.status_code == 200:
             _sec_clear_backoff('submissions')
-            _submissions_etag = resp.headers.get('ETag')
-            _submissions_last_modified = resp.headers.get('Last-Modified')
-            return resp.json()
+            state = {
+                'etag': resp.headers.get('ETag'),
+                'last_modified': resp.headers.get('Last-Modified'),
+            }
+            data = resp.json()
+            return (data, state) if return_state else data
         elif resp.status_code == 304:
             # Index unchanged since the last poll — nothing new
-            return None
+            pass
         else:
             _register_sec_throttle('submissions', resp.status_code)
     except Exception as e:
         print(f"Error fetching SEC JSON: {e}")
-    return None
+    return (None, None) if return_state else None
 
 _efts_shape_logged = False
 
@@ -543,7 +568,7 @@ def parse_btc_number(s):
 def parse_money(s):
     """Parse a money string like '$80.8M' or '$2.01B' to a float in millions."""
     try:
-        s = str(s).replace('$', '').replace(',', '').strip()
+        s = re.sub(r'\(\d+\)', '', str(s)).replace('$', '').replace(',', '').strip()
         multiplier = 1
         if s.endswith('M'):
             s = s[:-1]
@@ -593,14 +618,15 @@ def parse_btc_tables(tables):
                 # Clean footnote markers like (1) from BTC count
                 btc_raw = re.sub(r'\(\d+\)', '', cleaned[0]).strip()
 
-                # Detect price unit from header
+                # Detect price unit from header; strip footnote markers so a
+                # cell like '$59,256(2)' doesn't silently break number parsing
                 price_header = row_data[1][1].lower() if len(row_data[1]) > 1 else ''
                 unit = "M" if "millions" in price_header else ("B" if "billions" in price_header else "")
-                price_val = cleaned[1]
+                price_val = re.sub(r'\(\d+\)', '', cleaned[1]).strip() or '-'
                 if price_val != '-' and unit and not price_val.endswith(unit):
                     price_val = f"{price_val}{unit}"
 
-                avg_val = cleaned[2]
+                avg_val = re.sub(r'\(\d+\)', '', cleaned[2]).strip() or '-'
 
                 # Extract period from row 0
                 period = period_text.replace("During Period ", "").replace("*", "").strip()
@@ -623,11 +649,11 @@ def parse_btc_tables(tables):
                     if holdings_header_idx is not None:
                         h_cost_header = row_data[1][holdings_header_idx + 1].lower() if holdings_header_idx + 1 < len(row_data[1]) else ''
                         h_cost_unit = "M" if "millions" in h_cost_header else ("B" if "billions" in h_cost_header else "")
-                        h_holdings = cleaned[3]
-                        h_cost_val = cleaned[4]
+                        h_holdings = re.sub(r'\(\d+\)', '', cleaned[3]).strip() or '-'
+                        h_cost_val = re.sub(r'\(\d+\)', '', cleaned[4]).strip() or '-'
                         if h_cost_val != '-' and h_cost_unit and not h_cost_val.endswith(h_cost_unit):
                             h_cost_val = f"{h_cost_val}{h_cost_unit}"
-                        h_avg_cost = cleaned[5] if len(cleaned) > 5 else '-'
+                        h_avg_cost = (re.sub(r'\(\d+\)', '', cleaned[5]).strip() or '-') if len(cleaned) > 5 else '-'
 
                         # Extract "As of" date from period header row
                         as_of_parts = [p for p in row_data[0] if 'As of' in p]
@@ -648,10 +674,10 @@ def parse_btc_tables(tables):
                 if len(cleaned) < 3:
                     cleaned += ['-'] * (3 - len(cleaned))
 
-                # Detect cost unit
+                # Detect cost unit; strip footnote markers from all values
                 cost_header = row_data[1][1].lower() if len(row_data[1]) > 1 else ''
                 cost_unit = "M" if "millions" in cost_header else ("B" if "billions" in cost_header else "")
-                cost_val = cleaned[1]
+                cost_val = re.sub(r'\(\d+\)', '', cleaned[1]).strip() or '-'
                 if cost_val != '-' and cost_unit and not cost_val.endswith(cost_unit):
                     cost_val = f"{cost_val}{cost_unit}"
 
@@ -659,9 +685,9 @@ def parse_btc_tables(tables):
 
                 holdings_snapshots.append({
                     "as_of": as_of,
-                    "holdings": cleaned[0],
+                    "holdings": re.sub(r'\(\d+\)', '', cleaned[0]).strip() or '-',
                     "total_cost": cost_val,
-                    "avg_cost": cleaned[2]
+                    "avg_cost": re.sub(r'\(\d+\)', '', cleaned[2]).strip() or '-'
                 })
             except Exception as e:
                 print(f"Error parsing holdings table: {e}")
@@ -749,15 +775,25 @@ def parse_btc_tables(tables):
         periods = [a["period"] for a in activities]
         combined_period = " & ".join(periods)
 
-        total_money_m = sum(parse_money(a["price"]) for a in activities)
+        # Amounts and weighted average only over activities matching the
+        # detected direction — a rare mixed buy+sell filing must not add
+        # sale proceeds to purchase cost or blend both price averages.
+        if event_type == "btc_sale":
+            relevant = [a for a in activities if a["type"] == "sale"]
+        elif event_type == "btc_purchase":
+            relevant = [a for a in activities if a["type"] == "purchase"]
+        else:
+            relevant = []
 
-        # Weighted average price across all periods
+        total_money_m = sum(parse_money(a["price"]) for a in relevant)
+
+        # Weighted average price across the relevant periods
         weighted_sum = 0
         total_btc_for_avg = 0
-        for a in activities:
+        for a in relevant:
             btc_n = abs(a["signed_count"])
             try:
-                avg_p = float(a["avg_price"].replace('$', '').replace(',', ''))
+                avg_p = float(re.sub(r'\(\d+\)', '', a["avg_price"]).replace('$', '').replace(',', ''))
             except (ValueError, AttributeError):
                 avg_p = 0
             weighted_sum += btc_n * avg_p
@@ -1274,8 +1310,13 @@ def _breakdown_lines(parsed_data):
         return ""
     text = ""
     for b in breakdown:
+        count = parse_btc_number(b.get('btc_count'))
+        if count == 0:
+            # Explicit "-" cell: a period with no transaction
+            text += f"\n  ↳ {b['period']}: 0 BTC (işlem yok)"
+            continue
         sign = "-" if b.get("type") == "sale" else "+"
-        text += f"\n  ↳ {b['period']}: {sign}{b['btc_count']} BTC @ {b['avg_price']} ({b['price']})"
+        text += f"\n  ↳ {b['period']}: {sign}{count:,} BTC @ {b['avg_price']} ({b['price']})"
     return text
 
 def format_alert(parsed_data, url):
@@ -1364,7 +1405,17 @@ def save_to_database(date, parsed_data, url, accession, form):
             "INSERT OR IGNORE INTO processed_filings (accession_number, filing_date, form, url) VALUES (?, ?, ?, ?)",
             (accession, date, form, url)
         )
-        
+
+        # A filing document maps to exactly one history row. If the row is
+        # already present (e.g. the filing gets re-processed after a cache
+        # loss or a seed/live overlap), don't duplicate it.
+        cursor.execute("SELECT 1 FROM purchase_history WHERE url = ? LIMIT 1", (url,))
+        if cursor.fetchone():
+            print(f"purchase_history already has a row for {url} — skipping duplicate insert.")
+            conn.commit()
+            conn.close()
+            return
+
         # Signed amount: negative for sales ("-3,588"), positive for buys,
         # "0" for no transaction — the dashboard badge colors by sign.
         # The Groq-only no-table path may still supply legacy unsigned fields.
@@ -1679,11 +1730,14 @@ def check_for_new_filings():
     global _last_efts_time, _submissions_etag, _submissions_last_modified
     run_efts = time.time() - _last_efts_time >= 1.0
 
-    submissions_result = [None]
+    # Single-cell tuple assignment keeps (data, state) atomic: a join timeout
+    # must never observe the payload without its conditional-GET state or
+    # vice versa.
+    submissions_fetch = [(None, None)]
     efts_result = [[]]
 
     def _fetch_submissions():
-        submissions_result[0] = fetch_mstr_filings()
+        submissions_fetch[0] = fetch_mstr_filings(return_state=True)
     def _fetch_efts():
         efts_result[0] = fetch_mstr_filings_efts()
 
@@ -1699,7 +1753,7 @@ def check_for_new_filings():
         t2.join(timeout=4)
     
     # Process submissions results
-    data = submissions_result[0]
+    data, sub_state = submissions_fetch[0]
     if data:
         recent = data.get('filings', {}).get('recent', {})
         if recent:
@@ -1707,7 +1761,7 @@ def check_for_new_filings():
             accession_numbers = recent.get('accessionNumber', [])
             filing_dates = recent.get('filingDate', [])
             primary_docs = recent.get('primaryDocument', [])
-            
+
             for idx, form in enumerate(forms):
                 if form == '8-K':
                     acc_num = accession_numbers[idx]
@@ -1718,7 +1772,11 @@ def check_for_new_filings():
                         url = f"https://www.sec.gov/Archives/edgar/data/1050446/{acc_num_no_dash}/{doc}"
                         new_filings_found.append((acc_num, filing_date, form, url))
                         seen_accessions.add(acc_num)
-    
+        # The payload has been scanned — only NOW is it safe to remember the
+        # validators. A timed-out fetch leaves data None, nothing is
+        # committed, and the next poll re-fetches with the OLD ETag.
+        _commit_submissions_state(sub_state)
+
     # Process EFTS results
     for result in efts_result[0]:
         acc = result["accession"]
