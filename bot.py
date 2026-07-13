@@ -125,7 +125,25 @@ def init_db():
         cursor.execute("ALTER TABLE purchase_history ADD COLUMN financing_source TEXT")
     except sqlite3.OperationalError:
         pass
-        
+
+    try:
+        cursor.execute("ALTER TABLE purchase_history ADD COLUMN atm_sales TEXT")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        cursor.execute("ALTER TABLE purchase_history ADD COLUMN event_type TEXT")
+    except sqlite3.OperationalError:
+        pass
+
+    # Data-repair migrations ledger (survives the purchase_history self-heal drop)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+        migration_id TEXT PRIMARY KEY,
+        applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
     conn.commit()
     
     # Seed database
@@ -1013,14 +1031,24 @@ def save_to_database(date, parsed_data, url, accession, form):
             (accession, date, form, url)
         )
         
+        # Signed amount: negative for sales ("-3,588"), positive for buys,
+        # "0" for no transaction — the dashboard badge colors by sign.
+        # The Groq-only no-table path may still supply legacy unsigned fields.
+        btc_value = parsed_data.get("btc_signed_str")
+        if btc_value is None:
+            btc_value = str(parsed_data.get("btc_acquired") or "-")
+
+        atm = parsed_data.get("atm")
+        atm_json = json.dumps(atm, ensure_ascii=False) if atm else None
+
         cursor.execute(
-            """INSERT INTO purchase_history 
-               (filing_date, period, btc_acquired, purchase_price, avg_price, total_holdings, total_cost, avg_cost, url, total_debt, financing_source)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO purchase_history
+               (filing_date, period, btc_acquired, purchase_price, avg_price, total_holdings, total_cost, avg_cost, url, total_debt, financing_source, atm_sales, event_type)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 date,
                 parsed_data.get("purchase_period"),
-                str(parsed_data.get("btc_acquired") or "-"),
+                btc_value,
                 str(parsed_data.get("purchase_price") or parsed_data.get("purchase_price_usd") or "-"),
                 str(parsed_data.get("avg_price") or parsed_data.get("avg_purchase_price") or "-"),
                 str(parsed_data.get("total_holdings") or parsed_data.get("total_btc_holdings") or "-"),
@@ -1028,7 +1056,9 @@ def save_to_database(date, parsed_data, url, accession, form):
                 str(parsed_data.get("avg_cost") or parsed_data.get("avg_cost_per_btc") or "-"),
                 url,
                 str(parsed_data.get("total_debt") or parsed_data.get("total_debt_usd") or "-"),
-                str(parsed_data.get("financing_source_turkish") or parsed_data.get("financing_details") or "-")
+                str(parsed_data.get("financing_source_turkish") or parsed_data.get("financing_details") or "-"),
+                atm_json,
+                parsed_data.get("event_type")
             )
         )
         conn.commit()
@@ -1365,9 +1395,19 @@ def get_purchase_history():
             "avg_cost": r["avg_cost"],
             "total_debt": r["total_debt"] if "total_debt" in r.keys() else "$6.7B",
             "financing_source": r["financing_source"] if "financing_source" in r.keys() else "ATM Hisse Satışı",
+            "atm_sales": _safe_json_loads(r["atm_sales"]) if "atm_sales" in r.keys() else None,
+            "event_type": r["event_type"] if "event_type" in r.keys() else None,
             "url": r["url"]
         })
     return jsonify(history_list)
+
+def _safe_json_loads(value):
+    if not value:
+        return None
+    try:
+        return json.loads(value)
+    except (ValueError, TypeError):
+        return None
 
 @app.route('/api/trigger', methods=['POST'])
 def force_trigger():
