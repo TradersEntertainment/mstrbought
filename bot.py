@@ -1464,12 +1464,160 @@ def refresh_dividends():
     print("Dividends: no usable XBRL tag returned data")
     return 0
 
+# ----------------- PREFERRED BASELINES (SEC 10-Q) -----------------
+
+# strategy.com's "Annual Dividends" (~$1,763M) is the FORWARD obligation:
+# Σ outstanding preferred notional × dividend rate. Trailing paid dividends
+# badly lag it while the stack grows (Q1-2026 paid $229.5M ×4 ≈ $0.9B).
+# The per-series notional and rates are disclosed in every 10-Q/10-K
+# preferred stock table; the weekly 8-K ATM tables carry them forward.
+
+EURUSD_RATE = float(os.getenv("EURUSD_RATE", "1.08"))
+
+def parse_preferred_stock_table(tables):
+    """Extract per-series preferred notional ($M) and dividend rate from a
+    10-Q/10-K preferred stock summary table.
+
+    Generic across series (STRF/STRK/STRD/STRC/STRE/future ones): a row
+    names one series and carries a shares/notional pair whose ratio is ~100
+    (the $100 stated liquidation preference per share) — that also reveals
+    the number scale. Euro-denominated series are converted at EURUSD_RATE.
+    ATM-activity tables are excluded (they say "net proceeds"/"available").
+    Returns {ticker: {"notional_m": .., "rate": ..}}, best table wins.
+    """
+    best = {}
+    for row_data in tables:
+        table_text = ' '.join(' '.join(r) for r in row_data)
+        if len([t for t in ('STRF', 'STRK', 'STRD', 'STRC', 'STRE') if t in table_text]) < 2:
+            continue
+        lower = table_text.lower()
+        # The summary table lists notional/liquidation value of OUTSTANDING
+        # shares; skip ATM offering tables which also name every series.
+        if 'notional' not in lower and 'liquidation' not in lower:
+            continue
+        if 'net proceeds' in lower or 'available' in lower:
+            continue
+        found = {}
+        for row in row_data:
+            row_text = ' '.join(row)
+            m = re.search(r'\b(STR[A-Z])\b', row_text)
+            if not m:
+                continue
+            ticker = m.group(1)
+            rate = None
+            rm = re.search(r'(\d+(?:\.\d+)?)\s*%', row_text)
+            if rm:
+                r = float(rm.group(1)) / 100.0
+                if 0.02 <= r <= 0.25:
+                    rate = r
+            nums = []
+            for cell in row:
+                # Percentages are rates, not amounts
+                cell = re.sub(r'\d+(?:\.\d+)?\s*%', ' ', cell)
+                for n in re.findall(r'\d[\d,]*(?:\.\d+)?', cell):
+                    try:
+                        nums.append(float(n.replace(',', '')))
+                    except ValueError:
+                        pass
+            # shares/notional pair at the ~$100 stated value per share
+            pair = None
+            for a in nums:
+                for b in nums:
+                    if a > 0 and b > a and 95.0 <= b / a <= 105.0:
+                        if pair is None or b > pair[1]:
+                            pair = (a, b)
+            if not pair:
+                continue
+            notional = pair[1]
+            if notional >= 1e8:        # raw dollars
+                notional_m = notional / 1e6
+            elif notional >= 1e4:      # thousands (the usual 10-Q unit)
+                notional_m = notional / 1e3
+            else:                      # already millions
+                notional_m = notional
+            if '€' in row_text or 'EUR' in row_text.upper() or 'uro' in row_text:
+                notional_m *= EURUSD_RATE
+            if not (50.0 <= notional_m <= 50000.0):
+                continue
+            found[ticker] = {"notional_m": round(notional_m, 1), "rate": rate}
+        if len(found) > len(best):
+            best = found
+    # Rows without an in-row rate fall back to the known series defaults
+    for t, e in best.items():
+        if e["rate"] is None:
+            e["rate"] = STRC_ANNUAL_RATE if t == 'STRC' else PREFERRED_RATE_DEFAULTS.get(t)
+    return {t: e for t, e in best.items() if e["rate"]}
+
+def refresh_preferred_baselines():
+    """Store per-series preferred notional + rate from the latest 10-Q/10-K.
+
+    Effectively quarterly: skips when the newest quarterly report's period
+    is already stored. On any failure the annual-dividend figure simply
+    falls back to the XBRL paid-×4 tier — no regression.
+    """
+    data = fetch_mstr_filings(use_conditional=False)
+    recent = ((data or {}).get('filings') or {}).get('recent') or {}
+    forms = recent.get('form', [])
+    accs = recent.get('accessionNumber', [])
+    dates = recent.get('filingDate', [])
+    docs = recent.get('primaryDocument', [])
+    reports = recent.get('reportDate', [])
+    idx = next((i for i, f in enumerate(forms) if f in ('10-Q', '10-K')), None)
+    if idx is None:
+        return 0
+    period_end = reports[idx] if idx < len(reports) and reports[idx] else dates[idx]
+    try:
+        conn = get_db_connection()
+        have = conn.execute(
+            "SELECT 1 FROM financial_metrics WHERE metric LIKE 'pref_notional_%' "
+            "AND period_end = ? LIMIT 1", (period_end,)).fetchone()
+        conn.close()
+        if have:
+            return 0
+    except Exception:
+        pass
+
+    url = (f"https://www.sec.gov/Archives/edgar/data/1050446/"
+           f"{accs[idx].replace('-', '')}/{docs[idx]}")
+    html = fetch_html(url)
+    if not html:
+        print(f"Preferred baselines: could not fetch {url}")
+        return 0
+    series = parse_preferred_stock_table(extract_filing_tables(html))
+    if not series:
+        print(f"Preferred baselines: no preferred table parsed in {docs[idx]} — "
+              f"annual dividends stay on the XBRL paid-×4 fallback")
+        return 0
+    try:
+        conn = get_db_connection()
+        for t, e in series.items():
+            conn.execute(
+                """INSERT OR REPLACE INTO financial_metrics (metric, period_end, value, form, filed)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (f'pref_notional_{t}', period_end, e['notional_m'] * 1e6, forms[idx], dates[idx]))
+            conn.execute(
+                """INSERT OR REPLACE INTO financial_metrics (metric, period_end, value, form, filed)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (f'pref_rate_{t}', period_end, e['rate'], forms[idx], dates[idx]))
+        conn.commit()
+        conn.close()
+        total = sum(e['notional_m'] * e['rate'] for e in series.values())
+        print(f"Preferred baselines from {forms[idx]} {period_end}: " +
+              ", ".join(f"{t} ${e['notional_m']:,.0f}M @{e['rate'] * 100:.2f}%"
+                        for t, e in sorted(series.items())) +
+              f" → forward annual ≈ ${total:,.0f}M (+ATM since)")
+        return len(series)
+    except Exception as e:
+        print(f"Preferred baselines DB write failed: {e}")
+        return 0
+
 def cash_refresh_loop():
     """Refresh the quarterly cash + dividend data at startup and every 12 hours."""
     while running:
         try:
             refresh_cash_reserves()
             refresh_dividends()
+            refresh_preferred_baselines()
             sync_official_figures_from_env()
         except Exception as e:
             print(f"Cash refresh loop error: {e}")
@@ -1601,60 +1749,109 @@ def compute_dividend_model():
                 (model_quarter_usd - latest_actual["paid_usd"]) / latest_actual["paid_usd"] * 100, 1)
     return result
 
-def compute_annual_dividends():
-    """Annual dividend obligation — same figure strategy.com publishes,
-    derived automatically from official data (no manual entry).
+def _preferred_atm_added_annual(since_date, rates):
+    """Annualized dividends ($M/yr) added by preferred ATM issuance after a
+    given date: Σ notional sold × that series' rate."""
+    added_m = 0.0
+    try:
+        conn = get_db_connection()
+        rows = conn.execute(
+            "SELECT filing_date, atm_sales FROM purchase_history "
+            "WHERE atm_sales IS NOT NULL AND atm_sales <> '' AND filing_date > ? "
+            "ORDER BY filing_date", (since_date,)).fetchall()
+        conn.close()
+    except Exception as e:
+        print(f"_preferred_atm_added_annual DB error: {e}")
+        return 0.0
+    for row in rows:
+        atm = _safe_json_loads(row["atm_sales"]) or {}
+        if atm.get("period_scoped") is False:
+            continue
+        for s in atm.get("securities", []):
+            t = s.get("ticker")
+            if t not in rates or s.get("counts") is False:
+                continue
+            if (s.get("shares_sold_num") or 0) <= 0:
+                continue
+            notional_m = parse_money(s.get("notional", "-"))
+            if not notional_m:
+                notional_m = parse_money(s.get("net_proceeds", "-"))
+            added_m += (notional_m or 0.0) * (rates[t] or 0.0)
+    return added_m
 
-    strategy.com's "Annual Dividends" (~$1,763M) is the annualized dividend
-    run rate on the preferred stack. We reproduce it from the same official
-    sources: the latest reported quarter of dividends actually paid (SEC
-    XBRL) ×4, plus the annualized cost of preferred notional issued via ATM
-    since that quarter end (rates come from the security names in the
-    filings). Priority: explicit strategy.com override > XBRL-derived >
-    per-series model.
+def compute_annual_dividends():
+    """Annual dividend obligation — the figure strategy.com publishes as
+    "Annual Dividends" (~$1,763M), derived automatically from official SEC
+    data (no manual entry).
+
+    That figure is the FORWARD obligation, Σ outstanding preferred notional
+    × rate — NOT trailing payments (Q1-2026 actually paid $229.5M, ×4 ≈
+    $0.9B, because the stack grows too fast for trailing numbers). Priority:
+      1. strategy.com override (env/POST, optional)
+      2. 10-Q preferred table (notional × rate per series) + preferred ATM
+         issuance since that quarter — reproduces the official figure
+      3. XBRL dividends actually paid ×4 + ATM top-up (understates while
+         the stack grows, but is real and always available)
+      4. per-series model
     """
     off = get_official_metric("official_annual_dividends")
     if off:
         return {"annual_m": round(off["value_m"], 1), "source": "strategy.com",
                 "asof": off.get("period_end"), "detail": None}
 
+    model_rates = {s["ticker"]: s["rate"] for s in compute_dividend_model()["series"]}
+
+    # --- Tier 2: 10-Q per-series notional × rate (forward obligation) ---
+    pref_rows = []
+    try:
+        conn = get_db_connection()
+        pref_rows = conn.execute(
+            "SELECT metric, period_end, value FROM financial_metrics "
+            "WHERE metric LIKE 'pref_%'").fetchall()
+        conn.close()
+    except Exception as e:
+        print(f"compute_annual_dividends pref DB error: {e}")
+    pref_rows = [r for r in pref_rows
+                 if r["metric"].startswith(("pref_notional_", "pref_rate_"))]
+    if pref_rows:
+        latest_pe = max(r["period_end"] for r in pref_rows)
+        notionals, rates_10q = {}, {}
+        for r in pref_rows:
+            if r["period_end"] != latest_pe:
+                continue
+            if r["metric"].startswith("pref_notional_"):
+                notionals[r["metric"][len("pref_notional_"):]] = r["value"] / 1e6
+            else:
+                rates_10q[r["metric"][len("pref_rate_"):]] = r["value"]
+        base_m = 0.0
+        per_series = {}
+        for t, n in notionals.items():
+            rate = rates_10q.get(t) or model_rates.get(t) or 0.0
+            base_m += n * rate
+            per_series[t] = {"notional_m": round(n, 1), "rate": rate,
+                             "annual_m": round(n * rate, 1)}
+        if base_m > 0:
+            added_m = _preferred_atm_added_annual(latest_pe, {**model_rates, **rates_10q})
+            return {"annual_m": round(base_m + added_m, 1), "source": "sec-10q",
+                    "asof": latest_pe,
+                    "detail": {"baseline_annual_m": round(base_m, 1),
+                               "atm_added_annual_m": round(added_m, 1),
+                               "series": per_series}}
+
+    # --- Tier 3: XBRL dividends actually paid ×4 + ATM top-up ---
     latest_q = None
-    rows = []
     try:
         conn = get_db_connection()
         latest_q = conn.execute(
             "SELECT period_end, value FROM financial_metrics "
             "WHERE metric='dividends_paid' ORDER BY period_end DESC LIMIT 1").fetchone()
-        if latest_q:
-            rows = conn.execute(
-                "SELECT filing_date, atm_sales FROM purchase_history "
-                "WHERE atm_sales IS NOT NULL AND atm_sales <> '' AND filing_date > ? "
-                "ORDER BY filing_date", (latest_q["period_end"],)).fetchall()
         conn.close()
     except Exception as e:
         print(f"compute_annual_dividends DB error: {e}")
 
     if latest_q:
         base_annual_m = (latest_q["value"] / 1e6) * 4.0
-        # Preferred stock sold via ATM after the reported quarter adds
-        # notional × rate of new annual dividends on top of the base —
-        # this keeps the figure current between quarterly reports.
-        rates = {s["ticker"]: s["rate"] for s in compute_dividend_model()["series"]}
-        added_m = 0.0
-        for row in rows:
-            atm = _safe_json_loads(row["atm_sales"]) or {}
-            if atm.get("period_scoped") is False:
-                continue
-            for s in atm.get("securities", []):
-                t = s.get("ticker")
-                if t not in rates or s.get("counts") is False:
-                    continue
-                if (s.get("shares_sold_num") or 0) <= 0:
-                    continue
-                notional_m = parse_money(s.get("notional", "-"))
-                if not notional_m:
-                    notional_m = parse_money(s.get("net_proceeds", "-"))
-                added_m += (notional_m or 0.0) * (rates[t] or 0.0)
+        added_m = _preferred_atm_added_annual(latest_q["period_end"], model_rates)
         return {"annual_m": round(base_annual_m + added_m, 1),
                 "source": "xbrl_actual", "asof": latest_q["period_end"],
                 "detail": {"xbrl_quarter_paid_m": round(latest_q["value"] / 1e6, 1),

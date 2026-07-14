@@ -168,6 +168,97 @@ def test_annual_dividends_official_override_wins(temp_db):
     assert annual['annual_m'] == 1763.0
 
 
+# --- Forward annual dividends from the 10-Q preferred table -----------------
+
+FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixtures')
+
+
+def _tenq_tables():
+    with open(os.path.join(FIXTURES, 'tenq_preferred.html')) as f:
+        return bot.extract_filing_tables(f.read())
+
+
+def test_parse_preferred_stock_table(monkeypatch):
+    monkeypatch.setattr(bot, 'EURUSD_RATE', 1.08)
+    series = bot.parse_preferred_stock_table(_tenq_tables())
+    assert series['STRF'] == {'notional_m': 1284.0, 'rate': 0.10}
+    assert series['STRK'] == {'notional_m': 1402.1, 'rate': 0.08}
+    assert series['STRD'] == {'notional_m': 1402.4, 'rate': 0.10}
+    assert series['STRC'] == {'notional_m': 5024.7, 'rate': 0.115}
+    # Euro-denominated series converted to USD
+    assert series['STRE'] == {'notional_m': 837.0, 'rate': 0.10}
+
+
+def test_preferred_table_parser_ignores_atm_tables():
+    # The weekly 8-K ATM tables also name every series — they must not be
+    # mistaken for the outstanding-notional summary
+    with open(os.path.join(FIXTURES, 'july13_hold_atm.html')) as f:
+        tables = bot.extract_filing_tables(f.read())
+    assert bot.parse_preferred_stock_table(tables) == {}
+
+
+def test_annual_dividends_sec10q_tier_beats_xbrl(temp_db):
+    # Forward baseline: Σ notional × rate as of the 10-Q quarter
+    for t, notional, rate in [('STRF', 1284.0, 0.10), ('STRK', 1402.1, 0.08),
+                              ('STRD', 1402.4, 0.10), ('STRC', 5024.7, 0.115),
+                              ('STRE', 837.0, 0.10)]:
+        _insert(temp_db, "INSERT INTO financial_metrics VALUES (?,?,?,?,?)",
+                (f'pref_notional_{t}', '2026-03-31', notional * 1e6, '10-Q', '2026-05-05'))
+        _insert(temp_db, "INSERT INTO financial_metrics VALUES (?,?,?,?,?)",
+                (f'pref_rate_{t}', '2026-03-31', rate, '10-Q', '2026-05-05'))
+    # Trailing paid also present — the forward tier must win
+    _insert(temp_db, "INSERT INTO financial_metrics VALUES ('dividends_paid','2026-03-31',229500000,'10-Q','2026-05-05')", ())
+    # $2,000M STRC sold via ATM after the quarter → +$230M/yr at 11.5%
+    _insert(temp_db,
+            "INSERT INTO purchase_history (filing_date, btc_acquired, atm_sales) VALUES (?,?,?)",
+            ('2026-05-18', '0', _atm_row('STRC', 'STRC Stock Variable Rate Series A Perpetual Stretch Preferred Stock', 2000.0, 1995.0)))
+
+    annual = bot.compute_annual_dividends()
+    assert annual['source'] == 'sec-10q'
+    assert annual['asof'] == '2026-03-31'
+    assert annual['detail']['baseline_annual_m'] == 1042.3
+    assert annual['detail']['atm_added_annual_m'] == 230.0
+    assert annual['annual_m'] == 1272.3
+    assert annual['detail']['series']['STRC']['annual_m'] == 577.8
+
+
+def test_refresh_preferred_baselines_stores_and_skips(temp_db, monkeypatch):
+    submissions = {'filings': {'recent': {
+        'form': ['8-K', '10-Q', '8-K'],
+        'accessionNumber': ['0001-26-1', '0001050446-26-000031', '0001-26-2'],
+        'filingDate': ['2026-07-13', '2026-05-05', '2026-05-01'],
+        'primaryDocument': ['mstr8k.htm', 'mstr-20260331.htm', 'mstr8k2.htm'],
+        'reportDate': ['2026-07-13', '2026-03-31', '2026-05-01'],
+    }}}
+    fetches = []
+
+    def fake_fetch_html(url):
+        fetches.append(url)
+        with open(os.path.join(FIXTURES, 'tenq_preferred.html')) as f:
+            return f.read()
+
+    monkeypatch.setattr(bot, 'EURUSD_RATE', 1.08)
+    monkeypatch.setattr(bot, 'fetch_mstr_filings', lambda use_conditional=False: submissions)
+    monkeypatch.setattr(bot, 'fetch_html', fake_fetch_html)
+
+    assert bot.refresh_preferred_baselines() == 5
+    assert '000105044626000031/mstr-20260331.htm' in fetches[0]
+
+    conn = sqlite3.connect(temp_db)
+    conn.row_factory = sqlite3.Row
+    got = {r['metric']: r['value'] for r in conn.execute(
+        "SELECT metric, value FROM financial_metrics WHERE metric LIKE 'pref_%' "
+        "AND period_end='2026-03-31'")}
+    conn.close()
+    assert got['pref_notional_STRC'] == 5024.7e6
+    assert got['pref_rate_STRC'] == 0.115
+    assert got['pref_notional_STRE'] == 837.0e6
+
+    # Second run: period already stored → no refetch of the 10-Q document
+    assert bot.refresh_preferred_baselines() == 0
+    assert len(fetches) == 1
+
+
 # --- Reserve context for the Telegram alert ---------------------------------
 
 def test_build_reserve_context_months_from_official_annual(temp_db):

@@ -547,14 +547,24 @@ function renderCashCalc(flow) {
     }
     if (cal.monthly_dividend_m) {
         const src = cal.dividend_source === 'strategy.com' ? 'Strategy resmi'
-                  : cal.dividend_source === 'xbrl_actual' ? 'SEC XBRL resmi' : 'model';
+                  : cal.dividend_source === 'sec-10q' ? 'SEC 10-Q resmi (notional × oran)'
+                  : cal.dividend_source === 'xbrl_actual' ? 'SEC XBRL (ödenen ×4)' : 'model';
         let divText = `${formatUsd(cal.monthly_dividend_m * 1e6)}/ay`;
         if (cal.annual_dividend_m) divText += ` — yıllık ${formatUsd(cal.annual_dividend_m * 1e6)}`;
         divText += ` (${src})`;
-        if (cal.dividend_detail && cal.dividend_detail.atm_added_annual_m > 0) {
+        const d = cal.dividend_detail;
+        if (d && d.baseline_annual_m != null) {
+            const seriesBits = d.series ? Object.entries(d.series)
+                .map(([t, s]) => `${t} ${formatUsd(s.notional_m * 1e6)}@%${(s.rate * 100).toFixed(2)}`)
+                .join(' · ') : '';
+            divText += `<br><span class="calc-sub">= 10-Q pref. tablosu (${cal.dividend_asof}) ` +
+                       `${formatUsd(d.baseline_annual_m * 1e6)}/yıl + çeyrek sonrası ATM ihracı ` +
+                       `${formatUsd(d.atm_added_annual_m * 1e6)}/yıl` +
+                       (seriesBits ? `<br>${seriesBits}` : '') + `</span>`;
+        } else if (d && d.atm_added_annual_m > 0) {
             divText += `<br><span class="calc-sub">= son çeyrek ödenen ` +
-                       `${formatUsd(cal.dividend_detail.xbrl_quarter_paid_m * 1e6)} × 4 + ` +
-                       `çeyrek sonrası ATM pref. ihracı ${formatUsd(cal.dividend_detail.atm_added_annual_m * 1e6)}/yıl</span>`;
+                       `${formatUsd(d.xbrl_quarter_paid_m * 1e6)} × 4 + ` +
+                       `çeyrek sonrası ATM pref. ihracı ${formatUsd(d.atm_added_annual_m * 1e6)}/yıl</span>`;
         }
         rows += row('Pref. hisselere temettü yükü', divText, 'calc-info');
     }
@@ -603,7 +613,8 @@ function renderBacktestNote(flow) {
     if (flow.calibration) {
         const c = flow.calibration;
         const srcLabel = c.dividend_source === 'strategy.com' ? 'Strategy resmi'
-                       : c.dividend_source === 'xbrl_actual' ? 'SEC XBRL resmi' : 'model';
+                       : c.dividend_source === 'sec-10q' ? 'SEC 10-Q resmi'
+                       : c.dividend_source === 'xbrl_actual' ? 'SEC XBRL (ödenen ×4)' : 'model';
         const annualBit = c.annual_dividend_m ? ` = yıllık ${formatUsd(c.annual_dividend_m * 1e6)}` : '';
         parts.push(`Temettü: ${formatUsd(c.weekly_dividend_m * 1e6)}/hafta${annualBit} (${srcLabel})` +
                    ` • Kalibre diğer giderler: ${formatUsd(Math.abs(c.other_outflow_per_week_m) * 1e6)}/hafta`);
