@@ -438,24 +438,25 @@ async function fetchCash() {
 
         const latest = actuals[actuals.length - 1];
         const official = flow && flow.official;
-        // Prefer Strategy's own published USD reserve as the headline cash
+        const isReserve = flow && flow.cash_source === 'sec-8k';
+        // Headline cash = the real USD Reserve (from 8-Ks), else strategy.com
+        // override, else the latest quarterly balance.
         if (statCash) {
-            statCash.textContent = (official && official.usd_reserve_m != null)
-                ? formatUsd(official.usd_reserve_m * 1e6)
-                : formatUsd(latest.value);
+            statCash.textContent = (isReserve || latest)
+                ? formatUsd(latest.value)
+                : (official && official.usd_reserve_m != null ? formatUsd(official.usd_reserve_m * 1e6) : '-');
         }
         if (statCashDate) {
             let sub;
-            if (official && official.usd_reserve_m != null) {
+            if (isReserve) {
+                sub = `USD Reserve (SEC 8-K, ${latest.period_end})`;
+            } else if (official && official.usd_reserve_m != null) {
                 sub = `Strategy resmi (${official.asof})`;
-                if (flow && flow.current_estimate) {
-                    sub += ` • Bizim tahmin: ${formatUsd(flow.current_estimate.cash_m * 1e6)}`;
-                }
             } else {
                 sub = `${latest.period_end} itibarıyla (çeyreklik)`;
-                if (flow && flow.current_estimate) {
-                    sub += ` • Tahmini bugün: ${formatUsd(flow.current_estimate.cash_m * 1e6)}`;
-                }
+            }
+            if (flow && flow.current_estimate && !isReserve) {
+                sub += ` • Tahmini: ${formatUsd(flow.current_estimate.cash_m * 1e6)}`;
             }
             if (flow && flow.runway) {
                 sub += ` • Dayanma: ${flow.runway.infinite ? '∞' : '~' + flow.runway.weeks + ' hafta'}`;
@@ -489,22 +490,29 @@ function renderCashCalc(flow) {
         `<tr class="${cls}"><td>${label}</td><td class="calc-amount">${val}</td></tr>`;
 
     const official = flow.official;
-    const anchorLabel = c.since_form === 'strategy.com'
+    const isReserve = flow.cash_source === 'sec-8k';
+    const r0 = flow.runway;
+    const anchorLabel = c.since_form === 'sec-8k'
+        ? `USD Reserve (SEC 8-K, ${c.since})`
+        : c.since_form === 'strategy.com'
         ? `Strategy resmi nakit (strategy.com, ${c.since})`
         : `Son bilanço nakdi (10-Q/10-K, ${c.since})`;
 
     let rows = '';
-    // If Strategy publishes an official reserve, show it up top as ground truth
-    if (official && official.usd_reserve_m != null) {
-        rows += row(`<strong>Strategy resmi USD Reserve (${official.asof})</strong>`,
-                    `<strong>${formatUsd(official.usd_reserve_m * 1e6)}</strong>`, 'calc-total');
+    // Headline: the real current USD Reserve (parsed weekly from the 8-Ks)
+    if (isReserve && r0) {
+        rows += row(`<strong>USD Reserve — gerçek (SEC 8-K, ${r0.basis_date})</strong>`,
+                    `<strong>${formatUsd(r0.basis_cash_m * 1e6)}</strong>`, 'calc-total');
         if (flow.current_estimate) {
             const est = flow.current_estimate.cash_m;
-            const diff = est - official.usd_reserve_m;
+            const diff = est - r0.basis_cash_m;
             rows += row('&nbsp;&nbsp;&nbsp;↳ bizim saf tahmin (kıyas)',
                         `${formatUsd(est * 1e6)} (${diff >= 0 ? '+' : '−'}${formatUsd(Math.abs(diff) * 1e6)} sapma)`,
                         'calc-sub');
         }
+    } else if (official && official.usd_reserve_m != null) {
+        rows += row(`<strong>Strategy resmi USD Reserve (${official.asof})</strong>`,
+                    `<strong>${formatUsd(official.usd_reserve_m * 1e6)}</strong>`, 'calc-total');
     }
     rows += row(anchorLabel, formatUsd(c.from_cash_m * 1e6), 'calc-base');
 
@@ -630,8 +638,11 @@ function renderCashChart(actuals, flow) {
     gradient.addColorStop(0, 'rgba(0, 230, 118, 0.30)');
     gradient.addColorStop(1, 'rgba(0, 230, 118, 0.02)');
 
+    const actualLabel = (flow.cash_source === 'sec-8k')
+        ? 'Gerçek USD Reserve (SEC 8-K, haftalık)'
+        : 'Gerçek (çeyreklik bilanço)';
     const datasets = [{
-        label: 'Gerçek (çeyreklik bilanço)',
+        label: actualLabel,
         data: actualSeries,
         borderColor: '#00e676',
         backgroundColor: gradient,

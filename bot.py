@@ -1247,6 +1247,60 @@ def get_official_metric(metric):
         pass
     return None
 
+# MSTR discloses its USD Reserve (cash held to fund preferred dividends and
+# debt interest) in the text of every weekly 8-K, e.g. "a USD Reserve of
+# $3.0 billion" / "increased its USD Reserve to $3.0 billion". We already
+# fetch that filing — parse the figure straight from the text.
+_usd_reserve_logged = False
+_RESERVE_PATTERNS = [
+    re.compile(r'(?:USD Reserve|U\.?\s*S\.?\s*dollar reserve|cash reserve|dollar reserve)'
+               r'[^.$]{0,90}?\$\s*([\d][\d,.]*)\s*(billion|million)', re.IGNORECASE),
+    re.compile(r'\$\s*([\d][\d,.]*)\s*(billion|million)[^.]{0,60}?'
+               r'(?:USD\s*)?(?:dollar\s*)?reserve', re.IGNORECASE),
+]
+
+def parse_usd_reserve(text):
+    """Extract the disclosed USD Reserve from filing text, in $M. None if absent."""
+    global _usd_reserve_logged
+    if not text:
+        return None
+    for pat in _RESERVE_PATTERNS:
+        m = pat.search(text)
+        if not m:
+            continue
+        try:
+            num = float(m.group(1).replace(',', ''))
+        except (ValueError, AttributeError):
+            continue
+        unit = m.group(2).lower()
+        val_m = num * 1000.0 if unit.startswith('b') else num
+        # Sanity band: a reserve between $100M and $50B
+        if not (100.0 <= val_m <= 50000.0):
+            continue
+        if not _usd_reserve_logged:
+            _usd_reserve_logged = True
+            snippet = text[max(0, m.start() - 40):m.end() + 40].strip()
+            print(f"USD reserve parsed (one-time log): '...{snippet}...' → ${val_m:,.0f}M")
+        return round(val_m, 1)
+    return None
+
+def store_usd_reserve(filing_date, value_m):
+    """Upsert a weekly USD Reserve datapoint (form 'sec-8k')."""
+    if value_m is None or not filing_date:
+        return False
+    try:
+        conn = get_db_connection()
+        conn.execute(
+            """INSERT OR REPLACE INTO financial_metrics (metric, period_end, value, form, filed)
+               VALUES ('usd_reserve', ?, ?, 'sec-8k', ?)""",
+            (filing_date, value_m * 1e6, filing_date))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"store_usd_reserve failed: {e}")
+        return False
+
 def fetch_xbrl_concept(tag):
     """Fetch a raw us-gaap companyconcept payload; None on failure."""
     url = f"https://data.sec.gov/api/xbrl/companyconcept/CIK0001050446/us-gaap/{tag}.json"
@@ -1478,6 +1532,11 @@ def compute_cash_estimate():
         hist = conn.execute(
             "SELECT filing_date, btc_acquired, purchase_price, atm_sales "
             "FROM purchase_history ORDER BY filing_date, id").fetchall()
+        # USD Reserve parsed weekly from the 8-Ks is the primary, most
+        # current real cash series; XBRL quarterly cash is the fallback.
+        reserve_rows = conn.execute(
+            "SELECT period_end, value, form, filed FROM financial_metrics "
+            "WHERE metric='usd_reserve' ORDER BY period_end").fetchall()
         cash_rows = conn.execute(
             "SELECT period_end, value, form, filed FROM financial_metrics "
             "WHERE metric='cash_and_equivalents' ORDER BY period_end").fetchall()
@@ -1528,8 +1587,16 @@ def compute_cash_estimate():
         weekly_div_m = compute_dividend_model()["model_monthly_total_m"] * 12.0 / 52.0
         dividend_source = "model"
 
-    actuals = [{"period_end": r["period_end"], "cash_m": r["value"] / 1e6,
-                "form": (r["form"] if "form" in r.keys() else "10-Q")} for r in cash_rows]
+    # Primary cash series = weekly USD Reserve parsed from the 8-Ks (real,
+    # current). Fall back to XBRL quarterly cash only when no reserve exists.
+    if reserve_rows:
+        actuals = [{"period_end": r["period_end"], "cash_m": r["value"] / 1e6,
+                    "form": "sec-8k"} for r in reserve_rows]
+        cash_source = "sec-8k"
+    else:
+        actuals = [{"period_end": r["period_end"], "cash_m": r["value"] / 1e6,
+                    "form": (r["form"] if "form" in r.keys() else "10-Q")} for r in cash_rows]
+        cash_source = "xbrl"
 
     # Backtest the RAW model between consecutive reported quarters
     backtest = []
@@ -1612,13 +1679,16 @@ def compute_cash_estimate():
     # burn and the calibrated other net flows remain. Prefer Strategy's
     # official published reserve (ground truth) as the basis; else the
     # latest walked estimate; else the last reported balance.
-    latest_official_cash_row = next((a for a in reversed(actuals)
-                                     if a.get("form") == "strategy.com"), None)
+    # Prefer the most recent REAL cash datapoint (weekly USD Reserve from the
+    # 8-Ks, or a strategy.com override) as the runway basis over the walked
+    # estimate.
+    latest_real_cash = next((a for a in reversed(actuals)
+                             if a.get("form") in ("sec-8k", "strategy.com")), None)
     basis_source = None
-    if latest_official_cash_row:
-        basis_cash_m = latest_official_cash_row["cash_m"]
-        basis_date = latest_official_cash_row["period_end"]
-        basis_source = "strategy.com"
+    if latest_real_cash:
+        basis_cash_m = latest_real_cash["cash_m"]
+        basis_date = latest_real_cash["period_end"]
+        basis_source = latest_real_cash["form"]
     elif estimate:
         basis_cash_m = estimate[-1]["cash_m"]
         basis_date = estimate[-1]["date"]
@@ -1730,6 +1800,7 @@ def compute_cash_estimate():
         "change_summary": change,
         "filing_info": filing_info,
         "official": official,
+        "cash_source": cash_source,
     }
 
 def _next_quarter_end(period_end):
@@ -1760,7 +1831,7 @@ def backfill_atm_history(sleep_seconds=1.5):
         # Also re-parse rows stored before fmt 3 (adds the period_scoped
         # guard and column-misalignment sanity checks)
         rows = conn.execute(
-            "SELECT id, url, financing_source FROM purchase_history "
+            "SELECT id, url, financing_source, filing_date FROM purchase_history "
             "WHERE atm_sales IS NULL OR atm_sales = '' "
             "   OR atm_sales NOT LIKE '%\"fmt\": 4%'"
         ).fetchall()
@@ -1789,6 +1860,8 @@ def backfill_atm_history(sleep_seconds=1.5):
                 failed += 1
                 time.sleep(sleep_seconds)
                 continue
+            # Opportunistically extract the USD Reserve from the same fetch
+            store_usd_reserve(row["filing_date"], parse_usd_reserve(clean_html(html)))
             atm = parse_atm_table(extract_filing_tables(html))
             if atm:
                 atm_json = json.dumps(atm, ensure_ascii=False)
@@ -1823,6 +1896,51 @@ def backfill_atm_history(sleep_seconds=1.5):
 
     print(f"ATM backfill done: {filled} filled, {no_table} without ATM data, {failed} fetch failure(s)"
           + (" — failures retry on next boot" if failed else ""))
+
+def backfill_usd_reserves(sleep_seconds=1.5):
+    """Build the weekly USD Reserve series from historical filings.
+
+    Fetches each real 8-K whose date has no usd_reserve datapoint yet and
+    extracts the disclosed reserve. Runs once per new filing; a filing with
+    no reserve statement gets a sentinel row so it isn't re-fetched forever.
+    """
+    try:
+        conn = get_db_connection()
+        rows = conn.execute(
+            "SELECT DISTINCT filing_date, url FROM purchase_history "
+            "WHERE url LIKE '%/Archives/edgar/data/%' "
+            "AND filing_date NOT IN (SELECT period_end FROM financial_metrics WHERE metric='usd_reserve') "
+            "AND filing_date NOT IN (SELECT period_end FROM financial_metrics WHERE metric='usd_reserve_none') "
+            "ORDER BY filing_date DESC").fetchall()
+        conn.close()
+    except Exception as e:
+        print(f"USD reserve backfill: could not list rows: {e}")
+        return
+    if not rows:
+        return
+    print(f"USD reserve backfill: {len(rows)} filing(s) to scan...")
+    found = 0
+    for row in rows:
+        html = fetch_html(row["url"])
+        if html:
+            val_m = parse_usd_reserve(clean_html(html))
+            if val_m is not None:
+                store_usd_reserve(row["filing_date"], val_m)
+                found += 1
+            else:
+                # Mark as scanned-but-absent so we don't re-fetch endlessly
+                try:
+                    conn = get_db_connection()
+                    conn.execute(
+                        "INSERT OR REPLACE INTO financial_metrics (metric, period_end, value, form, filed) "
+                        "VALUES ('usd_reserve_none', ?, 0, 'sec-8k', ?)",
+                        (row["filing_date"], row["filing_date"]))
+                    conn.commit()
+                    conn.close()
+                except Exception:
+                    pass
+        time.sleep(sleep_seconds)
+    print(f"USD reserve backfill done: {found} reserve figure(s) extracted.")
 
 # ----------------- GROQ API INTEGRATION -----------------
 
@@ -2437,6 +2555,15 @@ def process_filing(accession, date, form, url):
     atm_data = parse_atm_table(tables)
     t_parse = time.time()
 
+    # Extract the disclosed USD Reserve from the filing text in the
+    # background — never blocks the alert path.
+    def _extract_reserve():
+        val_m = parse_usd_reserve(clean_html(html_content))
+        if val_m is not None:
+            store_usd_reserve(date, val_m)
+            print(f"USD reserve for {date}: ${val_m:,.0f}M (from 8-K)")
+    threading.Thread(target=_extract_reserve, daemon=True).start()
+
     if fallback_data:
         # Table is present! We can determine event and statistics instantly without Groq.
         print("BTC update table found in filing! Bypassing synchronous Groq call for instant alert.")
@@ -2805,10 +2932,17 @@ def _safe_json_loads(value):
 def get_cash_reserves():
     try:
         conn = get_db_connection()
+        # Primary: weekly USD Reserve parsed from the 8-Ks. Fallback: XBRL
+        # quarterly cash & equivalents.
         rows = conn.execute(
             "SELECT period_end, value, form FROM financial_metrics "
-            "WHERE metric = 'cash_and_equivalents' ORDER BY period_end"
+            "WHERE metric = 'usd_reserve' ORDER BY period_end"
         ).fetchall()
+        if not rows:
+            rows = conn.execute(
+                "SELECT period_end, value, form FROM financial_metrics "
+                "WHERE metric = 'cash_and_equivalents' ORDER BY period_end"
+            ).fetchall()
         conn.close()
         return jsonify([
             {"period_end": r["period_end"], "value": r["value"], "form": r["form"]}
@@ -3287,8 +3421,11 @@ if __name__ == '__main__':
     warmer_thread = threading.Thread(target=connection_warmer_loop, daemon=True)
     warmer_thread.start()
 
-    # Backfill per-security ATM data for historical rows in the background
-    backfill_thread = threading.Thread(target=backfill_atm_history, daemon=True)
+    # Backfill per-security ATM data + the weekly USD Reserve series in the background
+    def _backfill_all():
+        backfill_atm_history()
+        backfill_usd_reserves()
+    backfill_thread = threading.Thread(target=_backfill_all, daemon=True)
     backfill_thread.start()
 
     # Quarterly cash reserves from SEC XBRL (startup + every 12 hours)

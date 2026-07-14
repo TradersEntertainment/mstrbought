@@ -11,8 +11,8 @@
     <!-- FontAwesome icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Chart.js (bundled locally — no CDN dependency) -->
-    <script src="/static/chart.umd.min.js?v=12"></script>
-    <link rel="stylesheet" href="/static/style.css?v=12">
+    <script src="/static/chart.umd.min.js?v=13"></script>
+    <link rel="stylesheet" href="/static/style.css?v=13">
 </head>
 <body>
     <div class="glow-container">
@@ -141,8 +141,8 @@
                 </div>
                 <div class="chart-panel glass-panel" style="margin-top: 1.5rem;">
                     <div class="panel-header">
-                        <h2><i class="fa-solid fa-sack-dollar"></i> MSTR Nakit Rezervi — Gerçek vs Tahmini</h2>
-                        <p>Yeşil: gerçek çeyreklik bilanço (SEC XBRL, 10-Q/10-K). Kesikli cyan: haftalık tahmin (ATM geliri + BTC satışı − BTC alımı − temettü − kalibre edilmiş diğer giderler); her gerçek çeyrekte yeniden sabitlenir. Kesikli kırmızı: hiç BTC/varlık satışı ve ATM olmadan nakdin dayanma projeksiyonu.</p>
+                        <h2><i class="fa-solid fa-sack-dollar"></i> MSTR USD Reserve (Nakit) — Gerçek vs Tahmini</h2>
+                        <p>Yeşil: MSTR'nin her haftalık 8-K'da açıkladığı gerçek USD Reserve (imtiyazlı temettü + borç faizi için tutulan nakit) — otomatik parse edilir, elle giriş yok. Kesikli cyan: bizim haftalık tahminimiz (kıyas için). Kesikli kırmızı: hiç BTC/varlık satışı ve ATM olmadan nakdin dayanma projeksiyonu.</p>
                     </div>
                     <div class="chart-container">
                         <canvas id="cashChart"></canvas>
@@ -224,6 +224,6 @@
     </div>
 
     <!-- Script file -->
-    <script src="/static/dashboard.js?v=12"></script>
+    <script src="/static/dashboard.js?v=13"></script>
 </body>
 </html>
