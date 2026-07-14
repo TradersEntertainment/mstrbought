@@ -547,9 +547,16 @@ function renderCashCalc(flow) {
     }
     if (cal.monthly_dividend_m) {
         const src = cal.dividend_source === 'strategy.com' ? 'Strategy resmi'
-                  : cal.dividend_source === 'xbrl_actual' ? 'XBRL gerçek' : 'model';
-        rows += row('Pref. hisselere aylık temettü yükü',
-                    `${formatUsd(cal.monthly_dividend_m * 1e6)}/ay (${src})`, 'calc-info');
+                  : cal.dividend_source === 'xbrl_actual' ? 'SEC XBRL resmi' : 'model';
+        let divText = `${formatUsd(cal.monthly_dividend_m * 1e6)}/ay`;
+        if (cal.annual_dividend_m) divText += ` — yıllık ${formatUsd(cal.annual_dividend_m * 1e6)}`;
+        divText += ` (${src})`;
+        if (cal.dividend_detail && cal.dividend_detail.atm_added_annual_m > 0) {
+            divText += `<br><span class="calc-sub">= son çeyrek ödenen ` +
+                       `${formatUsd(cal.dividend_detail.xbrl_quarter_paid_m * 1e6)} × 4 + ` +
+                       `çeyrek sonrası ATM pref. ihracı ${formatUsd(cal.dividend_detail.atm_added_annual_m * 1e6)}/yıl</span>`;
+        }
+        rows += row('Pref. hisselere temettü yükü', divText, 'calc-info');
     }
     if (official && (official.pref_m != null || official.debt_m != null)) {
         let bits = [];
@@ -595,8 +602,10 @@ function renderBacktestNote(flow) {
     });
     if (flow.calibration) {
         const c = flow.calibration;
-        parts.push(`Temettü: ${formatUsd(c.weekly_dividend_m * 1e6)}/hafta ` +
-                   `(${c.dividend_source === 'xbrl_actual' ? 'XBRL gerçek' : 'model'})` +
+        const srcLabel = c.dividend_source === 'strategy.com' ? 'Strategy resmi'
+                       : c.dividend_source === 'xbrl_actual' ? 'SEC XBRL resmi' : 'model';
+        const annualBit = c.annual_dividend_m ? ` = yıllık ${formatUsd(c.annual_dividend_m * 1e6)}` : '';
+        parts.push(`Temettü: ${formatUsd(c.weekly_dividend_m * 1e6)}/hafta${annualBit} (${srcLabel})` +
                    ` • Kalibre diğer giderler: ${formatUsd(Math.abs(c.other_outflow_per_week_m) * 1e6)}/hafta`);
     }
     el.innerHTML = parts.join('<br>');

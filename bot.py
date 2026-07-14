@@ -1284,6 +1284,91 @@ def parse_usd_reserve(text):
         return round(val_m, 1)
     return None
 
+def parse_usd_reserve_fast(html):
+    """Sub-millisecond reserve extraction for the alert-critical path.
+
+    Scans the raw HTML for 'reserve', strips tags only in a local window and
+    runs the text patterns on it — avoids a full clean_html parse before the
+    first Telegram message goes out.
+    """
+    if not html:
+        return None
+    for m in re.finditer(r'[Rr]eserve', html):
+        window = html[max(0, m.start() - 2000):m.start() + 2000]
+        text = re.sub(r'<[^>]+>', ' ', window)
+        text = re.sub(r'&nbsp;|&#160;|&amp;', ' ', text)
+        text = re.sub(r'\s+', ' ', text)
+        val = parse_usd_reserve(text)
+        if val is not None:
+            return val
+    return None
+
+def _fmt_musd(m):
+    """Format a $M amount: $450.0M / $3.00B."""
+    if m is None:
+        return "-"
+    return f"${m/1000:.2f}B" if abs(m) >= 1000 else f"${m:.1f}M"
+
+def build_reserve_context(filing_date, html_content):
+    """Parse this filing's USD Reserve, store it, and compute the runway.
+
+    Returns alert-template fields (reserve, change vs previous week, months
+    of coverage) or None when the filing has no reserve statement. Built for
+    the alert path: windowed raw-HTML parse + math over a ~20 row table.
+    """
+    reserve_m = parse_usd_reserve_fast(html_content)
+    if reserve_m is None:
+        return None
+
+    prev_m = None
+    try:
+        conn = get_db_connection()
+        row = conn.execute(
+            "SELECT value FROM financial_metrics WHERE metric='usd_reserve' "
+            "AND period_end < ? ORDER BY period_end DESC LIMIT 1",
+            (filing_date,)).fetchone()
+        conn.close()
+        if row:
+            prev_m = row["value"] / 1e6
+    except Exception:
+        pass
+
+    store_usd_reserve(filing_date, reserve_m)
+
+    ctx = {
+        "usd_reserve_m": reserve_m,
+        "reserve_prev_m": round(prev_m, 1) if prev_m is not None else None,
+        "reserve_change_m": round(reserve_m - prev_m, 1) if prev_m is not None else None,
+        "runway_weeks": None,
+        "runway_months": None,
+        "runway_infinite": False,
+        "annual_div_m": None,
+        "div_source": None,
+    }
+    try:
+        # Months of coverage = reserve ÷ (official annual dividends / 12) —
+        # MSTR's own framing for the reserve ("at least twelve months of
+        # dividends"), using strategy.com's Annual Dividends figure derived
+        # automatically from SEC data.
+        annual = compute_annual_dividends()
+        if annual["annual_m"] > 0:
+            ctx["annual_div_m"] = annual["annual_m"]
+            ctx["div_source"] = annual["source"]
+            ctx["runway_months"] = round(reserve_m / (annual["annual_m"] / 12.0), 1)
+            ctx["runway_weeks"] = round(reserve_m / (annual["annual_m"] / 52.0), 1)
+        else:
+            # No dividend data at all — fall back to the calibrated runway
+            flow = compute_cash_estimate() or {}
+            r = flow.get("runway") or {}
+            if r.get("infinite"):
+                ctx["runway_infinite"] = True
+            elif r.get("weeks") is not None:
+                ctx["runway_weeks"] = r["weeks"]
+                ctx["runway_months"] = round(r["weeks"] / 4.345, 1)
+    except Exception as e:
+        print(f"Reserve runway computation failed: {e}")
+    return ctx
+
 def store_usd_reserve(filing_date, value_m):
     """Upsert a weekly USD Reserve datapoint (form 'sec-8k')."""
     if value_m is None or not filing_date:
@@ -1516,6 +1601,70 @@ def compute_dividend_model():
                 (model_quarter_usd - latest_actual["paid_usd"]) / latest_actual["paid_usd"] * 100, 1)
     return result
 
+def compute_annual_dividends():
+    """Annual dividend obligation — same figure strategy.com publishes,
+    derived automatically from official data (no manual entry).
+
+    strategy.com's "Annual Dividends" (~$1,763M) is the annualized dividend
+    run rate on the preferred stack. We reproduce it from the same official
+    sources: the latest reported quarter of dividends actually paid (SEC
+    XBRL) ×4, plus the annualized cost of preferred notional issued via ATM
+    since that quarter end (rates come from the security names in the
+    filings). Priority: explicit strategy.com override > XBRL-derived >
+    per-series model.
+    """
+    off = get_official_metric("official_annual_dividends")
+    if off:
+        return {"annual_m": round(off["value_m"], 1), "source": "strategy.com",
+                "asof": off.get("period_end"), "detail": None}
+
+    latest_q = None
+    rows = []
+    try:
+        conn = get_db_connection()
+        latest_q = conn.execute(
+            "SELECT period_end, value FROM financial_metrics "
+            "WHERE metric='dividends_paid' ORDER BY period_end DESC LIMIT 1").fetchone()
+        if latest_q:
+            rows = conn.execute(
+                "SELECT filing_date, atm_sales FROM purchase_history "
+                "WHERE atm_sales IS NOT NULL AND atm_sales <> '' AND filing_date > ? "
+                "ORDER BY filing_date", (latest_q["period_end"],)).fetchall()
+        conn.close()
+    except Exception as e:
+        print(f"compute_annual_dividends DB error: {e}")
+
+    if latest_q:
+        base_annual_m = (latest_q["value"] / 1e6) * 4.0
+        # Preferred stock sold via ATM after the reported quarter adds
+        # notional × rate of new annual dividends on top of the base —
+        # this keeps the figure current between quarterly reports.
+        rates = {s["ticker"]: s["rate"] for s in compute_dividend_model()["series"]}
+        added_m = 0.0
+        for row in rows:
+            atm = _safe_json_loads(row["atm_sales"]) or {}
+            if atm.get("period_scoped") is False:
+                continue
+            for s in atm.get("securities", []):
+                t = s.get("ticker")
+                if t not in rates or s.get("counts") is False:
+                    continue
+                if (s.get("shares_sold_num") or 0) <= 0:
+                    continue
+                notional_m = parse_money(s.get("notional", "-"))
+                if not notional_m:
+                    notional_m = parse_money(s.get("net_proceeds", "-"))
+                added_m += (notional_m or 0.0) * (rates[t] or 0.0)
+        return {"annual_m": round(base_annual_m + added_m, 1),
+                "source": "xbrl_actual", "asof": latest_q["period_end"],
+                "detail": {"xbrl_quarter_paid_m": round(latest_q["value"] / 1e6, 1),
+                           "xbrl_annualized_m": round(base_annual_m, 1),
+                           "atm_added_annual_m": round(added_m, 1)}}
+
+    model = compute_dividend_model()
+    return {"annual_m": round(model["model_monthly_total_m"] * 12.0, 1),
+            "source": "model", "asof": None, "detail": None}
+
 def compute_cash_estimate():
     """Weekly estimated cash series, backtested against reported quarters.
 
@@ -1540,9 +1689,6 @@ def compute_cash_estimate():
         cash_rows = conn.execute(
             "SELECT period_end, value, form, filed FROM financial_metrics "
             "WHERE metric='cash_and_equivalents' ORDER BY period_end").fetchall()
-        div_rows = conn.execute(
-            "SELECT period_end, value FROM financial_metrics "
-            "WHERE metric='dividends_paid' ORDER BY period_end").fetchall()
         conn.close()
     except Exception as e:
         print(f"compute_cash_estimate DB error: {e}")
@@ -1574,18 +1720,13 @@ def compute_cash_estimate():
         flows.append({"date": r["filing_date"], "flow_m": atm_m + btc_m,
                       "atm_m": atm_m, "btc_m": btc_m, "atm_detail": atm_detail})
 
-    # Dividend burn priority: Strategy's official annual figure > XBRL
-    # quarterly actual > our per-series model.
-    official_div = get_official_metric("official_annual_dividends")
-    if official_div:
-        weekly_div_m = official_div["value_m"] / 52.0
-        dividend_source = "strategy.com"
-    elif div_rows:
-        weekly_div_m = (div_rows[-1]["value"] / 1e6) / 13.0
-        dividend_source = "xbrl_actual"
-    else:
-        weekly_div_m = compute_dividend_model()["model_monthly_total_m"] * 12.0 / 52.0
-        dividend_source = "model"
+    # Dividend burn = the official ANNUAL figure (strategy.com's "Annual
+    # Dividends" ≈ $1.76B), derived automatically from SEC data — see
+    # compute_annual_dividends for the priority chain.
+    annual_div = compute_annual_dividends()
+    annual_div_m = annual_div["annual_m"]
+    weekly_div_m = annual_div_m / 52.0
+    dividend_source = annual_div["source"]
 
     # Primary cash series = weekly USD Reserve parsed from the 8-Ks (real,
     # current). Fall back to XBRL quarterly cash only when no reserve exists.
@@ -1710,6 +1851,8 @@ def compute_cash_estimate():
             "basis_date": basis_date,
             "basis_source": basis_source,
             "net_burn_per_week_m": round(net_burn_m, 2),
+            "annual_dividend_m": round(annual_div_m, 1),
+            "dividend_source": dividend_source,
             "weeks": None,
             "depletion_date": None,
             "infinite": net_burn_m <= 0,
@@ -1791,8 +1934,11 @@ def compute_cash_estimate():
         "calibration": {
             "weekly_dividend_m": round(weekly_div_m, 2),
             "monthly_dividend_m": round(weekly_div_m * 52.0 / 12.0, 2),
+            "annual_dividend_m": round(annual_div_m, 1),
             "other_outflow_per_week_m": round(other_per_week_m, 2),
             "dividend_source": dividend_source,
+            "dividend_asof": annual_div.get("asof"),
+            "dividend_detail": annual_div.get("detail"),
         },
         "current_estimate": estimate[-1] if estimate else None,
         "runway": runway,
@@ -2146,6 +2292,19 @@ Parsed table data (authoritative — from the filing's own tables):
                     table_context += f"  - {s['ticker']}: no shares sold (remaining capacity {s.get('available', '-')})\n"
             table_context += f"  Total net proceeds: {atm.get('total_net_proceeds', '-')}\n"
 
+        if table_data.get("usd_reserve_m") is not None:
+            table_context += (f"USD Reserve (cash) disclosed in this filing: "
+                              f"{_fmt_musd(table_data['usd_reserve_m'])}")
+            if table_data.get("reserve_change_m"):
+                chg = table_data["reserve_change_m"]
+                table_context += f" ({'+' if chg > 0 else ''}{_fmt_musd(chg)} vs previous week)"
+            if table_data.get("runway_months") is not None and table_data.get("annual_div_m"):
+                table_context += (f" — covers ~{table_data['runway_months']:.0f} months of the "
+                                  f"official annual dividend obligation "
+                                  f"(~{_fmt_musd(table_data['annual_div_m'])}/yr). "
+                                  f"Comment on this coverage in the analysis.")
+            table_context += "\n"
+
     pass2_prompt = f"""Sen bir uzman finans analistsin. Aşağıdaki verileri kullanarak MicroStrategy (Strategy Inc.) hakkında kapsamlı bir Türkçe analiz yaz.
 
 Çıkarılan veriler (Pass 1):
@@ -2307,6 +2466,26 @@ def _breakdown_lines(parsed_data):
         text += f"\n  ↳ {b['period']}: {sign}{count:,} BTC @ {b['avg_price']} ({b['price']})"
     return text
 
+def _reserve_line(parsed_data):
+    """One-line USD Reserve + runway summary for the Telegram templates."""
+    reserve = parsed_data.get("usd_reserve_m")
+    if reserve is None:
+        return ""
+    line = f"\n💵 Nakit (USD Reserve): **{_fmt_musd(reserve)}**"
+    change = parsed_data.get("reserve_change_m")
+    if change:
+        line += f" ({'+' if change > 0 else '−'}{_fmt_musd(abs(change))})"
+    if parsed_data.get("runway_infinite"):
+        line += " → girişler gideri karşılıyor, tükenmiyor"
+    elif parsed_data.get("runway_months") is not None:
+        annual = parsed_data.get("annual_div_m")
+        if annual:
+            line += (f" → yıllık ~{_fmt_musd(annual)} temettü gideriyle "
+                     f"~{parsed_data['runway_months']:.0f} ay yeter")
+        else:
+            line += f" → mevcut giderle ~{parsed_data['runway_months']:.0f} ay yeter"
+    return line
+
 def format_alert(parsed_data, url):
     event_type = parsed_data.get("event_type")
     abs_amount = _abs_amount(parsed_data)
@@ -2326,7 +2505,7 @@ def format_alert(parsed_data, url):
     if event_type == "btc_purchase":
         return f"""🚀 **MSTR BTC ALDI: {plus_amt} BTC!**{inferred_note} (Tutar: {price} | Ort: {avg}){_breakdown_lines(parsed_data)}
 📊 Portföy: {holdings} BTC | Maliyet: {total_cost} (Ort: {avg_cost})
-{_atm_block(parsed_data)}
+{_atm_block(parsed_data)}{_reserve_line(parsed_data)}
 🏦 Toplam Borç (Tahvil): {debt}
 📅 Dönem: {period}
 
@@ -2335,7 +2514,7 @@ def format_alert(parsed_data, url):
     elif event_type == "btc_sale":
         return f"""🚨 **MSTR BTC SATTI: {minus_amt} BTC!**{inferred_note} (Elde Edilen: {price} | Ort: {avg}){_breakdown_lines(parsed_data)}
 📊 Kalan Portföy: {holdings} BTC | Maliyet: {total_cost} (Ort: {avg_cost})
-{_atm_block(parsed_data)}
+{_atm_block(parsed_data)}{_reserve_line(parsed_data)}
 🏦 Toplam Borç (Tahvil): {debt}
 📅 Dönem: {period}
 
@@ -2343,7 +2522,7 @@ def format_alert(parsed_data, url):
 
     elif event_type == "no_purchase":
         return f"""⏸️ **MSTR BTC ALMADI / SATMADI (0 BTC)** — Portföy: {holdings} BTC sabit{_breakdown_lines(parsed_data)}
-{_atm_block(parsed_data, emoji="💵")}
+{_atm_block(parsed_data, emoji="💵")}{_reserve_line(parsed_data)}
 📊 Maliyet: {total_cost} (Ort: {avg_cost}) | Borç: {debt}
 📅 Dönem: {period}
 
@@ -2358,7 +2537,7 @@ def format_alert(parsed_data, url):
             source_block = f"💵 **MSTR Yeni Finansman/Hisse İhraç:** {source}"
         summary = parsed_data.get('summary_turkish')
         summary_block = f"\n**Özet (Analist Yorumu):**\n{summary}\n" if summary else ""
-        return f"""{source_block}
+        return f"""{source_block}{_reserve_line(parsed_data)}
 {summary_block}
 🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
 
@@ -2517,7 +2696,7 @@ def async_groq_analysis(cleaned_text, url, reply_to_id, table_data=None):
 
 {summary}
 
-{stats_block}
+{stats_block}{_reserve_line(table_data)}
 
 🔗 [Resmi SEC Bildirimi (Form 8-K)]({url})"""
         
@@ -2555,14 +2734,21 @@ def process_filing(accession, date, form, url):
     atm_data = parse_atm_table(tables)
     t_parse = time.time()
 
-    # Extract the disclosed USD Reserve from the filing text in the
-    # background — never blocks the alert path.
-    def _extract_reserve():
-        val_m = parse_usd_reserve(clean_html(html_content))
-        if val_m is not None:
-            store_usd_reserve(date, val_m)
-            print(f"USD reserve for {date}: ${val_m:,.0f}M (from 8-K)")
-    threading.Thread(target=_extract_reserve, daemon=True).start()
+    # Parse the disclosed USD Reserve for the alert itself (fast windowed
+    # parse — sub-ms) so the first Telegram message can state cash + months
+    # of coverage. If the fast parse misses, retry with the full-text parse
+    # in the background so the weekly series never loses a datapoint.
+    reserve_ctx = build_reserve_context(date, html_content)
+    if reserve_ctx is not None:
+        print(f"USD reserve for {date}: ${reserve_ctx['usd_reserve_m']:,.0f}M "
+              f"(~{reserve_ctx.get('runway_months')} ay temettü karşılığı)")
+    else:
+        def _extract_reserve():
+            val_m = parse_usd_reserve(clean_html(html_content))
+            if val_m is not None:
+                store_usd_reserve(date, val_m)
+                print(f"USD reserve for {date}: ${val_m:,.0f}M (from 8-K, full-text parse)")
+        threading.Thread(target=_extract_reserve, daemon=True).start()
 
     if fallback_data:
         # Table is present! We can determine event and statistics instantly without Groq.
@@ -2571,6 +2757,8 @@ def process_filing(accession, date, form, url):
         if atm_data and atm_data.get("period_scoped", True):
             fallback_data["atm"] = atm_data
             fallback_data["financing_details"] = financing_source_from_atm(atm_data)
+        if reserve_ctx:
+            fallback_data.update(reserve_ctx)
 
         # SPEED: Send Telegram FIRST, then save to DB async
         main_msg_id = None
@@ -2610,6 +2798,8 @@ def process_filing(accession, date, form, url):
             "financing_details": financing_source_from_atm(atm_data),
             "purchase_period": atm_data.get("period"),
         }
+        if reserve_ctx:
+            atm_parsed.update(reserve_ctx)
 
         main_msg_id = None
         if should_alert:
