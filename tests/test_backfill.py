@@ -131,7 +131,7 @@ def test_backfill_reparses_pre_fmt2_rows(temp_db, monkeypatch):
 
     row = get_row(temp_db, row_id)
     atm = json.loads(row['atm_sales'])
-    assert atm['fmt'] == 3
+    assert atm['fmt'] == 4
     assert atm['period_scoped'] is True
 
     # fmt-2 rows are not fetched again

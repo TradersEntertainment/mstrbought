@@ -50,7 +50,7 @@ def test_no_atm_table_returns_none():
 def test_weekly_table_is_period_scoped():
     atm = bot.parse_atm_table(load_tables('july13_hold_atm.html'))
     assert atm['period_scoped'] is True
-    assert atm['fmt'] == 3
+    assert atm['fmt'] == 4
 
 
 def test_net_proceeds_clamped_to_notional_when_impossible():
@@ -68,7 +68,7 @@ def test_net_proceeds_clamped_to_notional_when_impossible():
 
 def test_fmt_bumped_to_3():
     atm = bot.parse_atm_table(load_tables('july13_hold_atm.html'))
-    assert atm['fmt'] == 3
+    assert atm['fmt'] == 4
 
 
 def test_cumulative_program_table_is_not_period_scoped():
@@ -79,6 +79,23 @@ def test_cumulative_program_table_is_not_period_scoped():
     assert atm['period'] is None
     assert atm['period_scoped'] is False
     assert atm['sold_tickers'] == ['STRC']  # parsed, but flagged
+
+
+def test_long_period_window_is_not_weekly():
+    """A 'During Period' table spanning months (cumulative program) must
+    not be counted as one week — the likely cause of an inflated STRC total."""
+    long_html = """<table>
+    <tr><td>&nbsp;</td><td colspan="4">During Period July 8, 2025 to May 17, 2026</td></tr>
+    <tr><td>Security</td><td>Shares Sold</td><td>Notional Value (in millions)</td><td>Net Proceeds (in millions)</td><td>Available for Issuance and Sale (in millions)</td></tr>
+    <tr><td>STRC Stock Variable Rate Series A Perpetual Stretch Preferred Stock</td><td>53,000,000</td><td>$</td><td>5,350.0</td><td>$</td><td>5,320.0</td><td>$</td><td>17,510.8</td></tr>
+    </table>"""
+    atm = bot.parse_atm_table(bot.extract_filing_tables(long_html))
+    assert atm['period_days'] == 313
+    assert atm['period_scoped'] is False
+
+    weekly = bot.parse_atm_table(load_tables('atm_misaligned.html'))
+    assert weekly['period_days'] == 6
+    assert weekly['period_scoped'] is True
 
 
 def test_financing_source_from_atm():

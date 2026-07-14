@@ -358,7 +358,7 @@ def _migrate_repair_july_2026_rows(conn):
 # table), in the exact shape parse_atm_table produces — backfilled so the
 # dashboard shows WHICH security raised the cash for that week too.
 _JULY13_ATM_JSON = {
-    "fmt": 3,
+    "fmt": 4,
     "period_scoped": True,
     "period": "July 6, 2026 to July 12, 2026",
     "securities": [
@@ -950,6 +950,22 @@ def parse_atm_table(tables):
                     period = cell.replace('During Period ', '').replace('*', '').strip()
                     break
 
+        # A genuine WEEKLY table spans ~5-7 days. A cumulative program
+        # summary ("July 2025 to May 2026") also matches the same headers
+        # but must never be counted as one week's proceeds. Reject any
+        # period window wider than 14 days as non-weekly.
+        period_days = None
+        if period:
+            pdates = re.findall(r'([A-Z][a-z]+ \d{1,2}, \d{4})', period)
+            if len(pdates) >= 2:
+                try:
+                    d0 = datetime.strptime(pdates[0], "%B %d, %Y")
+                    d1 = datetime.strptime(pdates[-1], "%B %d, %Y")
+                    period_days = (d1 - d0).days
+                except ValueError:
+                    period_days = None
+        is_weekly = bool(period) and (period_days is None or period_days <= 14)
+
         # Column order after the security-name cell, with money units
         value_keys = []
         for h in row_data[header_idx]:
@@ -1048,13 +1064,14 @@ def parse_atm_table(tables):
         return {
             # fmt 3 = period_scoped + column-misalignment sanity guards;
             # the backfill re-parses any stored JSON older than this format
-            "fmt": 3,
+            "fmt": 4,
             "period": period,
-            # Only tables covering a "During Period" window are weekly
-            # sales. Cumulative program summaries ("sold to date") match
-            # the same column headers but must NEVER be counted as one
-            # week's proceeds — that inflates the cash estimate massively.
-            "period_scoped": bool(period),
+            "period_days": period_days,
+            # Only weekly ("During Period", ≤14 days) tables count as one
+            # week's sales. Cumulative program summaries match the same
+            # headers but must NEVER be counted — that inflates the cash
+            # estimate massively.
+            "period_scoped": is_weekly,
             "securities": securities,
             "sold_tickers": [s["ticker"] for s in sold],
             "sold_any": bool(sold),
@@ -1591,8 +1608,8 @@ def _next_quarter_end(period_end):
 
 # ----------------- HISTORICAL ATM BACKFILL -----------------
 
-ATM_SENTINEL_NO_TABLE = {"fmt": 3, "sold_any": False, "securities": [], "note": "no_atm_table"}
-ATM_SENTINEL_NO_DOC = {"fmt": 3, "sold_any": False, "securities": [], "note": "no_fetchable_doc"}
+ATM_SENTINEL_NO_TABLE = {"fmt": 4, "sold_any": False, "securities": [], "note": "no_atm_table"}
+ATM_SENTINEL_NO_DOC = {"fmt": 4, "sold_any": False, "securities": [], "note": "no_fetchable_doc"}
 
 def backfill_atm_history(sleep_seconds=1.5):
     """Re-read historical filings and fill missing per-security ATM data.
@@ -1610,7 +1627,7 @@ def backfill_atm_history(sleep_seconds=1.5):
         rows = conn.execute(
             "SELECT id, url, financing_source FROM purchase_history "
             "WHERE atm_sales IS NULL OR atm_sales = '' "
-            "   OR atm_sales NOT LIKE '%\"fmt\": 3%'"
+            "   OR atm_sales NOT LIKE '%\"fmt\": 4%'"
         ).fetchall()
         conn.close()
     except Exception as e:
@@ -2725,6 +2742,93 @@ def get_atm_audit():
     except Exception as e:
         print(f"/api/atm_audit error: {e}")
         return jsonify({"weeks": [], "counted_totals_by_ticker_m": {}})
+
+@app.route('/audit')
+def atm_audit_page():
+    """Human-readable ATM audit: every parsed weekly sale with its raw
+    stored values, implied per-share price, and filing link — open this to
+    trace any suspicious total (e.g. STRC) to the exact week and filing."""
+    data = get_atm_audit().get_json()
+    weeks = data.get("weeks", [])
+    totals = data.get("counted_totals_by_ticker_m", {})
+
+    def esc(x):
+        return (str(x) if x is not None else "-").replace("&", "&amp;").replace("<", "&lt;")
+
+    total_rows = "".join(
+        f"<li><b>{esc(t)}</b>: ${v:,.1f}M (${v/1000:,.2f}B)</li>"
+        for t, v in sorted(totals.items(), key=lambda kv: -kv[1]))
+
+    def period_span_days(period):
+        # A weekly table spans ~5-7 days; a cumulative one spans months.
+        if not period:
+            return None
+        try:
+            import datetime as _dt
+            dates = re.findall(r'([A-Z][a-z]+ \d{1,2}, \d{4})', period)
+            if len(dates) >= 2:
+                d0 = _dt.datetime.strptime(dates[0], "%B %d, %Y")
+                d1 = _dt.datetime.strptime(dates[-1], "%B %d, %Y")
+                return (d1 - d0).days
+        except Exception:
+            return None
+        return None
+
+    body = []
+    for w in weeks:
+        span = period_span_days(w.get("period"))
+        long_period = span is not None and span > 14
+        for s in w.get("securities", []):
+            implied = s.get("implied_price_usd")
+            suspect = s.get("suspect")
+            # Highlight rows with an implausible per-share price or a
+            # suspiciously long (cumulative-looking) period window
+            bad = (suspect is not None) or long_period or (implied is not None and (
+                implied > (5000 if s.get("ticker") == "MSTR" else 1000) or implied < 5))
+            style = ' style="background:#3a1414"' if bad else ''
+            counted = "✅" if s.get("counts") else "❌ sayılmıyor"
+            period_cell = esc(w.get("period"))
+            if long_period:
+                period_cell += f" <b style='color:#fbbf24'>⚠ {span} gün</b>"
+            body.append(
+                f"<tr{style}>"
+                f"<td>{esc(w['filing_date'])}</td>"
+                f"<td style='font-size:.72rem;color:#9ca3af'>{period_cell}</td>"
+                f"<td><b>{esc(s.get('ticker'))}</b></td>"
+                f"<td style='text-align:right'>{esc(s.get('shares_sold'))}</td>"
+                f"<td style='text-align:right'>{esc(s.get('notional'))}</td>"
+                f"<td style='text-align:right'>{esc(s.get('net_proceeds'))}</td>"
+                f"<td style='text-align:right'>{esc(s.get('available'))}</td>"
+                f"<td style='text-align:right'>{('$'+format(implied, ',.2f')) if implied is not None else '-'}</td>"
+                f"<td>{counted}</td>"
+                f"<td style='color:#f87171'>{esc(suspect) if suspect else ''}</td>"
+                f"<td><a href='{esc(w.get('url'))}' target='_blank'>filing</a></td>"
+                f"</tr>")
+
+    html = f"""<!DOCTYPE html><html lang="tr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ATM Denetim</title>
+<style>
+body{{background:#0b0e17;color:#e5e7eb;font-family:system-ui,sans-serif;padding:1rem;margin:0}}
+h1{{font-size:1.1rem}} p{{color:#9ca3af;font-size:.85rem}}
+ul{{color:#e5e7eb}} .wrap{{overflow-x:auto}}
+table{{border-collapse:collapse;width:100%;font-size:.8rem;min-width:820px}}
+th,td{{padding:.4rem .5rem;border-bottom:1px solid #1f2937;white-space:nowrap}}
+th{{color:#9ca3af;text-align:left;position:sticky;top:0;background:#0b0e17}}
+a{{color:#38bdf8}}
+</style></head><body>
+<h1>ATM Satış Denetimi (hafta hafta)</h1>
+<p>Hesaba katılan ürün bazlı toplamlar (nakit tahmininde kullanılan):</p>
+<ul>{total_rows or '<li>veri yok</li>'}</ul>
+<p>Kırmızı satırlar = hisse başı ima fiyatı mantıksız veya sütun kayması şüphesi. "Net Proceeds" sütununu
+gerçek filing ile karşılaştır (filing linkine tıkla). İmtiyazlı hisseler ~$80-105, MSTR daha yüksek olmalı.</p>
+<div class="wrap"><table>
+<thead><tr><th>Tarih</th><th>Dönem</th><th>Ürün</th><th>Adet</th><th>Nominal</th><th>Net Gelir</th>
+<th>Kalan Kapasite</th><th>Hisse/$</th><th>Sayılıyor?</th><th>Şüphe</th><th>Kaynak</th></tr></thead>
+<tbody>{''.join(body) or '<tr><td colspan=10>Henüz ATM verisi yok (backfill sürüyor olabilir)</td></tr>'}</tbody>
+</table></div>
+</body></html>"""
+    return html
 
 @app.route('/api/dividends')
 def get_dividends():
