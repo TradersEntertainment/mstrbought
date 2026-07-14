@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MSTR SEC Filings Monitor & Portfolio Dashboard</title>
+    <meta name="color-scheme" content="dark">
+    <title>MSTR Monitor — SEC Filings & Portfolio Dashboard</title>
     <!-- Google Fonts: Inter & Outfit -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -11,117 +12,78 @@
     <!-- FontAwesome icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Chart.js (bundled locally — no CDN dependency) -->
-    <script src="/static/chart.umd.min.js?v=15"></script>
-    <link rel="stylesheet" href="/static/style.css?v=15">
+    <script src="/static/chart.umd.min.js?v=16"></script>
+    <link rel="stylesheet" href="/static/style.css?v=16">
 </head>
 <body>
-    <div class="glow-container">
+    <div class="glow-container" aria-hidden="true">
         <div class="glow-sphere glow-sphere-1"></div>
         <div class="glow-sphere glow-sphere-2"></div>
     </div>
 
-    <div class="app-container">
-        <!-- Header -->
-        <header class="dashboard-header">
-            <div class="logo-area">
-                <i class="fa-brands fa-bitcoin logo-icon"></i>
-                <div class="logo-text">
-                    <h1>MSTR Monitor</h1>
-                    <p>SEC Edgar real-time tracker</p>
-                </div>
-            </div>
-            <div class="status-badge-container">
-                <div class="status-badge" id="botStatusBadge">
-                    <span class="pulse-dot"></span>
-                    <span id="botModeText">Normal Mod</span>
-                </div>
-            </div>
-        </header>
-
-        <!-- Stats Grid -->
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="card-inner">
-                    <div class="icon-box cyan">
-                        <i class="fa-solid fa-coins"></i>
-                    </div>
-                    <div class="stat-info">
-                        <h3>Toplam BTC Portföyü</h3>
-                        <p class="value" id="statTotalHoldings">-</p>
-                    </div>
-                </div>
-            </div>
-            <div class="stat-card">
-                <div class="card-inner">
-                    <div class="icon-box green">
-                        <i class="fa-solid fa-money-bill-trend-up"></i>
-                    </div>
-                    <div class="stat-info">
-                        <h3>Toplam Maliyet</h3>
-                        <p class="value" id="statTotalCost">-</p>
-                    </div>
-                </div>
-            </div>
-            <div class="stat-card">
-                <div class="card-inner">
-                    <div class="icon-box purple">
-                        <i class="fa-solid fa-tag"></i>
-                    </div>
-                    <div class="stat-info">
-                        <h3>Ortalama Maliyet</h3>
-                        <p class="value" id="statAvgCost">-</p>
-                    </div>
-                </div>
-            </div>
-            <div class="stat-card">
-                <div class="card-inner">
-                    <div class="icon-box blue">
-                        <i class="fa-solid fa-building-columns"></i>
-                    </div>
-                    <div class="stat-info">
-                        <h3>Toplam Borç (Tahvil)</h3>
-                        <p class="value" id="statTotalDebt">-</p>
-                    </div>
-                </div>
-            </div>
-            <div class="stat-card">
-                <div class="card-inner">
-                    <div class="icon-box green">
-                        <i class="fa-solid fa-sack-dollar"></i>
-                    </div>
-                    <div class="stat-info">
-                        <h3>Nakit Rezervi</h3>
-                        <p class="value" id="statCash">-</p>
-                        <p class="stat-subtext" id="statCashDate"></p>
-                    </div>
-                </div>
+    <!-- Sticky top bar -->
+    <header class="topbar">
+        <div class="brand">
+            <i class="fa-brands fa-bitcoin logo-icon"></i>
+            <div class="logo-text">
+                <h1>MSTR Monitor</h1>
+                <p>SEC EDGAR gerçek zamanlı takip</p>
             </div>
         </div>
-
-        <!-- Operations Area -->
-        <div class="actions-panel glass-panel">
-            <div class="panel-header">
-                <h2><i class="fa-solid fa-gears"></i> Yönetim & Manuel Test Paneli</h2>
-                <p>Botu zorla tetikleyin veya en son bildirimi test edin. <span id="lastCheckSubtext" style="color: var(--text-secondary); font-size: 0.8rem; margin-left: 10px;">Son sorgu: -</span></p>
-            </div>
-            <div class="buttons-row">
-                <button class="btn btn-primary" id="btnForceCheck">
-                    <i class="fa-solid fa-rotate"></i> Zorla SEC Kontrolü Yap
-                </button>
-                <button class="btn btn-secondary" id="btnSimulateAlert">
-                    <i class="fa-solid fa-vial"></i> Son Alım Bildirimini Test Et
-                </button>
-            </div>
-            <div class="console-box" id="consoleOutput">
-                <span class="prompt">$</span> <span class="message">Komut bekliyor...</span>
+        <div class="topbar-right">
+            <span class="last-check" id="lastCheckSubtext">Son sorgu: -</span>
+            <div class="status-badge" id="botStatusBadge">
+                <span class="pulse-dot"></span>
+                <span id="botModeText">Normal Mod</span>
             </div>
         </div>
+    </header>
 
-        <!-- Main Dashboard Content -->
+    <main class="shell">
+        <!-- Stats strip -->
+        <section class="stats-grid" aria-label="Özet istatistikler">
+            <div class="stat-card">
+                <div class="icon-box cyan"><i class="fa-solid fa-coins"></i></div>
+                <div class="stat-info">
+                    <h3>Toplam BTC Portföyü</h3>
+                    <p class="value" id="statTotalHoldings">-</p>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="icon-box green"><i class="fa-solid fa-money-bill-trend-up"></i></div>
+                <div class="stat-info">
+                    <h3>Toplam Maliyet</h3>
+                    <p class="value" id="statTotalCost">-</p>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="icon-box purple"><i class="fa-solid fa-tag"></i></div>
+                <div class="stat-info">
+                    <h3>Ortalama Maliyet</h3>
+                    <p class="value" id="statAvgCost">-</p>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="icon-box blue"><i class="fa-solid fa-building-columns"></i></div>
+                <div class="stat-info">
+                    <h3>Toplam Borç (Tahvil)</h3>
+                    <p class="value" id="statTotalDebt">-</p>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="icon-box amber"><i class="fa-solid fa-sack-dollar"></i></div>
+                <div class="stat-info">
+                    <h3>Nakit Rezervi</h3>
+                    <p class="value" id="statCash">-</p>
+                    <p class="stat-subtext" id="statCashDate"></p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Main grid: charts first, tables on the rail -->
         <div class="dashboard-main">
-            <!-- Left Panel: Charts -->
-            <div class="charts-column">
-                <div class="chart-panel glass-panel">
+            <section class="charts-column">
+                <div class="chart-panel glass-panel panel-portfolio">
                     <div class="panel-header">
                         <h2><i class="fa-solid fa-chart-line"></i> BTC Portföy Büyümesi</h2>
                         <p>MicroStrategy kümülatif Bitcoin birikimi ve maliyet grafiği.</p>
@@ -130,7 +92,8 @@
                         <canvas id="portfolioChart"></canvas>
                     </div>
                 </div>
-                <div class="chart-panel glass-panel" style="margin-top: 1.5rem;">
+
+                <div class="chart-panel glass-panel panel-flow">
                     <div class="panel-header">
                         <h2><i class="fa-solid fa-arrows-up-down"></i> BTC Akışı vs ATM Finansmanı</h2>
                         <p>Dönemlik BTC alım/satımı (yukarı yeşil / aşağı kırmızı) ve aynı dönemde satılan menkul kıymetler (aşağı, $M net gelir).</p>
@@ -139,7 +102,8 @@
                         <canvas id="flowChart"></canvas>
                     </div>
                 </div>
-                <div class="chart-panel glass-panel" style="margin-top: 1.5rem;">
+
+                <div class="chart-panel glass-panel panel-cash">
                     <div class="panel-header">
                         <h2><i class="fa-solid fa-sack-dollar"></i> MSTR USD Reserve (Nakit) — Gerçek vs Tahmini</h2>
                         <p>Yeşil: MSTR'nin her haftalık 8-K'da açıkladığı gerçek USD Reserve (imtiyazlı temettü + borç faizi için tutulan nakit) — otomatik parse edilir, elle giriş yok. Kesikli cyan: bizim haftalık tahminimiz (kıyas için). Kesikli kırmızı: hiç BTC/varlık satışı ve ATM olmadan nakdin dayanma projeksiyonu.</p>
@@ -151,19 +115,19 @@
                     <div class="cash-calc" id="cashCalc"></div>
                     <p class="panel-footnote" id="cashBacktestNote"></p>
                 </div>
-                <div class="chart-panel glass-panel" style="margin-top: 1.5rem;">
+
+                <div class="chart-panel glass-panel panel-debt">
                     <div class="panel-header">
                         <h2><i class="fa-solid fa-building-columns"></i> MSTR Toplam Borç Değişimi</h2>
                         <p>MicroStrategy ihraç ettiği güncel tahvil borçlarının zaman serisi ($ Milyar).</p>
                     </div>
-                    <div class="chart-container">
+                    <div class="chart-container chart-container-short">
                         <canvas id="debtChart"></canvas>
                     </div>
                 </div>
-            </div>
+            </section>
 
-            <!-- Right Column: History Table + Dividends -->
-            <div class="right-column">
+            <aside class="right-column">
                 <div class="history-panel glass-panel">
                     <div class="panel-header">
                         <h2><i class="fa-solid fa-list-check"></i> Son SEC Bildirim Logları</h2>
@@ -189,6 +153,7 @@
                         </table>
                     </div>
                 </div>
+
                 <div class="history-panel glass-panel">
                     <div class="panel-header">
                         <h2><i class="fa-solid fa-hand-holding-dollar"></i> Temettü Ödeyen Ürünler &amp; Aylık Gider</h2>
@@ -213,9 +178,35 @@
                     </div>
                     <p class="panel-footnote" id="dividendSummary"></p>
                 </div>
-            </div>
+            </aside>
         </div>
-    </div>
+
+        <!-- Admin / manual test -->
+        <section class="actions-panel glass-panel">
+            <div class="panel-header">
+                <h2><i class="fa-solid fa-gears"></i> Yönetim &amp; Manuel Test Paneli</h2>
+                <p>Botu zorla tetikleyin veya en son bildirimi test edin.</p>
+            </div>
+            <div class="buttons-row">
+                <button class="btn btn-primary" id="btnForceCheck">
+                    <i class="fa-solid fa-rotate"></i> Zorla SEC Kontrolü Yap
+                </button>
+                <button class="btn btn-secondary" id="btnSimulateAlert">
+                    <i class="fa-solid fa-vial"></i> Son Alım Bildirimini Test Et
+                </button>
+            </div>
+            <div class="console-box" id="consoleOutput">
+                <span class="prompt">$</span> <span class="message">Komut bekliyor...</span>
+            </div>
+        </section>
+
+        <footer class="site-footer">
+            Veriler doğrudan SEC EDGAR'dan (8-K, 10-Q, XBRL) otomatik çekilir.
+            Haftalık ATM rakamlarını filing linkleriyle denetlemek için:
+            <a href="/audit" class="table-link">/audit</a> ·
+            <a href="/api/atm_audit" class="table-link">/api/atm_audit</a>
+        </footer>
+    </main>
 
     <!-- Toast Notification -->
     <div class="toast" id="notificationToast">
@@ -224,6 +215,6 @@
     </div>
 
     <!-- Script file -->
-    <script src="/static/dashboard.js?v=15"></script>
+    <script src="/static/dashboard.js?v=16"></script>
 </body>
 </html>

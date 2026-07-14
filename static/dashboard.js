@@ -11,13 +11,13 @@ function showToast(message, isError = false) {
 
     toastMsg.textContent = message;
     if (isError) {
-        toast.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+        toast.style.borderColor = 'rgba(248, 113, 113, 0.4)';
         toastIcon.className = 'fa-solid fa-circle-xmark';
-        toastIcon.style.color = '#ef4444';
+        toastIcon.style.color = '#f87171';
     } else {
-        toast.style.borderColor = 'rgba(0, 229, 255, 0.3)';
+        toast.style.borderColor = 'rgba(34, 211, 238, 0.3)';
         toastIcon.className = 'fa-solid fa-circle-check';
-        toastIcon.style.color = '#00e5ff';
+        toastIcon.style.color = '#22d3ee';
     }
 
     toast.classList.add('show');
@@ -172,7 +172,7 @@ async function fetchHistory() {
 
     } catch (error) {
         console.error('History fetch error:', error);
-        document.getElementById('historyTableBody').innerHTML = `<tr><td colspan="6" class="loading-cell" style="color: #ef4444;">Veriler yüklenirken hata oluştu!</td></tr>`;
+        document.getElementById('historyTableBody').innerHTML = `<tr><td colspan="6" class="loading-cell" style="color: #f87171;">Veriler yüklenirken hata oluştu!</td></tr>`;
     }
 }
 
@@ -199,8 +199,8 @@ function renderPortfolioChart(chartData) {
                 {
                     label: 'Toplam BTC Varlığı',
                     data: holdings,
-                    borderColor: '#00e5ff',
-                    backgroundColor: 'rgba(0, 229, 255, 0.04)',
+                    borderColor: '#22d3ee',
+                    backgroundColor: 'rgba(34, 211, 238, 0.04)',
                     borderWidth: 3,
                     fill: true,
                     tension: 0.3,
@@ -209,8 +209,8 @@ function renderPortfolioChart(chartData) {
                 {
                     label: 'Toplam Kümülatif Maliyet ($ Milyar)',
                     data: costs,
-                    borderColor: '#2979ff',
-                    backgroundColor: 'rgba(41, 121, 255, 0.02)',
+                    borderColor: '#60a5fa',
+                    backgroundColor: 'rgba(96, 165, 250, 0.02)',
                     borderWidth: 2,
                     borderDash: [5, 5],
                     fill: false,
@@ -225,7 +225,7 @@ function renderPortfolioChart(chartData) {
             plugins: {
                 legend: {
                     labels: {
-                        color: '#9ca3af',
+                        color: '#97a3b6',
                         font: { family: 'Inter', size: 11 }
                     }
                 },
@@ -236,28 +236,28 @@ function renderPortfolioChart(chartData) {
             },
             scales: {
                 x: {
-                    grid: { color: 'rgba(255,255,255,0.03)' },
-                    ticks: { color: '#9ca3af', font: { family: 'Inter', size: 10 } }
+                    grid: { color: 'rgba(148,163,184,0.05)' },
+                    ticks: { color: '#97a3b6', font: { family: 'Inter', size: 10 } }
                 },
                 y: {
                     position: 'left',
-                    grid: { color: 'rgba(255,255,255,0.05)' },
+                    grid: { color: 'rgba(148,163,184,0.08)' },
                     ticks: {
-                        color: '#00e5ff',
+                        color: '#22d3ee',
                         font: { family: 'Inter', size: 10 },
                         callback: function(value) { return value.toLocaleString('tr-TR'); }
                     },
-                    title: { display: true, text: 'BTC Miktarı', color: '#00e5ff' }
+                    title: { display: true, text: 'BTC Miktarı', color: '#22d3ee' }
                 },
                 y1: {
                     position: 'right',
                     grid: { drawOnChartArea: false },
                     ticks: {
-                        color: '#2979ff',
+                        color: '#60a5fa',
                         font: { family: 'Inter', size: 10 },
                         callback: function(value) { return '$' + value + 'B'; }
                     },
-                    title: { display: true, text: 'Maliyet ($ Milyar)', color: '#2979ff' }
+                    title: { display: true, text: 'Maliyet ($ Milyar)', color: '#60a5fa' }
                 }
             }
         }
@@ -278,12 +278,16 @@ function renderFlowChart(chartData) {
         return isNaN(num) ? 0 : num;
     });
 
+    // Categorical identity per security — validated as a set (lightness
+    // band, CVD adjacent-pair separation, ≥3:1 contrast on the dark
+    // surface). Fixed assignment: color follows the ticker, never its rank.
+    // Green/red stay reserved for the BTC up/down bars in the same chart.
     const TICKER_COLORS = {
-        MSTR: '#2979ff',
-        STRC: '#00e5ff',
-        STRK: '#7c4dff',
-        STRF: '#00e676',
-        STRD: '#fbbf24'
+        MSTR: '#3b82f6',
+        STRC: '#d97706',
+        STRK: '#8b5cf6',
+        STRF: '#0891b2',
+        STRD: '#db2777'
     };
 
     const tickerData = {};
@@ -335,8 +339,8 @@ function renderFlowChart(chartData) {
                 {
                     label: 'BTC Değişimi',
                     data: btcDeltas,
-                    backgroundColor: btcDeltas.map(v => v >= 0 ? 'rgba(0, 230, 118, 0.55)' : 'rgba(239, 68, 68, 0.55)'),
-                    borderColor: btcDeltas.map(v => v >= 0 ? '#00e676' : '#ef4444'),
+                    backgroundColor: btcDeltas.map(v => v >= 0 ? 'rgba(52, 211, 153, 0.55)' : 'rgba(248, 113, 113, 0.55)'),
+                    borderColor: btcDeltas.map(v => v >= 0 ? '#34d399' : '#f87171'),
                     borderWidth: 1.5,
                     borderRadius: 4,
                     stack: 'btc',
@@ -352,7 +356,7 @@ function renderFlowChart(chartData) {
             interaction: { mode: 'index', intersect: false },
             plugins: {
                 legend: {
-                    labels: { color: '#9ca3af', font: { family: 'Inter', size: 11 } }
+                    labels: { color: '#97a3b6', font: { family: 'Inter', size: 11 } }
                 },
                 tooltip: {
                     filter: (item) => item.parsed.y !== 0,
@@ -373,20 +377,20 @@ function renderFlowChart(chartData) {
             scales: {
                 x: {
                     stacked: true,
-                    grid: { color: 'rgba(255,255,255,0.03)' },
-                    ticks: { color: '#9ca3af', font: { family: 'Inter', size: 10 } }
+                    grid: { color: 'rgba(148,163,184,0.05)' },
+                    ticks: { color: '#97a3b6', font: { family: 'Inter', size: 10 } }
                 },
                 yBtc: {
                     position: 'left',
                     min: -btcPeak * 1.15,
                     max: btcPeak * 1.15,
-                    grid: { color: 'rgba(255,255,255,0.05)' },
+                    grid: { color: 'rgba(148,163,184,0.08)' },
                     ticks: {
-                        color: '#00e676',
+                        color: '#34d399',
                         font: { family: 'Inter', size: 10 },
                         callback: function(value) { return value.toLocaleString('tr-TR'); }
                     },
-                    title: { display: true, text: 'BTC Değişimi', color: '#00e676' }
+                    title: { display: true, text: 'BTC Değişimi', color: '#34d399' }
                 },
                 yMoney: {
                     position: 'right',
@@ -395,12 +399,12 @@ function renderFlowChart(chartData) {
                     max: moneyPeak * 1.15,
                     grid: { drawOnChartArea: false },
                     ticks: {
-                        color: '#2979ff',
+                        color: '#60a5fa',
                         font: { family: 'Inter', size: 10 },
                         // Only the downward (sale) half is meaningful
-                        callback: function(value) { return value > 0 ? '' : '$' + Math.abs(value) + 'M'; }
+                        callback: function(value) { return value > 0 ? '' : '$' + Math.round(Math.abs(value)).toLocaleString('tr-TR') + 'M'; }
                     },
-                    title: { display: true, text: 'ATM Net Geliri ($M) ↓', color: '#2979ff' }
+                    title: { display: true, text: 'ATM Net Geliri ($M) ↓', color: '#60a5fa' }
                 }
             }
         }
@@ -655,8 +659,8 @@ function renderCashChart(actuals, flow) {
     }
 
     const gradient = ctx.createLinearGradient(0, 0, 0, 280);
-    gradient.addColorStop(0, 'rgba(0, 230, 118, 0.30)');
-    gradient.addColorStop(1, 'rgba(0, 230, 118, 0.02)');
+    gradient.addColorStop(0, 'rgba(52, 211, 153, 0.30)');
+    gradient.addColorStop(1, 'rgba(52, 211, 153, 0.02)');
 
     const actualLabel = (flow.cash_source === 'sec-8k')
         ? 'Gerçek USD Reserve (SEC 8-K, haftalık)'
@@ -664,20 +668,20 @@ function renderCashChart(actuals, flow) {
     const datasets = [{
         label: actualLabel,
         data: actualSeries,
-        borderColor: '#00e676',
+        borderColor: '#34d399',
         backgroundColor: gradient,
         borderWidth: 3,
         fill: true,
         tension: 0.3,
         spanGaps: true,
         pointRadius: 5,
-        pointBackgroundColor: '#00e676'
+        pointBackgroundColor: '#34d399'
     }];
     if (estimate.length) {
         datasets.push({
             label: 'Tahmini (haftalık)',
             data: estSeries,
-            borderColor: '#00e5ff',
+            borderColor: '#22d3ee',
             borderWidth: 2,
             borderDash: [6, 4],
             fill: false,
@@ -690,7 +694,7 @@ function renderCashChart(actuals, flow) {
         datasets.push({
             label: 'Dayanma projeksiyonu (yeni finansman yok)',
             data: projSeries,
-            borderColor: '#ef4444',
+            borderColor: '#f87171',
             borderWidth: 2,
             borderDash: [3, 4],
             fill: false,
@@ -709,7 +713,7 @@ function renderCashChart(actuals, flow) {
             interaction: { mode: 'index', intersect: false },
             plugins: {
                 legend: {
-                    labels: { color: '#9ca3af', font: { family: 'Inter', size: 11 } }
+                    labels: { color: '#97a3b6', font: { family: 'Inter', size: 11 } }
                 },
                 tooltip: {
                     filter: (item) => item.parsed.y !== null,
@@ -739,21 +743,21 @@ function renderCashChart(actuals, flow) {
             },
             scales: {
                 x: {
-                    grid: { color: 'rgba(255,255,255,0.03)' },
+                    grid: { color: 'rgba(148,163,184,0.05)' },
                     ticks: {
-                        color: '#9ca3af',
+                        color: '#97a3b6',
                         font: { family: 'Inter', size: 10 },
                         maxTicksLimit: 12
                     }
                 },
                 y: {
-                    grid: { color: 'rgba(255,255,255,0.05)' },
+                    grid: { color: 'rgba(148,163,184,0.08)' },
                     ticks: {
-                        color: '#00e676',
+                        color: '#34d399',
                         font: { family: 'Inter', size: 10 },
                         callback: function(value) { return formatUsd(value); }
                     },
-                    title: { display: true, text: 'Nakit ($)', color: '#00e676' }
+                    title: { display: true, text: 'Nakit ($)', color: '#34d399' }
                 }
             }
         }
@@ -823,8 +827,8 @@ function renderDebtChart(chartData) {
     }
 
     const gradient = ctx.createLinearGradient(0, 0, 0, 250);
-    gradient.addColorStop(0, 'rgba(124, 77, 255, 0.45)');
-    gradient.addColorStop(1, 'rgba(124, 77, 255, 0.02)');
+    gradient.addColorStop(0, 'rgba(167, 139, 250, 0.45)');
+    gradient.addColorStop(1, 'rgba(167, 139, 250, 0.02)');
 
     debtChart = new Chart(ctx, {
         type: 'bar',
@@ -834,7 +838,7 @@ function renderDebtChart(chartData) {
                 label: 'Toplam Borç (Tahvil)',
                 data: debts,
                 backgroundColor: gradient,
-                borderColor: '#7c4dff',
+                borderColor: '#a78bfa',
                 borderWidth: 2,
                 borderRadius: 6,
                 barThickness: 'flex',
@@ -847,24 +851,24 @@ function renderDebtChart(chartData) {
             plugins: {
                 legend: {
                     labels: {
-                        color: '#9ca3af',
+                        color: '#97a3b6',
                         font: { family: 'Inter', size: 11 }
                     }
                 }
             },
             scales: {
                 x: {
-                    grid: { color: 'rgba(255,255,255,0.03)' },
-                    ticks: { color: '#9ca3af', font: { family: 'Inter', size: 10 } }
+                    grid: { color: 'rgba(148,163,184,0.05)' },
+                    ticks: { color: '#97a3b6', font: { family: 'Inter', size: 10 } }
                 },
                 y: {
-                    grid: { color: 'rgba(255,255,255,0.05)' },
+                    grid: { color: 'rgba(148,163,184,0.08)' },
                     ticks: {
-                        color: '#7c4dff',
+                        color: '#a78bfa',
                         font: { family: 'Inter', size: 10 },
                         callback: function(value) { return '$' + value + 'B'; }
                     },
-                    title: { display: true, text: 'Tahvil Borç Miktarı ($ Milyar)', color: '#7c4dff' }
+                    title: { display: true, text: 'Tahvil Borç Miktarı ($ Milyar)', color: '#a78bfa' }
                 }
             }
         }
