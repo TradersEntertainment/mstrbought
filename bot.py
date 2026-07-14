@@ -1697,15 +1697,16 @@ PREFERRED_RATE_DEFAULTS = {"STRF": 0.10, "STRK": 0.08, "STRD": 0.10}
 def compute_dividend_model():
     """Per-series dividend cost model + comparison to actual paid dividends.
 
-    Outstanding face value = configured baseline + cumulative ATM notional
-    sold since PREFERRED_BASELINE_AS_OF (the ATM table's "Notional Value"
-    column is exactly the face value dividends accrue on — footnote 2 of
-    the filings). MSTR common pays no dividend and is excluded.
+    Outstanding face value per series = the latest 10-Q preferred table's
+    notional (parsed automatically into pref_notional_*/pref_rate_*
+    metrics) + ATM notional sold since that quarter end — the same official
+    building blocks the annual figure uses. Legacy fallback when no 10-Q
+    has been parsed yet: env baselines + tracked ATM sales since
+    PREFERRED_BASELINE_AS_OF. MSTR common pays no dividend and is excluded.
     """
-    series = {t: {"ticker": t, "rate": None, "rate_source": None, "atm_notional_m": 0.0}
-              for t in ("STRF", "STRK", "STRD", "STRC")}
     latest_actual = None
     rows = []
+    pref_rows = []
     try:
         conn = get_db_connection()
         rows = conn.execute(
@@ -1714,11 +1715,34 @@ def compute_dividend_model():
         actual = conn.execute(
             "SELECT period_end, value FROM financial_metrics "
             "WHERE metric='dividends_paid' ORDER BY period_end DESC LIMIT 1").fetchone()
+        pref_rows = conn.execute(
+            "SELECT metric, period_end, value FROM financial_metrics "
+            "WHERE metric LIKE 'pref_%'").fetchall()
         conn.close()
         if actual:
             latest_actual = {"period_end": actual["period_end"], "paid_usd": actual["value"]}
     except Exception as e:
         print(f"compute_dividend_model DB error: {e}")
+
+    # Automatic baselines: the latest 10-Q preferred table
+    pref_rows = [r for r in pref_rows
+                 if r["metric"].startswith(("pref_notional_", "pref_rate_"))]
+    tenq = {}
+    tenq_pe = None
+    if pref_rows:
+        tenq_pe = max(r["period_end"] for r in pref_rows)
+        for r in pref_rows:
+            if r["period_end"] != tenq_pe:
+                continue
+            if r["metric"].startswith("pref_notional_"):
+                tenq.setdefault(r["metric"][len("pref_notional_"):], {})["notional_m"] = r["value"] / 1e6
+            else:
+                tenq.setdefault(r["metric"][len("pref_rate_"):], {})["rate"] = r["value"]
+
+    tickers = ["STRF", "STRK", "STRD", "STRC"]
+    tickers += sorted(t for t in tenq if t not in tickers)
+    series = {t: {"ticker": t, "rate": None, "rate_source": None, "atm_notional_m": 0.0}
+              for t in tickers}
 
     for row in rows:
         atm = _safe_json_loads(row["atm_sales"]) or {}
@@ -1733,10 +1757,14 @@ def compute_dividend_model():
                 if m:
                     e["rate"] = float(m.group(1)) / 100.0
                     e["rate_source"] = "filing_name"
-            # Cumulative tables and sanity-flagged rows must not be added as issuance
+            # Issuance counts on top of the baseline: strictly after the
+            # 10-Q quarter end (it is already inside that table otherwise),
+            # or the env window when no 10-Q has been parsed yet. Cumulative
+            # tables and sanity-flagged rows are never added.
+            counted = (row["filing_date"] > tenq_pe) if tenq_pe else \
+                      (row["filing_date"] >= PREFERRED_BASELINE_AS_OF)
             if (period_scoped and s.get("counts") is not False
-                    and (s.get("shares_sold_num") or 0) > 0
-                    and row["filing_date"] >= PREFERRED_BASELINE_AS_OF):
+                    and (s.get("shares_sold_num") or 0) > 0 and counted):
                 notional_m = parse_money(s.get("notional", "-"))
                 if not notional_m:
                     # Some rows only carry net proceeds — close approximation
@@ -1745,10 +1773,13 @@ def compute_dividend_model():
 
     out = []
     total_monthly_m = 0.0
-    for t in ("STRF", "STRK", "STRD", "STRC"):
+    for t in tickers:
         e = series[t]
         rate = e["rate"]
         rate_source = e["rate_source"]
+        if tenq.get(t, {}).get("rate"):
+            rate = tenq[t]["rate"]          # the 10-Q's stated rate wins
+            rate_source = "10-Q"
         if rate is None:
             if t == "STRC":
                 rate = STRC_ANNUAL_RATE
@@ -1756,7 +1787,9 @@ def compute_dividend_model():
             else:
                 rate = PREFERRED_RATE_DEFAULTS.get(t, 0.0)
                 rate_source = "default"
-        baseline_m = PREFERRED_BASELINE_NOTIONAL_M.get(t, 0.0)
+        baseline_m = tenq.get(t, {}).get("notional_m")
+        if baseline_m is None:
+            baseline_m = PREFERRED_BASELINE_NOTIONAL_M.get(t, 0.0)
         outstanding_m = baseline_m + e["atm_notional_m"]
         monthly_m = outstanding_m * rate / 12.0
         total_monthly_m += monthly_m
@@ -1765,7 +1798,7 @@ def compute_dividend_model():
             "rate": rate,
             "rate_source": rate_source,
             "frequency": "aylık" if t == "STRC" else "çeyreklik",
-            "baseline_notional_m": baseline_m,
+            "baseline_notional_m": round(baseline_m, 1),
             "atm_notional_m": round(e["atm_notional_m"], 1),
             "outstanding_notional_m": round(outstanding_m, 1),
             "monthly_cost_m": round(monthly_m, 2),
@@ -1774,7 +1807,8 @@ def compute_dividend_model():
     result = {
         "series": out,
         "model_monthly_total_m": round(total_monthly_m, 2),
-        "baselines_configured": any(v > 0 for v in PREFERRED_BASELINE_NOTIONAL_M.values()),
+        "baselines_configured": bool(tenq) or any(v > 0 for v in PREFERRED_BASELINE_NOTIONAL_M.values()),
+        "baseline_source": f"10-Q ({tenq_pe})" if tenq else "env",
         "actual_last_quarter": None,
         "model_vs_actual_pct": None,
         "official": None,

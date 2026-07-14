@@ -822,9 +822,11 @@ async function fetchDividends() {
             } else {
                 html += 'Gerçek temettü verisi ilk XBRL senkronunda yüklenecek.';
             }
-            if (!d.baselines_configured) {
-                html += '<br>Not: IPO baz nominalleri yapılandırılmadı — model yalnızca izlenen ATM satışlarını ' +
-                        'sayar (env: STRF_BASELINE_M, STRK_BASELINE_M, STRD_BASELINE_M, STRC_BASELINE_M).';
+            if (d.baseline_source && d.baseline_source.startsWith('10-Q')) {
+                html += `<br>Nominaller: ${d.baseline_source} pref tablosundan + çeyrek sonrası ATM ihraçları (otomatik, SEC).`;
+            } else if (!d.baselines_configured) {
+                html += '<br>Not: 10-Q pref tablosu henüz senkronize olmadı — model şimdilik yalnızca izlenen ' +
+                        'ATM satışlarını sayar; ilk 10-Q senkronunda nominaller otomatik dolacak.';
             }
             sum.innerHTML = html;
         }

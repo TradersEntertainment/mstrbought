@@ -222,6 +222,38 @@ def test_annual_dividends_sec10q_tier_beats_xbrl(temp_db):
     assert annual['detail']['series']['STRC']['annual_m'] == 577.8
 
 
+def test_dividend_model_uses_10q_baselines(temp_db):
+    # The bottom-of-page dividend table must not show $0 for STRF/STRK/STRD:
+    # baselines come automatically from the 10-Q preferred table
+    for t, notional, rate in [('STRF', 1284.0, 0.10), ('STRK', 1402.1, 0.08),
+                              ('STRD', 1402.4, 0.10), ('STRC', 5024.7, 0.115),
+                              ('STRE', 837.0, 0.10)]:
+        _insert(temp_db, "INSERT INTO financial_metrics VALUES (?,?,?,?,?)",
+                (f'pref_notional_{t}', '2026-03-31', notional * 1e6, '10-Q', '2026-05-05'))
+        _insert(temp_db, "INSERT INTO financial_metrics VALUES (?,?,?,?,?)",
+                (f'pref_rate_{t}', '2026-03-31', rate, '10-Q', '2026-05-05'))
+    # Post-quarter ATM adds on top; a pre-quarter sale must NOT double count
+    _insert(temp_db,
+            "INSERT INTO purchase_history (filing_date, btc_acquired, atm_sales) VALUES (?,?,?)",
+            ('2026-05-18', '0', _atm_row('STRC', 'STRC Stock Variable Rate Series A Perpetual Stretch Preferred Stock', 2000.0, 1995.0)))
+    _insert(temp_db,
+            "INSERT INTO purchase_history (filing_date, btc_acquired, atm_sales) VALUES (?,?,?)",
+            ('2026-03-01', '0', _atm_row('STRC', 'STRC Stock Variable Rate Series A Perpetual Stretch Preferred Stock', 500.0, 498.0)))
+
+    model = bot.compute_dividend_model()
+    by = {s['ticker']: s for s in model['series']}
+    assert by['STRF']['outstanding_notional_m'] == 1284.0
+    assert by['STRF']['monthly_cost_m'] == 10.7
+    assert by['STRK']['monthly_cost_m'] == round(1402.1 * 0.08 / 12, 2)
+    assert by['STRC']['outstanding_notional_m'] == 7024.7
+    assert by['STRC']['rate'] == 0.115
+    assert by['STRC']['rate_source'] == '10-Q'
+    # Series only present in the 10-Q (no ATM history) still appear
+    assert by['STRE']['outstanding_notional_m'] == 837.0
+    assert model['baseline_source'] == '10-Q (2026-03-31)'
+    assert model['baselines_configured'] is True
+
+
 def test_pref_total_outstanding_from_10q_plus_atm(temp_db):
     # Same official building blocks: 10-Q notionals + post-quarter ATM
     for t, notional, rate in [('STRF', 1284.0, 0.10), ('STRK', 1402.1, 0.08),
