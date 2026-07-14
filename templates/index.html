@@ -5,15 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="dark">
     <title>MSTR Monitor — SEC Filings & Portfolio Dashboard</title>
-    <!-- Google Fonts: Inter & Outfit -->
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='48' fill='%23f7931a'/%3E%3Ctext x='50' y='70' font-size='58' text-anchor='middle' fill='%23101319' font-family='Arial' font-weight='bold'%3E%E2%82%BF%3C/text%3E%3C/svg%3E">
+    <!-- Google Fonts: only the weights the stylesheet uses; loaded async so a
+         slow font CDN never blocks first paint (system fonts render instantly,
+         webfonts swap in when ready) -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <!-- FontAwesome icons -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- Chart.js (bundled locally — no CDN dependency) -->
-    <script src="/static/chart.umd.min.js?v=16"></script>
-    <link rel="stylesheet" href="/static/style.css?v=16">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Outfit:wght@600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+    <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Outfit:wght@600;700&display=swap" rel="stylesheet"></noscript>
+    <!-- FontAwesome: decorative icons — load without blocking first paint -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" media="print" onload="this.media='all'">
+    <noscript><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"></noscript>
+    <!-- Chart.js (bundled locally — no CDN dependency); deferred so it never blocks first paint -->
+    <script src="/static/chart.umd.min.js?v=17" defer></script>
+    <script src="/static/dashboard.js?v=17" defer></script>
+    <link rel="stylesheet" href="/static/style.css?v=17">
 </head>
 <body>
     <div class="glow-container" aria-hidden="true">
@@ -68,6 +74,14 @@
                 <div class="stat-info">
                     <h3>Toplam Borç (Tahvil)</h3>
                     <p class="value" id="statTotalDebt">-</p>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="icon-box pink"><i class="fa-solid fa-layer-group"></i></div>
+                <div class="stat-info">
+                    <h3>İmtiyazlı Hisse (Pref)</h3>
+                    <p class="value" id="statPrefTotal">-</p>
+                    <p class="stat-subtext" id="statPrefDate"></p>
                 </div>
             </div>
             <div class="stat-card">
@@ -214,7 +228,5 @@
         <span class="toast-message">İşlem Başarılı!</span>
     </div>
 
-    <!-- Script file -->
-    <script src="/static/dashboard.js?v=16"></script>
 </body>
 </html>

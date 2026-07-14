@@ -1,3 +1,4 @@
+import gzip
 import os
 import time
 import json
@@ -37,6 +38,58 @@ if TELEGRAM_BOT_TOKEN:
 
 # Initialize Flask App
 app = Flask(__name__)
+
+# ----------------- RESPONSE COMPRESSION & CACHING -----------------
+# Railway serves Flask responses as-is (no edge gzip): compress text
+# bodies ourselves and long-cache the versioned (?v=N) static assets.
+# First visit: ~263KB of JS/CSS drops to ~84KB; repeat visits: 0 bytes.
+
+_COMPRESSIBLE_TYPES = {"text/html", "text/css", "application/json",
+                       "application/javascript", "text/javascript"}
+_static_gzip_cache = {}
+
+@app.after_request
+def _compress_and_cache(response):
+    """Gzip compressible responses and set immutable caching for /static."""
+    try:
+        if request.path.startswith('/static/'):
+            # Assets are referenced with ?v=N cache-busting — safe to pin
+            response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+
+        if (response.status_code != 200
+                or response.mimetype not in _COMPRESSIBLE_TYPES
+                or 'Content-Encoding' in response.headers
+                or 'Range' in request.headers
+                or 'gzip' not in (request.headers.get('Accept-Encoding') or '').lower()):
+            return response
+
+        if request.path.startswith('/static/'):
+            # Static bytes only change on deploy — compress each file once
+            key = (request.path, response.headers.get('ETag'))
+            gz = _static_gzip_cache.get(key)
+            if gz is None:
+                response.direct_passthrough = False
+                data = response.get_data()
+                if len(data) < 500:
+                    return response
+                gz = gzip.compress(data, 6)
+                if len(_static_gzip_cache) > 32:
+                    _static_gzip_cache.clear()
+                _static_gzip_cache[key] = gz
+        else:
+            response.direct_passthrough = False
+            data = response.get_data()
+            if len(data) < 500:
+                return response
+            gz = gzip.compress(data, 6)
+
+        response.set_data(gz)
+        response.headers['Content-Encoding'] = 'gzip'
+        response.headers['Content-Length'] = str(len(gz))
+        response.headers.add('Vary', 'Accept-Encoding')
+    except Exception as e:
+        print(f"Response compression skipped: {e}")
+    return response
 
 # Optimization: Keep-Alive Connection Pooling
 http_session = requests.Session()
@@ -1750,9 +1803,10 @@ def compute_dividend_model():
     return result
 
 def _preferred_atm_added_annual(since_date, rates):
-    """Annualized dividends ($M/yr) added by preferred ATM issuance after a
-    given date: Σ notional sold × that series' rate."""
+    """Preferred ATM issuance after a given date: returns
+    (added annual dividends $M/yr, added notional $M)."""
     added_m = 0.0
+    added_notional_m = 0.0
     try:
         conn = get_db_connection()
         rows = conn.execute(
@@ -1762,7 +1816,7 @@ def _preferred_atm_added_annual(since_date, rates):
         conn.close()
     except Exception as e:
         print(f"_preferred_atm_added_annual DB error: {e}")
-        return 0.0
+        return 0.0, 0.0
     for row in rows:
         atm = _safe_json_loads(row["atm_sales"]) or {}
         if atm.get("period_scoped") is False:
@@ -1777,7 +1831,8 @@ def _preferred_atm_added_annual(since_date, rates):
             if not notional_m:
                 notional_m = parse_money(s.get("net_proceeds", "-"))
             added_m += (notional_m or 0.0) * (rates[t] or 0.0)
-    return added_m
+            added_notional_m += (notional_m or 0.0)
+    return added_m, added_notional_m
 
 def compute_annual_dividends():
     """Annual dividend obligation — the figure strategy.com publishes as
@@ -1831,11 +1886,13 @@ def compute_annual_dividends():
             per_series[t] = {"notional_m": round(n, 1), "rate": rate,
                              "annual_m": round(n * rate, 1)}
         if base_m > 0:
-            added_m = _preferred_atm_added_annual(latest_pe, {**model_rates, **rates_10q})
+            added_m, added_notional_m = _preferred_atm_added_annual(
+                latest_pe, {**model_rates, **rates_10q})
             return {"annual_m": round(base_m + added_m, 1), "source": "sec-10q",
                     "asof": latest_pe,
                     "detail": {"baseline_annual_m": round(base_m, 1),
                                "atm_added_annual_m": round(added_m, 1),
+                               "atm_added_notional_m": round(added_notional_m, 1),
                                "series": per_series}}
 
     # --- Tier 3: XBRL dividends actually paid ×4 + ATM top-up ---
@@ -1851,7 +1908,7 @@ def compute_annual_dividends():
 
     if latest_q:
         base_annual_m = (latest_q["value"] / 1e6) * 4.0
-        added_m = _preferred_atm_added_annual(latest_q["period_end"], model_rates)
+        added_m, _ = _preferred_atm_added_annual(latest_q["period_end"], model_rates)
         return {"annual_m": round(base_annual_m + added_m, 1),
                 "source": "xbrl_actual", "asof": latest_q["period_end"],
                 "detail": {"xbrl_quarter_paid_m": round(latest_q["value"] / 1e6, 1),
@@ -2123,6 +2180,26 @@ def compute_cash_estimate():
             "source": "strategy.com",
         }
 
+    # Total preferred stock outstanding (nominal) — NOT debt (perpetual
+    # equity, so it stays out of the bond figure): 10-Q per-series notional
+    # + preferred ATM issuance since that quarter. strategy.com override
+    # only if the automatic derivation is unavailable.
+    pref_total = None
+    ad_detail = annual_div.get("detail") or {}
+    if ad_detail.get("series"):
+        pref_total = {
+            "total_m": round(sum(s["notional_m"] for s in ad_detail["series"].values())
+                             + (ad_detail.get("atm_added_notional_m") or 0.0), 1),
+            "asof": annual_div.get("asof"),
+            "source": "sec-10q",
+        }
+    elif off_pref:
+        pref_total = {
+            "total_m": round(off_pref["value_m"], 1),
+            "asof": off_pref.get("period_end"),
+            "source": "strategy.com",
+        }
+
     return {
         "estimate": estimate,
         "actuals": [{"period_end": a["period_end"], "cash_m": round(a["cash_m"], 1),
@@ -2143,6 +2220,7 @@ def compute_cash_estimate():
         "change_summary": change,
         "filing_info": filing_info,
         "official": official,
+        "pref_total": pref_total,
         "cash_source": cash_source,
     }
 

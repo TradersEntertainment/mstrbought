@@ -222,6 +222,25 @@ def test_annual_dividends_sec10q_tier_beats_xbrl(temp_db):
     assert annual['detail']['series']['STRC']['annual_m'] == 577.8
 
 
+def test_pref_total_outstanding_from_10q_plus_atm(temp_db):
+    # Same official building blocks: 10-Q notionals + post-quarter ATM
+    for t, notional, rate in [('STRF', 1284.0, 0.10), ('STRK', 1402.1, 0.08),
+                              ('STRD', 1402.4, 0.10), ('STRC', 5024.7, 0.115),
+                              ('STRE', 837.0, 0.10)]:
+        _insert(temp_db, "INSERT INTO financial_metrics VALUES (?,?,?,?,?)",
+                (f'pref_notional_{t}', '2026-03-31', notional * 1e6, '10-Q', '2026-05-05'))
+        _insert(temp_db, "INSERT INTO financial_metrics VALUES (?,?,?,?,?)",
+                (f'pref_rate_{t}', '2026-03-31', rate, '10-Q', '2026-05-05'))
+    _insert(temp_db,
+            "INSERT INTO purchase_history (filing_date, btc_acquired, atm_sales) VALUES (?,?,?)",
+            ('2026-05-18', '0', _atm_row('STRC', 'STRC Stock Variable Rate Series A Perpetual Stretch Preferred Stock', 2000.0, 1995.0)))
+
+    result = bot.compute_cash_estimate()
+    # 9,950.2 baseline + 2,000 ATM = 11,950.2 — prefs are equity, NOT debt
+    assert result['pref_total'] == {'total_m': 11950.2, 'asof': '2026-03-31',
+                                    'source': 'sec-10q'}
+
+
 def test_refresh_preferred_baselines_stores_and_skips(temp_db, monkeypatch):
     submissions = {'filings': {'recent': {
         'form': ['8-K', '10-Q', '8-K'],

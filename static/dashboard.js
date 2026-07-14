@@ -3,6 +3,12 @@ let debtChart = null;
 let flowChart = null;
 let cashChart = null;
 
+// Phones: skip chart animations — cheaper first paint and free 60s refreshes
+if (typeof Chart !== 'undefined' && window.matchMedia
+        && matchMedia('(max-width: 768px)').matches) {
+    Chart.defaults.animation = false;
+}
+
 // Helper to show toast messages
 function showToast(message, isError = false) {
     const toast = document.getElementById('notificationToast');
@@ -466,6 +472,21 @@ async function fetchCash() {
                 sub += ` • Dayanma: ${flow.runway.infinite ? '∞' : '~' + flow.runway.weeks + ' hafta'}`;
             }
             statCashDate.textContent = sub;
+        }
+
+        // Preferred stock outstanding (nominal) — separate from bond debt:
+        // 10-Q per-series notional + ATM issuance since, or strategy.com
+        const statPref = document.getElementById('statPrefTotal');
+        const statPrefDate = document.getElementById('statPrefDate');
+        if (statPref) {
+            const p = flow && flow.pref_total;
+            statPref.textContent = p && p.total_m != null ? formatUsd(p.total_m * 1e6) : '-';
+            if (statPrefDate) {
+                statPrefDate.textContent = !p ? '' :
+                    (p.source === 'sec-10q'
+                        ? `10-Q (${p.asof}) + ATM ihraçları`
+                        : `Strategy resmi (${p.asof})`);
+            }
         }
 
         renderCashChart(actuals, flow || {});
