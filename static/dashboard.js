@@ -437,11 +437,25 @@ async function fetchCash() {
         if (note) note.style.display = 'none';
 
         const latest = actuals[actuals.length - 1];
-        if (statCash) statCash.textContent = formatUsd(latest.value);
+        const official = flow && flow.official;
+        // Prefer Strategy's own published USD reserve as the headline cash
+        if (statCash) {
+            statCash.textContent = (official && official.usd_reserve_m != null)
+                ? formatUsd(official.usd_reserve_m * 1e6)
+                : formatUsd(latest.value);
+        }
         if (statCashDate) {
-            let sub = `${latest.period_end} itibarıyla (çeyreklik)`;
-            if (flow && flow.current_estimate) {
-                sub += ` • Tahmini bugün: ${formatUsd(flow.current_estimate.cash_m * 1e6)}`;
+            let sub;
+            if (official && official.usd_reserve_m != null) {
+                sub = `Strategy resmi (${official.asof})`;
+                if (flow && flow.current_estimate) {
+                    sub += ` • Bizim tahmin: ${formatUsd(flow.current_estimate.cash_m * 1e6)}`;
+                }
+            } else {
+                sub = `${latest.period_end} itibarıyla (çeyreklik)`;
+                if (flow && flow.current_estimate) {
+                    sub += ` • Tahmini bugün: ${formatUsd(flow.current_estimate.cash_m * 1e6)}`;
+                }
             }
             if (flow && flow.runway) {
                 sub += ` • Dayanma: ${flow.runway.infinite ? '∞' : '~' + flow.runway.weeks + ' hafta'}`;
@@ -474,8 +488,25 @@ function renderCashCalc(flow) {
     const row = (label, val, cls = '') =>
         `<tr class="${cls}"><td>${label}</td><td class="calc-amount">${val}</td></tr>`;
 
+    const official = flow.official;
+    const anchorLabel = c.since_form === 'strategy.com'
+        ? `Strategy resmi nakit (strategy.com, ${c.since})`
+        : `Son bilanço nakdi (10-Q/10-K, ${c.since})`;
+
     let rows = '';
-    rows += row(`Son bilanço nakdi (10-Q/10-K, ${c.since})`, formatUsd(c.from_cash_m * 1e6), 'calc-base');
+    // If Strategy publishes an official reserve, show it up top as ground truth
+    if (official && official.usd_reserve_m != null) {
+        rows += row(`<strong>Strategy resmi USD Reserve (${official.asof})</strong>`,
+                    `<strong>${formatUsd(official.usd_reserve_m * 1e6)}</strong>`, 'calc-total');
+        if (flow.current_estimate) {
+            const est = flow.current_estimate.cash_m;
+            const diff = est - official.usd_reserve_m;
+            rows += row('&nbsp;&nbsp;&nbsp;↳ bizim saf tahmin (kıyas)',
+                        `${formatUsd(est * 1e6)} (${diff >= 0 ? '+' : '−'}${formatUsd(Math.abs(diff) * 1e6)} sapma)`,
+                        'calc-sub');
+        }
+    }
+    rows += row(anchorLabel, formatUsd(c.from_cash_m * 1e6), 'calc-base');
 
     if (c.atm_total_m > 0) {
         rows += row(`+ ATM hisse satışları (${c.weeks} hafta)`, '+' + money(c.atm_total_m));
@@ -507,10 +538,17 @@ function renderCashCalc(flow) {
         rows += row('<strong>→ Satış/ATM olmadan dayanma</strong>', runwayText, 'calc-total');
     }
     if (cal.monthly_dividend_m) {
+        const src = cal.dividend_source === 'strategy.com' ? 'Strategy resmi'
+                  : cal.dividend_source === 'xbrl_actual' ? 'XBRL gerçek' : 'model';
         rows += row('Pref. hisselere aylık temettü yükü',
-                    `${formatUsd(cal.monthly_dividend_m * 1e6)}/ay` +
-                    (cal.dividend_source === 'xbrl_actual' ? ' (XBRL gerçek)' : ' (model)'),
-                    'calc-info');
+                    `${formatUsd(cal.monthly_dividend_m * 1e6)}/ay (${src})`, 'calc-info');
+    }
+    if (official && (official.pref_m != null || official.debt_m != null)) {
+        let bits = [];
+        if (official.pref_m != null) bits.push(`Pref: ${formatUsd(official.pref_m * 1e6)}`);
+        if (official.debt_m != null) bits.push(`Borç: ${formatUsd(official.debt_m * 1e6)}`);
+        if (official.annual_dividends_m != null) bits.push(`Yıllık temettü: ${formatUsd(official.annual_dividends_m * 1e6)}`);
+        rows += row(`Strategy resmi (${official.asof})`, bits.join(' · '), 'calc-info');
     }
     if (flow.filing_info) {
         const fi = flow.filing_info;

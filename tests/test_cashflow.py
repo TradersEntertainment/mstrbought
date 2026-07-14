@@ -253,7 +253,7 @@ def test_change_summary_explains_the_move(temp_db):
     last = result['estimate'][-1]
     assert last['atm_m'] == 10.0
     assert last['btc_m'] == 0.0
-    assert last['atm_detail'] == [{'ticker': 'MSTR', 'net_m': 10.0}]
+    assert last['atm_detail'] == [{'ticker': 'MSTR', 'net_m': 10.0, 'shares': 1000}]
 
 
 def test_cumulative_atm_excluded_from_cash_and_dividends(temp_db, monkeypatch):

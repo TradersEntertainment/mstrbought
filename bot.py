@@ -1171,6 +1171,82 @@ def refresh_cash_reserves():
         print(f"Cash reserves DB update failed: {e}")
         return 0
 
+# --- Strategy's own published figures (strategy.com dashboard) ---
+# Strategy publishes its actual USD Reserve, Annual Dividends, total Pref
+# outstanding and Debt, updated ~daily — ground truth that beats our
+# weekly estimate. We can't scrape their site from every environment, so
+# these come from env and/or the password-protected /api/official endpoint.
+def _official_env():
+    def _f(name):
+        v = os.getenv(name, "").strip()
+        try:
+            return float(v) if v else None
+        except ValueError:
+            return None
+    return {
+        "usd_reserve_m": _f("STRATEGY_USD_RESERVE_M"),
+        "annual_dividends_m": _f("STRATEGY_ANNUAL_DIVIDENDS_M"),
+        "pref_m": _f("STRATEGY_PREF_M"),
+        "debt_m": _f("STRATEGY_DEBT_M"),
+        "asof": os.getenv("STRATEGY_ASOF", "").strip() or None,
+    }
+
+def store_official_figures(usd_reserve_m=None, annual_dividends_m=None,
+                           pref_m=None, debt_m=None, asof=None):
+    """Persist Strategy's official figures. The USD reserve is stored as a
+    cash_and_equivalents actual (form 'strategy.com') so it becomes the most
+    recent anchor for the estimate, chart and runway automatically."""
+    if not asof:
+        return 0
+    stored = 0
+    try:
+        conn = get_db_connection()
+        if usd_reserve_m is not None:
+            conn.execute(
+                """INSERT OR REPLACE INTO financial_metrics (metric, period_end, value, form, filed)
+                   VALUES ('cash_and_equivalents', ?, ?, 'strategy.com', ?)""",
+                (asof, usd_reserve_m * 1e6, asof))
+            stored += 1
+        for metric, val in (("official_annual_dividends", annual_dividends_m),
+                            ("official_pref", pref_m),
+                            ("official_debt", debt_m)):
+            if val is not None:
+                conn.execute(
+                    """INSERT OR REPLACE INTO financial_metrics (metric, period_end, value, form, filed)
+                       VALUES (?, ?, ?, 'strategy.com', ?)""",
+                    (metric, asof, val * 1e6, asof))
+                stored += 1
+        conn.commit()
+        conn.close()
+        if usd_reserve_m is not None:
+            print(f"Official figures stored (strategy.com, {asof}): "
+                  f"USD reserve ${usd_reserve_m:,.0f}M")
+        return stored
+    except Exception as e:
+        print(f"store_official_figures failed: {e}")
+        return 0
+
+def sync_official_figures_from_env():
+    o = _official_env()
+    if o["asof"] and any(o[k] is not None for k in
+                         ("usd_reserve_m", "annual_dividends_m", "pref_m", "debt_m")):
+        store_official_figures(o["usd_reserve_m"], o["annual_dividends_m"],
+                               o["pref_m"], o["debt_m"], o["asof"])
+
+def get_official_metric(metric):
+    """Latest stored official metric value in $M, or None."""
+    try:
+        conn = get_db_connection()
+        row = conn.execute(
+            "SELECT period_end, value FROM financial_metrics WHERE metric = ? "
+            "ORDER BY period_end DESC LIMIT 1", (metric,)).fetchone()
+        conn.close()
+        if row:
+            return {"period_end": row["period_end"], "value_m": row["value"] / 1e6}
+    except Exception:
+        pass
+    return None
+
 def fetch_xbrl_concept(tag):
     """Fetch a raw us-gaap companyconcept payload; None on failure."""
     url = f"https://data.sec.gov/api/xbrl/companyconcept/CIK0001050446/us-gaap/{tag}.json"
@@ -1255,6 +1331,7 @@ def cash_refresh_loop():
         try:
             refresh_cash_reserves()
             refresh_dividends()
+            sync_official_figures_from_env()
         except Exception as e:
             print(f"Cash refresh loop error: {e}")
         time.sleep(12 * 3600)
@@ -1360,7 +1437,19 @@ def compute_dividend_model():
         "baselines_configured": any(v > 0 for v in PREFERRED_BASELINE_NOTIONAL_M.values()),
         "actual_last_quarter": None,
         "model_vs_actual_pct": None,
+        "official": None,
     }
+    # Strategy's own published Annual Dividends + total Pref (ground truth)
+    off_div = get_official_metric("official_annual_dividends")
+    off_pref = get_official_metric("official_pref")
+    if off_div or off_pref:
+        result["official"] = {
+            "asof": (off_div or off_pref).get("period_end"),
+            "annual_dividends_m": round(off_div["value_m"], 1) if off_div else None,
+            "monthly_dividends_m": round(off_div["value_m"] / 12.0, 1) if off_div else None,
+            "pref_outstanding_m": round(off_pref["value_m"], 1) if off_pref else None,
+            "source": "strategy.com",
+        }
     if latest_actual:
         result["actual_last_quarter"] = {
             "period_end": latest_actual["period_end"],
@@ -1408,7 +1497,8 @@ def compute_cash_estimate():
         if atm.get("period_scoped") is False:
             atm = {}
         atm_detail = [
-            {"ticker": s.get("ticker"), "net_m": round(s.get("net_proceeds_num_m") or 0.0, 1)}
+            {"ticker": s.get("ticker"), "net_m": round(s.get("net_proceeds_num_m") or 0.0, 1),
+             "shares": s.get("shares_sold_num") or 0}
             for s in atm.get("securities", [])
             if (s.get("shares_sold_num") or 0) > 0 and (s.get("net_proceeds_num_m") or 0) > 0
             and s.get("counts") is not False
@@ -1425,14 +1515,21 @@ def compute_cash_estimate():
         flows.append({"date": r["filing_date"], "flow_m": atm_m + btc_m,
                       "atm_m": atm_m, "btc_m": btc_m, "atm_detail": atm_detail})
 
-    if div_rows:
+    # Dividend burn priority: Strategy's official annual figure > XBRL
+    # quarterly actual > our per-series model.
+    official_div = get_official_metric("official_annual_dividends")
+    if official_div:
+        weekly_div_m = official_div["value_m"] / 52.0
+        dividend_source = "strategy.com"
+    elif div_rows:
         weekly_div_m = (div_rows[-1]["value"] / 1e6) / 13.0
         dividend_source = "xbrl_actual"
     else:
         weekly_div_m = compute_dividend_model()["model_monthly_total_m"] * 12.0 / 52.0
         dividend_source = "model"
 
-    actuals = [{"period_end": r["period_end"], "cash_m": r["value"] / 1e6} for r in cash_rows]
+    actuals = [{"period_end": r["period_end"], "cash_m": r["value"] / 1e6,
+                "form": (r["form"] if "form" in r.keys() else "10-Q")} for r in cash_rows]
 
     # Backtest the RAW model between consecutive reported quarters
     backtest = []
@@ -1466,12 +1563,14 @@ def compute_cash_estimate():
         cash = None
         seg_since = None
         seg_from = None
+        seg_form = None
         acc = {"atm_by_ticker": {}, "btc_buys_m": 0.0, "btc_sales_m": 0.0, "weeks": 0}
         for f in flows:
             while anchor_idx < len(actuals) and actuals[anchor_idx]["period_end"] < f["date"]:
-                cash = actuals[anchor_idx]["cash_m"]   # re-anchor at each reported quarter
+                cash = actuals[anchor_idx]["cash_m"]   # re-anchor at each reported balance
                 seg_since = actuals[anchor_idx]["period_end"]
                 seg_from = cash
+                seg_form = actuals[anchor_idx].get("form", "10-Q")
                 acc = {"atm_by_ticker": {}, "btc_buys_m": 0.0, "btc_sales_m": 0.0, "weeks": 0}
                 anchor_idx += 1
             if cash is None:
@@ -1495,6 +1594,7 @@ def compute_cash_estimate():
         if estimate and seg_since is not None:
             change = {
                 "since": seg_since,
+                "since_form": seg_form,
                 "from_cash_m": round(seg_from, 1),
                 "to_cash_m": estimate[-1]["cash_m"],
                 "delta_m": round(estimate[-1]["cash_m"] - seg_from, 1),
@@ -1509,13 +1609,24 @@ def compute_cash_estimate():
 
     # Runway: how many weeks the cash lasts if MSTR sells NO BTC and NO
     # securities (all financing inflows zeroed) — only the weekly dividend
-    # burn and the calibrated other net flows remain.
-    if estimate:
+    # burn and the calibrated other net flows remain. Prefer Strategy's
+    # official published reserve (ground truth) as the basis; else the
+    # latest walked estimate; else the last reported balance.
+    latest_official_cash_row = next((a for a in reversed(actuals)
+                                     if a.get("form") == "strategy.com"), None)
+    basis_source = None
+    if latest_official_cash_row:
+        basis_cash_m = latest_official_cash_row["cash_m"]
+        basis_date = latest_official_cash_row["period_end"]
+        basis_source = "strategy.com"
+    elif estimate:
         basis_cash_m = estimate[-1]["cash_m"]
         basis_date = estimate[-1]["date"]
+        basis_source = "estimate"
     elif actuals:
         basis_cash_m = actuals[-1]["cash_m"]
         basis_date = actuals[-1]["period_end"]
+        basis_source = "actual"
     else:
         basis_cash_m = None
         basis_date = None
@@ -1527,6 +1638,7 @@ def compute_cash_estimate():
         runway = {
             "basis_cash_m": round(basis_cash_m, 1),
             "basis_date": basis_date,
+            "basis_source": basis_source,
             "net_burn_per_week_m": round(net_burn_m, 2),
             "weeks": None,
             "depletion_date": None,
@@ -1556,7 +1668,10 @@ def compute_cash_estimate():
     # next one is expected (next calendar quarter end + the filer's own
     # average filing lag over recent quarters)
     filing_info = None
-    dated = [(r["period_end"], r["filed"], r["form"]) for r in cash_rows if r["filed"]]
+    # Only real SEC balance-sheet reports drive the 10-Q calendar —
+    # strategy.com anchors are excluded.
+    dated = [(r["period_end"], r["filed"], r["form"]) for r in cash_rows
+             if r["filed"] and (r["form"] or "").startswith("10-")]
     if dated:
         lags = []
         for pe, filed, _ in dated[-4:]:
@@ -1580,9 +1695,28 @@ def compute_cash_estimate():
         except (ValueError, TypeError) as e:
             print(f"Filing calendar computation failed: {e}")
 
+    # Strategy's own published figures (ground truth) + how our pure model
+    # compares to the latest official cash number
+    official = None
+    latest_official_cash = next((a for a in reversed(actuals)
+                                 if a.get("form") == "strategy.com"), None)
+    off_div = get_official_metric("official_annual_dividends")
+    off_pref = get_official_metric("official_pref")
+    off_debt = get_official_metric("official_debt")
+    if latest_official_cash or off_div or off_pref or off_debt:
+        official = {
+            "asof": (latest_official_cash or off_div or off_pref or off_debt).get("period_end"),
+            "usd_reserve_m": round(latest_official_cash["cash_m"], 1) if latest_official_cash else None,
+            "annual_dividends_m": round(off_div["value_m"], 1) if off_div else None,
+            "pref_m": round(off_pref["value_m"], 1) if off_pref else None,
+            "debt_m": round(off_debt["value_m"], 1) if off_debt else None,
+            "source": "strategy.com",
+        }
+
     return {
         "estimate": estimate,
-        "actuals": [{"period_end": a["period_end"], "cash_m": round(a["cash_m"], 1)} for a in actuals],
+        "actuals": [{"period_end": a["period_end"], "cash_m": round(a["cash_m"], 1),
+                     "form": a.get("form", "10-Q")} for a in actuals],
         "backtest": backtest,
         "calibration": {
             "weekly_dividend_m": round(weekly_div_m, 2),
@@ -1595,6 +1729,7 @@ def compute_cash_estimate():
         "projection": projection,
         "change_summary": change,
         "filing_info": filing_info,
+        "official": official,
     }
 
 def _next_quarter_end(period_end):
@@ -2682,6 +2817,53 @@ def get_cash_reserves():
     except Exception as e:
         print(f"/api/cash error: {e}")
         return jsonify([])
+
+@app.route('/api/official', methods=['GET', 'POST'])
+def official_figures():
+    """Read or (password-protected) set Strategy's own published figures
+    from strategy.com (USD Reserve, Annual Dividends, total Pref, Debt).
+    These are ground truth — the USD reserve becomes the newest cash anchor.
+    POST params: password, asof (YYYY-MM-DD), usd_reserve_m, annual_dividends_m,
+    pref_m, debt_m (all $M)."""
+    if request.method == 'GET':
+        usd = None
+        try:
+            conn = get_db_connection()
+            row = conn.execute(
+                "SELECT period_end, value FROM financial_metrics "
+                "WHERE metric='cash_and_equivalents' AND form='strategy.com' "
+                "ORDER BY period_end DESC LIMIT 1").fetchone()
+            conn.close()
+            if row:
+                usd = {"asof": row["period_end"], "value_m": row["value"] / 1e6}
+        except Exception:
+            pass
+        return jsonify({
+            "usd_reserve": usd,
+            "annual_dividends_m": (get_official_metric("official_annual_dividends") or {}).get("value_m"),
+            "pref_m": (get_official_metric("official_pref") or {}).get("value_m"),
+            "debt_m": (get_official_metric("official_debt") or {}).get("value_m"),
+        })
+
+    if ADMIN_PASSWORD:
+        req_pass = request.args.get("password") or request.headers.get("X-Admin-Password")
+        if req_pass != ADMIN_PASSWORD:
+            return jsonify({"status": "error", "message": "Yetkisiz işlem: Şifre hatalı."}), 401
+
+    def _num(name):
+        v = request.args.get(name)
+        try:
+            return float(v) if v not in (None, "") else None
+        except ValueError:
+            return None
+
+    asof = request.args.get("asof")
+    if not asof:
+        return jsonify({"status": "error", "message": "asof (YYYY-MM-DD) gerekli."}), 400
+    n = store_official_figures(
+        usd_reserve_m=_num("usd_reserve_m"), annual_dividends_m=_num("annual_dividends_m"),
+        pref_m=_num("pref_m"), debt_m=_num("debt_m"), asof=asof)
+    return jsonify({"status": "success", "message": f"{n} resmi değer kaydedildi ({asof})."})
 
 @app.route('/api/cashflow')
 def get_cashflow():
