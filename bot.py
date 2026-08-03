@@ -285,8 +285,14 @@ def seed_database(conn):
         print("Database seeded successfully.")
 
 def mark_current_filings_processed(conn):
+    """Mark historical filings processed so a fresh DB doesn't backfill-spam.
+
+    Filings from today/yesterday are deliberately LEFT UNMARKED: they are
+    still within the alerting window, and a restart that happens to land
+    minutes after a new 8-K must not swallow it silently.
+    """
     cursor = conn.cursor()
-    print("Marking all existing SEC filings in EDGAR index as processed to prevent backfilling...")
+    print("Marking existing SEC filings in EDGAR index as processed to prevent backfilling...")
     data = fetch_mstr_filings(use_conditional=False)
     if data:
         recent = data.get('filings', {}).get('recent', {})
@@ -294,23 +300,34 @@ def mark_current_filings_processed(conn):
         accession_numbers = recent.get('accessionNumber', [])
         filing_dates = recent.get('filingDate', [])
         primary_docs = recent.get('primaryDocument', [])
-        
+        usable = min(len(forms), len(accession_numbers),
+                     len(filing_dates), len(primary_docs))
+
+        cutoff = (datetime.now().date() - timedelta(days=1)).strftime("%Y-%m-%d")
         count_marked = 0
-        for idx, form in enumerate(forms):
-            if form == '8-K':
-                acc_num = accession_numbers[idx]
-                date = filing_dates[idx]
-                doc = primary_docs[idx]
-                acc_num_no_dash = acc_num.replace('-', '')
-                url = f"https://www.sec.gov/Archives/edgar/data/1050446/{acc_num_no_dash}/{doc}"
-                
-                cursor.execute(
-                    "INSERT OR IGNORE INTO processed_filings (accession_number, filing_date, form, url) VALUES (?, ?, '8-K', ?)",
-                    (acc_num, date, url)
-                )
-                count_marked += 1
+        skipped_recent = []
+        for idx in range(usable):
+            if forms[idx] != '8-K':
+                continue
+            acc_num = accession_numbers[idx]
+            date = filing_dates[idx]
+            if date >= cutoff:
+                skipped_recent.append(f"{acc_num} ({date})")
+                continue
+            doc = primary_docs[idx]
+            acc_num_no_dash = acc_num.replace('-', '')
+            url = f"https://www.sec.gov/Archives/edgar/data/1050446/{acc_num_no_dash}/{doc}"
+
+            cursor.execute(
+                "INSERT OR IGNORE INTO processed_filings (accession_number, filing_date, form, url) VALUES (?, ?, '8-K', ?)",
+                (acc_num, date, url)
+            )
+            count_marked += 1
         conn.commit()
         print(f"Successfully marked {count_marked} existing filings in EDGAR as processed.")
+        if skipped_recent:
+            print(f"Left {len(skipped_recent)} recent filing(s) unmarked so they can still "
+                  f"alert: {', '.join(skipped_recent)}")
 
 # ----------------- DATA-REPAIR MIGRATIONS -----------------
 
@@ -571,6 +588,84 @@ def fetch_mstr_filings(use_conditional=True, return_state=False):
     except Exception as e:
         print(f"Error fetching SEC JSON: {e}")
     return (None, None) if return_state else None
+
+_atom_shape_logged = False
+
+# The company Atom feed reflects EDGAR's live dissemination system and is a
+# few KB (vs the multi-MB submissions JSON), so it is the fastest way to
+# learn a filing exists. It carries the accession but not the primary
+# document name — that is resolved with one small index.json fetch, and
+# only when a genuinely new accession shows up.
+ATOM_URL = ("https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
+            "&CIK=0001050446&type=8-K&dateb=&owner=include&count=10&output=atom")
+
+def _resolve_primary_document(accession):
+    """Map an accession to its primary 8-K document URL via index.json."""
+    acc_no_dash = accession.replace('-', '')
+    base = f"https://www.sec.gov/Archives/edgar/data/1050446/{acc_no_dash}"
+    try:
+        resp = http_session.get(f"{base}/index.json", timeout=3)
+        if resp.status_code != 200:
+            return ""
+        items = ((resp.json() or {}).get("directory") or {}).get("item") or []
+        htm = [i.get("name", "") for i in items
+               if i.get("name", "").lower().endswith(('.htm', '.html'))]
+        # Skip EDGAR's own index/header pages; the filing document remains
+        docs = [n for n in htm
+                if 'index' not in n.lower() and not n.lower().endswith('-index.htm')]
+        if not docs:
+            return ""
+        # MSTR names its 8-K body mstr-YYYYMMDD.htm; otherwise take the first
+        preferred = next((n for n in docs if n.lower().startswith('mstr')), docs[0])
+        return f"{base}/{preferred}"
+    except Exception as e:
+        print(f"Primary document resolve failed for {accession}: {e}")
+        return ""
+
+def fetch_mstr_filings_atom():
+    """Fastest new-filing signal: the company's EDGAR Atom feed.
+
+    Returns [{accession, date, url}] for 8-K entries. Every failure mode
+    returns [] — the submissions and EFTS paths are unaffected.
+    """
+    global _atom_shape_logged
+    if _sec_blocked('atom'):
+        return []
+    try:
+        resp = http_session.get(ATOM_URL, timeout=3)
+        if resp.status_code != 200:
+            _register_sec_throttle('atom', resp.status_code)
+            return []
+        _sec_clear_backoff('atom')
+        body = resp.text
+        results = []
+        for entry in re.findall(r'<entry>(.*?)</entry>', body, re.S):
+            acc = re.search(r'<accession-?n?umber>\s*([\d-]+)\s*</accession-?n?umber>',
+                            entry, re.I)
+            ftype = re.search(r'<filing-type>\s*([^<]+?)\s*</filing-type>', entry, re.I)
+            fdate = re.search(r'<filing-date>\s*([\d-]+)\s*</filing-date>', entry, re.I)
+            if not acc:
+                continue
+            form = (ftype.group(1) if ftype else '8-K').strip()
+            if not form.startswith('8-K'):
+                continue
+            results.append({
+                "accession": acc.group(1).strip(),
+                "date": (fdate.group(1) if fdate else datetime.now().strftime("%Y-%m-%d")),
+                "url": "",   # resolved lazily, only for unseen accessions
+            })
+        if results and not _atom_shape_logged:
+            _atom_shape_logged = True
+            print(f"EDGAR atom feed OK (one-time log): newest={results[0]['accession']} "
+                  f"date={results[0]['date']} entries={len(results)}")
+        elif not results and not _atom_shape_logged:
+            _atom_shape_logged = True
+            print(f"EDGAR atom feed returned no 8-K entries (one-time log); "
+                  f"body starts: {body[:200]!r}")
+        return results
+    except Exception as e:
+        print(f"Atom feed query error (non-critical): {e}")
+    return []
 
 _efts_shape_logged = False
 
@@ -3015,8 +3110,10 @@ def async_groq_analysis(cleaned_text, url, reply_to_id, table_data=None):
         print("Async Groq analysis finished with no summary output.")
 
 def process_filing(accession, date, form, url):
-    print(f"Processing new filing: {accession} | Date: {date} | Form: {form}")
-    
+    now_trt = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=3)))
+    print(f"Processing new filing: {accession} | Date: {date} | Form: {form} | "
+          f"detected {now_trt.strftime('%H:%M:%S')} TRT")
+
     # Anti-Spam Safeguard: Only send Telegram alerts for filings from today or yesterday
     should_alert = True
     try:
@@ -3074,9 +3171,11 @@ def process_filing(accession, date, form, url):
         if should_alert:
             alert_text = format_alert(fallback_data, url)
             main_msg_id = send_telegram_alert(alert_text)
+            sent_trt = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=3)))
             print(f"Alert latency: fetch {(t_fetch-t_start)*1000:.0f}ms | "
                   f"parse {(t_parse-t_fetch)*1000:.0f}ms | "
-                  f"telegram {(time.time()-t_parse)*1000:.0f}ms")
+                  f"telegram {(time.time()-t_parse)*1000:.0f}ms | "
+                  f"sent {sent_trt.strftime('%H:%M:%S')} TRT")
 
         # Save to DB in background — don't block the alert pipeline
         threading.Thread(
@@ -3192,6 +3291,7 @@ _processed_cache_time = 0
 
 # EFTS polls are staggered to at most 1/s (see check_for_new_filings)
 _last_efts_time = 0.0
+_last_submissions_time = 0.0
 
 def _refresh_processed_cache():
     """Refresh the processed filings cache from DB. Called sparingly."""
@@ -3223,31 +3323,65 @@ def check_for_new_filings():
     # index is polled every tick (conditional GET makes unchanged responses
     # cheap 304s); EFTS is staggered to at most once per second to stay well
     # under the SEC's 10 req/s fair-use limit at 4 ticks/s.
-    global _last_efts_time, _submissions_etag, _submissions_last_modified
-    run_efts = time.time() - _last_efts_time >= 1.0
+    # Request budget under the SEC's 10 req/s fair-use limit. The atom feed
+    # is the fastest signal and only a few KB, so it runs every tick; the
+    # multi-MB submissions index (which merely confirms, and supplies the
+    # exact document name) and the slow-to-index EFTS are staggered.
+    global _last_efts_time, _last_submissions_time
+    global _submissions_etag, _submissions_last_modified
+    now = time.time()
+    run_efts = now - _last_efts_time >= 5.0
+    run_submissions = now - _last_submissions_time >= 2.0
 
     # Single-cell tuple assignment keeps (data, state) atomic: a join timeout
     # must never observe the payload without its conditional-GET state or
     # vice versa.
     submissions_fetch = [(None, None)]
     efts_result = [[]]
+    atom_result = [[]]
 
     def _fetch_submissions():
         submissions_fetch[0] = fetch_mstr_filings(return_state=True)
     def _fetch_efts():
         efts_result[0] = fetch_mstr_filings_efts()
+    def _fetch_atom():
+        atom_result[0] = fetch_mstr_filings_atom()
 
-    t1 = threading.Thread(target=_fetch_submissions, daemon=True)
-    t1.start()
+    # The atom feed is the fastest signal and tiny — query it every tick
+    t3 = threading.Thread(target=_fetch_atom, daemon=True)
+    t3.start()
+    t1 = None
+    if run_submissions:
+        _last_submissions_time = now
+        t1 = threading.Thread(target=_fetch_submissions, daemon=True)
+        t1.start()
     t2 = None
     if run_efts:
-        _last_efts_time = time.time()
+        _last_efts_time = now
         t2 = threading.Thread(target=_fetch_efts, daemon=True)
         t2.start()
-    t1.join(timeout=4)
+    t3.join(timeout=4)
+    if t1:
+        t1.join(timeout=4)
     if t2:
         t2.join(timeout=4)
-    
+
+    # Process atom results FIRST — it sees the filing before the other two
+    for result in atom_result[0]:
+        acc = result["accession"]
+        if acc in processed or acc in seen_accessions:
+            continue
+        url = result.get("url") or _resolve_primary_document(acc)
+        if not url:
+            # Could not resolve the document yet; the submissions path will
+            # pick it up with the correct URL on a later tick
+            print(f"Atom saw new filing {acc} but the document is not readable yet.")
+            continue
+        print(f"Atom feed detected new 8-K {acc} ({result['date']}) — "
+              f"ahead of the submissions index.")
+        new_filings_found.append((acc, result["date"], "8-K", url))
+        seen_accessions.add(acc)
+
     # Process submissions results
     data, sub_state = submissions_fetch[0]
     if data:
@@ -3257,16 +3391,24 @@ def check_for_new_filings():
             accession_numbers = recent.get('accessionNumber', [])
             filing_dates = recent.get('filingDate', [])
             primary_docs = recent.get('primaryDocument', [])
+            # EDGAR updates these parallel arrays as a filing is indexed, so
+            # they can be momentarily uneven. Never index past the shortest —
+            # an IndexError here used to abort the whole poll cycle.
+            usable = min(len(forms), len(accession_numbers),
+                         len(filing_dates), len(primary_docs))
+            if usable < len(forms):
+                print(f"Submissions index arrays uneven ({len(forms)} forms vs "
+                      f"{usable} usable) — scanning the consistent prefix.")
 
-            for idx, form in enumerate(forms):
-                if form == '8-K':
+            for idx in range(usable):
+                if forms[idx] == '8-K':
                     acc_num = accession_numbers[idx]
                     if acc_num not in processed and acc_num not in seen_accessions:
                         filing_date = filing_dates[idx]
                         doc = primary_docs[idx]
                         acc_num_no_dash = acc_num.replace('-', '')
                         url = f"https://www.sec.gov/Archives/edgar/data/1050446/{acc_num_no_dash}/{doc}"
-                        new_filings_found.append((acc_num, filing_date, form, url))
+                        new_filings_found.append((acc_num, filing_date, forms[idx], url))
                         seen_accessions.add(acc_num)
         # The payload has been scanned — only NOW is it safe to remember the
         # validators. A timed-out fetch leaves data None, nothing is
@@ -3337,11 +3479,16 @@ def polling_loop():
     trt_tz = timezone(timedelta(hours=3))
     
     while running:
+        # The interval is derived from the clock BEFORE the scan, so a failed
+        # scan can never demote the fast windows. Falling back to the 300s
+        # normal interval after an exception used to blind the bot for five
+        # minutes — exactly when a filing lands is when the SEC payloads are
+        # most likely to be malformed mid-index-update.
         try:
             now_trt = datetime.now(timezone.utc).astimezone(trt_tz)
-            
+
             is_weekday = now_trt.weekday() < 5
-            
+
             # Ultra-critical: 14:30 - 15:15 TRT (sub-second polling)
             is_ultra_critical = (
                 (now_trt.hour == 14 and now_trt.minute >= 30) or
@@ -3352,7 +3499,7 @@ def polling_loop():
                 (now_trt.hour == 14 and now_trt.minute < 30) or
                 (now_trt.hour == 15 and now_trt.minute > 15)
             )
-            
+
             if is_weekday and is_ultra_critical:
                 if current_mode != "Ultra High-Speed Mode":
                     print(f"Entering ULTRA HIGH-SPEED POLLING MODE at {now_trt.strftime('%H:%M:%S')} TRT")
@@ -3368,13 +3515,19 @@ def polling_loop():
                     print(f"Entering NORMAL POLLING MODE at {now_trt.strftime('%H:%M:%S')} TRT")
                     current_mode = "Normal Mode"
                 interval = POLL_INTERVAL_NORMAL
-                
-            check_for_new_filings()
-            
         except Exception as e:
-            print(f"Exception in polling loop: {e}")
+            print(f"Polling schedule computation failed: {e}")
             interval = POLL_INTERVAL_NORMAL
-            
+
+        try:
+            check_for_new_filings()
+        except Exception as e:
+            # Keep the cadence the clock asked for; only back off a little in
+            # normal mode so a persistent failure doesn't spin.
+            print(f"Exception in polling loop: {e}")
+            if interval >= POLL_INTERVAL_NORMAL:
+                interval = POLL_INTERVAL_NORMAL
+
         time.sleep(interval)
 
 # ----------------- FLASK WEB ROUTES & APIS -----------------
