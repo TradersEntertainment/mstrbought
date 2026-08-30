@@ -400,3 +400,25 @@ def test_backfill_usd_reserves(temp_db, monkeypatch):
     conn.close()
     assert got == {'2026-07-13': 3000000000.0}
     assert none_marked == ['2026-06-01']  # scanned, no reserve → sentinel, won't re-fetch
+
+
+def test_fast_reserve_scan_is_bounded(monkeypatch):
+    """Cost was linear in the number of 'reserve' hits, each rebuilding a 4KB
+    window with three regex passes — on the path ahead of the first Telegram
+    byte. A filing full of "reserves the right to" boilerplate drove it past
+    the full-text parse it exists to avoid."""
+    import time as _time
+
+    noise = "<p>The Company reserves the right to do things. </p>" * 4000
+    monkeypatch.setattr(bot, 'MAX_RESERVE_WINDOWS', 24)
+
+    started = _time.time()
+    assert bot.parse_usd_reserve_fast(noise) is None
+    elapsed = _time.time() - started
+    assert elapsed < 0.15, f"bounded scan took {elapsed*1000:.0f}ms"
+
+
+def test_fast_reserve_still_finds_a_reserve_after_boilerplate():
+    noise = "<p>The Company reserves the right to act. </p>" * 10
+    doc = noise + "<p>USD Reserve of $3.0 billion</p>"
+    assert bot.parse_usd_reserve_fast(doc) is not None

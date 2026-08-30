@@ -22,13 +22,98 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DB_PATH = os.getenv("DB_PATH", "mstr_state.db")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 
+# ----------------- CLOCKS -----------------
+# EDGAR disseminates on the US Eastern clock and Turkey sits on a fixed
+# UTC+3. Anchoring the fast-poll windows to Turkish local time — as this bot
+# did — silently shifts every window by a full hour at each US DST
+# transition. MSTR's weekly 8-K lands in a tight 07:55-08:25 ET band, which
+# is 14:55-15:25 TRT in summer but 15:55-16:25 TRT in winter, i.e. entirely
+# outside the old 14:30-15:15 TRT window for roughly five months a year.
+# Every window below is therefore expressed in US Eastern.
+try:
+    from zoneinfo import ZoneInfo
+    ET_TZ = ZoneInfo("America/New_York")
+except Exception as _tz_err:  # pragma: no cover - only if tzdata is missing
+    print(f"WARNING: falling back to fixed-offset US Eastern ({_tz_err}); "
+          f"install tzdata so DST is handled correctly.")
+    ET_TZ = timezone(timedelta(hours=-5))
+
+TRT_TZ = timezone(timedelta(hours=3))
+
+def now_et():
+    return datetime.now(timezone.utc).astimezone(ET_TZ)
+
+def now_trt():
+    return datetime.now(timezone.utc).astimezone(TRT_TZ)
+
 # Optimization: critical poll interval is 0.25s (250ms) by default now
-POLL_INTERVAL_NORMAL = float(os.getenv("POLL_INTERVAL_NORMAL", "300"))
+# NORMAL used to be 300s, which meant anything landing outside the narrow
+# fast band was found up to five minutes late. EDGAR only disseminates
+# 06:00-22:00 ET on business days, so an overnight tick is nearly free.
+POLL_INTERVAL_NORMAL = float(os.getenv("POLL_INTERVAL_NORMAL", "60"))
 POLL_INTERVAL_CRITICAL = float(os.getenv("POLL_INTERVAL_CRITICAL", "0.25"))
+POLL_INTERVAL_FAST = float(os.getenv("POLL_INTERVAL_FAST", "2"))
+
+# Windows in US Eastern minutes-of-day, weekdays only.
+#   ULTRA covers the observed 07:55-08:25 ET filing band with margin on both
+#   sides (and the 09:04 ET outlier seen in the record).
+#   FAST covers the rest of EDGAR's dissemination day, so the non-BTC 8-Ks
+#   that land at 16:11 / 16:27 / 17:22 ET are seconds late, not minutes.
+def _win(env, default_start, default_end):
+    raw = os.getenv(env, "").strip()
+    if raw:
+        try:
+            a, b = raw.split("-")
+            ah, am = (int(x) for x in a.strip().split(":"))
+            bh, bm = (int(x) for x in b.strip().split(":"))
+            return ah * 60 + am, bh * 60 + bm
+        except Exception:
+            print(f"Ignoring malformed {env}={raw!r}; expected 'HH:MM-HH:MM' ET.")
+    return default_start, default_end
+
+ULTRA_WINDOW_ET = _win("ULTRA_WINDOW_ET", 7 * 60 + 30, 9 * 60 + 15)
+FAST_WINDOW_ET = _win("FAST_WINDOW_ET", 6 * 60, 18 * 60)
+
+def poll_schedule(now):
+    """Pick the poll cadence for a US-Eastern datetime.
+
+    Returns (mode, interval, seconds_until_this_bucket_can_change).
+
+    The third value is what stops the loop sleeping straight through a
+    window opening. The old loop chose an interval once and then slept it
+    out, so a tick landing at 13:59 slept until 14:04 — five minutes of
+    total blindness starting one minute before the fast window opened.
+    Sleeping no longer than the distance to the next boundary makes the
+    window open on time, whatever cadence preceded it.
+    """
+    minute = now.hour * 60 + now.minute
+    if now.weekday() >= 5:
+        # EDGAR does not disseminate at weekends. Next boundary is Monday.
+        secs = ((7 - now.weekday()) * 24 * 60 - minute) * 60 - now.second
+        return "Normal Mode", POLL_INTERVAL_NORMAL, max(secs, 60)
+
+    def until(*edges):
+        ahead = [(e - minute) * 60 - now.second for e in edges]
+        ahead = [a for a in ahead if a > 0]
+        # Midnight always ends the current bucket (the weekday may change).
+        ahead.append((24 * 60 - minute) * 60 - now.second)
+        return max(min(ahead), 1)
+
+    us, ue = ULTRA_WINDOW_ET
+    fs, fe = FAST_WINDOW_ET
+    edges = (us, ue, fs, fe)
+    if us <= minute < ue:
+        return "Ultra High-Speed Mode", POLL_INTERVAL_CRITICAL, until(*edges)
+    if fs <= minute < fe:
+        return "Fast Mode", POLL_INTERVAL_FAST, until(*edges)
+    return "Normal Mode", POLL_INTERVAL_NORMAL, until(*edges)
 
 # Global states
 current_mode = "Normal Mode"
 last_checked_time = None
+# Wall-clock of the last completed poll tick; /health reads it to tell a
+# wedged loop apart from a quiet one.
+_last_tick_time = 0.0
 running = True
 
 # Initialize Telegram Bot
@@ -97,15 +182,51 @@ http_session.headers.update({
     'User-Agent': 'Antigravity Telegram Bot antigravity@tradersentertainment.com',
     'Accept-Encoding': 'gzip, deflate',
 })
+# The default adapter keeps 10 connections per host and, more importantly,
+# retries nothing. Five hosts (three SEC, Telegram, Groq) are hit from the
+# poll threads, the warmer, the backfills and every Flask request, so give
+# the pool real headroom. max_retries stays 0: urllib3 backoff would add
+# seconds to a latency-critical fetch, and a blind retry of the Telegram
+# POST could double-post. Stale-socket recovery is handled explicitly in
+# send_telegram_alert instead.
+_https_adapter = requests.adapters.HTTPAdapter(
+    pool_connections=16, pool_maxsize=32, pool_block=False, max_retries=0)
+http_session.mount('https://', _https_adapter)
+http_session.mount('http://', _https_adapter)
+
+# Telegram renders a link preview by fetching the SEC page itself BEFORE it
+# answers sendMessage, and every filing URL is a cache miss for it. That wait
+# lands squarely on the alert path, so previews are off by default.
+TELEGRAM_LINK_PREVIEW = os.getenv("TELEGRAM_LINK_PREVIEW", "false").lower() in ("1", "true", "yes")
 
 # ----------------- DB MANAGEMENT -----------------
 
+_wal_enabled = False
+
 def get_db_connection():
+    """Open a connection in WAL mode.
+
+    In the default rollback-journal mode a writer takes an EXCLUSIVE lock and
+    every reader blocks behind it for the full busy timeout. The alert path
+    reads (and, until this change, wrote) while save_to_database, the two
+    startup backfills and every Flask request are writing, so a five-second
+    stall was reachable on the one path that must never stall. WAL lets
+    readers run concurrently with the writer; journal_mode is persistent in
+    the database file, so it is set once per process.
+    """
+    global _wal_enabled
     db_dir = os.path.dirname(DB_PATH)
     if db_dir and not os.path.exists(db_dir):
         os.makedirs(db_dir, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
+    if not _wal_enabled:
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            _wal_enabled = True
+        except Exception as e:
+            print(f"Could not enable SQLite WAL mode: {e}")
+    conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
 def init_db():
@@ -303,7 +424,8 @@ def mark_current_filings_processed(conn):
         usable = min(len(forms), len(accession_numbers),
                      len(filing_dates), len(primary_docs))
 
-        cutoff = (datetime.now().date() - timedelta(days=1)).strftime("%Y-%m-%d")
+        # EDGAR filing dates are US Eastern; the container clock is UTC.
+        cutoff = (now_et().date() - timedelta(days=1)).strftime("%Y-%m-%d")
         count_marked = 0
         skipped_recent = []
         for idx in range(usable):
@@ -502,7 +624,10 @@ except ImportError:
 
 # Optimization: Highly efficient text cleaning via BeautifulSoup tag decomposition
 def clean_html(html_content):
-    soup = BeautifulSoup(html_content, 'html.parser')
+    # HTML_PARSER (lxml when installed) is both faster and, unlike the
+    # pure-Python html.parser, releases the GIL — this runs on background
+    # threads that overlap the Telegram send.
+    soup = BeautifulSoup(html_content, HTML_PARSER)
     # Decompose script, style, xml, and head blocks
     for element in soup(["script", "style", "xml", "head"]):
         element.decompose()
@@ -546,6 +671,33 @@ def _commit_submissions_state(state):
         _submissions_etag = state.get('etag')
         _submissions_last_modified = state.get('last_modified')
 
+# Railway's egress to www.sec.gov is measurably slow and flaky: production
+# logs show constant "Read timed out (read timeout=3)" against the atom feed
+# and "RemoteDisconnected" against the submissions index — the latter being a
+# pooled keep-alive socket the peer closed after we had already written the
+# request, which urllib3 cannot transparently recover.
+#
+# A single flat timeout=3 was both too tight for a slow origin and applied to
+# connect and read separately. Split them: a connect that has not landed in
+# SEC_CONNECT_TIMEOUT is dead, while a read deserves longer than 3s. This is
+# only safe because the poll tick no longer blocks on these — each source
+# runs on its own thread behind a shared deadline and its result is read
+# whether or not the thread finished, so a slow fetch costs its own signal
+# for one tick rather than stalling the loop.
+SEC_CONNECT_TIMEOUT = float(os.getenv("SEC_CONNECT_TIMEOUT", "2"))
+SEC_READ_TIMEOUT = float(os.getenv("SEC_READ_TIMEOUT", "6"))
+
+def sec_get(url, headers=None, read_timeout=None):
+    """GET an SEC endpoint, retrying once on a dropped keep-alive socket."""
+    timeout = (SEC_CONNECT_TIMEOUT, read_timeout or SEC_READ_TIMEOUT)
+    try:
+        return http_session.get(url, timeout=timeout, headers=headers)
+    except requests.exceptions.ConnectionError:
+        # Stale pooled connection: retry immediately on a fresh socket. Costs
+        # nothing in the happy path, and a read timeout is NOT retried here —
+        # that one is a slow origin, and hammering it would make things worse.
+        return http_session.get(url, timeout=timeout, headers=headers)
+
 def fetch_mstr_filings(use_conditional=True, return_state=False):
     """Fetch the EDGAR submissions index.
 
@@ -571,7 +723,7 @@ def fetch_mstr_filings(use_conditional=True, return_state=False):
     if use_conditional and _submissions_last_modified:
         headers['If-Modified-Since'] = _submissions_last_modified
     try:
-        resp = http_session.get(url, timeout=3, headers=headers)
+        resp = sec_get(url, headers=headers)
         if resp.status_code == 200:
             _sec_clear_backoff('submissions')
             state = {
@@ -590,6 +742,7 @@ def fetch_mstr_filings(use_conditional=True, return_state=False):
     return (None, None) if return_state else None
 
 _atom_shape_logged = False
+_atom_empty_since = 0.0
 
 # The company Atom feed reflects EDGAR's live dissemination system and is a
 # few KB (vs the multi-MB submissions JSON), so it is the fastest way to
@@ -599,12 +752,21 @@ _atom_shape_logged = False
 ATOM_URL = ("https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
             "&CIK=0001050446&type=8-K&dateb=&owner=include&count=10&output=atom")
 
+# EDGAR's browse-edgar atom output has long carried the accession under a
+# MISSPELLED tag, <accession-nunber>. The parser here used to require the
+# correct spelling, so `if not acc: continue` dropped every entry and this
+# "fastest signal" silently returned [] on every single poll — while the two
+# sources it was introduced to replace were slowed down to make room for it.
+# Accessions have a fixed shape (10-2-6 digits), so match the shape and stop
+# trusting the tag name at all.
+ACCESSION_RE = re.compile(r'\b(\d{10}-\d{2}-\d{6})\b')
+
 def _resolve_primary_document(accession):
     """Map an accession to its primary 8-K document URL via index.json."""
     acc_no_dash = accession.replace('-', '')
     base = f"https://www.sec.gov/Archives/edgar/data/1050446/{acc_no_dash}"
     try:
-        resp = http_session.get(f"{base}/index.json", timeout=3)
+        resp = sec_get(f"{base}/index.json")
         if resp.status_code != 200:
             return ""
         items = ((resp.json() or {}).get("directory") or {}).get("item") or []
@@ -628,11 +790,11 @@ def fetch_mstr_filings_atom():
     Returns [{accession, date, url}] for 8-K entries. Every failure mode
     returns [] — the submissions and EFTS paths are unaffected.
     """
-    global _atom_shape_logged
+    global _atom_shape_logged, _atom_empty_since
     if _sec_blocked('atom'):
         return []
     try:
-        resp = http_session.get(ATOM_URL, timeout=3)
+        resp = sec_get(ATOM_URL)
         if resp.status_code != 200:
             _register_sec_throttle('atom', resp.status_code)
             return []
@@ -640,8 +802,10 @@ def fetch_mstr_filings_atom():
         body = resp.text
         results = []
         for entry in re.findall(r'<entry>(.*?)</entry>', body, re.S):
-            acc = re.search(r'<accession-?n?umber>\s*([\d-]+)\s*</accession-?n?umber>',
-                            entry, re.I)
+            # Shape match over the whole entry: covers <accession-number>,
+            # EDGAR's misspelled <accession-nunber>, and the accession
+            # embedded in <filing-href>.../0001050446-26-000123-index.htm.
+            acc = ACCESSION_RE.search(entry)
             ftype = re.search(r'<filing-type>\s*([^<]+?)\s*</filing-type>', entry, re.I)
             fdate = re.search(r'<filing-date>\s*([\d-]+)\s*</filing-date>', entry, re.I)
             if not acc:
@@ -651,17 +815,24 @@ def fetch_mstr_filings_atom():
                 continue
             results.append({
                 "accession": acc.group(1).strip(),
-                "date": (fdate.group(1) if fdate else datetime.now().strftime("%Y-%m-%d")),
+                "date": (fdate.group(1) if fdate else now_et().strftime("%Y-%m-%d")),
                 "url": "",   # resolved lazily, only for unseen accessions
             })
         if results and not _atom_shape_logged:
             _atom_shape_logged = True
             print(f"EDGAR atom feed OK (one-time log): newest={results[0]['accession']} "
                   f"date={results[0]['date']} entries={len(results)}")
-        elif not results and not _atom_shape_logged:
-            _atom_shape_logged = True
-            print(f"EDGAR atom feed returned no 8-K entries (one-time log); "
-                  f"body starts: {body[:200]!r}")
+        elif not results:
+            # A feed that parses to nothing is how this source died silently
+            # before. A 200 with a non-empty body and zero entries is a
+            # PARSER failure, not an absence of filings — say so, repeatedly
+            # but not on every tick.
+            now = time.time()
+            if body.strip() and now - _atom_empty_since > 900:
+                _atom_empty_since = now
+                print(f"WARNING: EDGAR atom feed parsed 0 8-K entries from a "
+                      f"{len(body)}-byte 200 response — the feed shape may have "
+                      f"changed. Body starts: {body[:200]!r}")
         return results
     except Exception as e:
         print(f"Atom feed query error (non-critical): {e}")
@@ -684,11 +855,16 @@ def fetch_mstr_filings_efts():
     global _efts_shape_logged
     if _sec_blocked('efts'):
         return []
-    today = datetime.now().strftime("%Y-%m-%d")
-    url = (f"https://efts.sec.gov/LATEST/search-index?q=%22bitcoin%22"
-           f"&forms=8-K&ciks=0001050446&startdt={today}&enddt={today}")
+    # EDGAR dates are US Eastern; datetime.now() is the container's UTC
+    # clock, which is a day ahead late in the US evening. And q= is a hard
+    # full-text filter: keyed on "bitcoin" this path was blind to every 8-K
+    # that did not contain the literal word — dividend declarations, ATM
+    # prospectus supplements, officer changes. It is optional, so drop it.
+    today = now_et().strftime("%Y-%m-%d")
+    url = (f"https://efts.sec.gov/LATEST/search-index?"
+           f"forms=8-K&ciks=0001050446&startdt={today}&enddt={today}")
     try:
-        resp = http_session.get(url, timeout=3)
+        resp = sec_get(url)
         if resp.status_code != 200:
             _register_sec_throttle('efts', resp.status_code)
             return []
@@ -712,11 +888,18 @@ def fetch_mstr_filings_efts():
                     "url": f"https://www.sec.gov/Archives/edgar/data/1050446/{acc_no_dash}/{filename}"
                 })
                 continue
-            # Legacy/unknown shape fallback
+            # Legacy/unknown shape fallback. Only accept something that is
+            # actually shaped like an accession: `file_num` is an SEC file
+            # number and a bare `_id` still carries its ':filename' suffix,
+            # and either one written into processed_filings can never match
+            # the dashed form the other sources produce — so the filing gets
+            # alerted twice and the junk row is dedup-dead forever.
             filing_url = source.get("file_url", "")
-            acc = source.get("adsh") or source.get("file_num") or hit_id
-            if filing_url and acc:
-                results.append({"accession": acc, "date": filing_date, "url": filing_url})
+            raw_acc = source.get("adsh") or hit_id
+            acc_match = ACCESSION_RE.search(raw_acc or "")
+            if filing_url and acc_match:
+                results.append({"accession": acc_match.group(1),
+                                "date": filing_date, "url": filing_url})
             elif hit_id:
                 print(f"EFTS: unrecognized hit shape, _id={hit_id[:120]}")
         return results
@@ -726,7 +909,7 @@ def fetch_mstr_filings_efts():
 
 def fetch_html(url):
     try:
-        resp = http_session.get(url, timeout=3)
+        resp = sec_get(url)
         if resp.status_code == 200:
             return resp.text
     except Exception as e:
@@ -1432,6 +1615,8 @@ def parse_usd_reserve(text):
         return round(val_m, 1)
     return None
 
+MAX_RESERVE_WINDOWS = int(os.getenv("MAX_RESERVE_WINDOWS", "24"))
+
 def parse_usd_reserve_fast(html):
     """Sub-millisecond reserve extraction for the alert-critical path.
 
@@ -1441,9 +1626,25 @@ def parse_usd_reserve_fast(html):
     """
     if not html:
         return None
+    # Cost is linear in the number of 'reserve' hits, and each hit rebuilds a
+    # 4KB window with three regex passes. A filing full of boilerplate
+    # ("reserves the right to", "reserve requirements") drove this past the
+    # full-text parse it exists to avoid — 137ms measured at 600 hits, on the
+    # path ahead of the first Telegram byte. Skip windows already covered and
+    # stop after a bounded number of misses; the background full-text parse
+    # still runs when this returns None, so nothing is lost but the tail.
+    scanned_to = -1
+    windows = 0
     for m in re.finditer(r'[Rr]eserve', html):
-        window = html[max(0, m.start() - 2000):m.start() + 2000]
-        text = re.sub(r'<[^>]+>', ' ', window)
+        if m.start() <= scanned_to:
+            continue
+        start = max(0, m.start() - 2000)
+        end = m.start() + 2000
+        scanned_to = end - 500
+        windows += 1
+        if windows > MAX_RESERVE_WINDOWS:
+            break
+        text = re.sub(r'<[^>]+>', ' ', html[start:end])
         text = re.sub(r'&nbsp;|&#160;|&amp;', ' ', text)
         text = re.sub(r'\s+', ' ', text)
         val = parse_usd_reserve(text)
@@ -1456,6 +1657,34 @@ def _fmt_musd(m):
     if m is None:
         return "-"
     return f"${m/1000:.2f}B" if abs(m) >= 1000 else f"${m:.1f}M"
+
+# Short-TTL memos for the two derived figures the alert decorates itself
+# with. Quarterly inputs, so staleness is measured in minutes at worst.
+DERIVED_TTL = float(os.getenv("DERIVED_TTL", "600"))
+_derived_cache = {}
+_derived_lock = threading.Lock()
+
+def _memo(key, fn):
+    now = time.time()
+    hit = _derived_cache.get(key)
+    if hit and now - hit[0] < DERIVED_TTL:
+        return hit[1]
+    with _derived_lock:
+        hit = _derived_cache.get(key)
+        if hit and time.time() - hit[0] < DERIVED_TTL:
+            return hit[1]
+        val = fn()
+        _derived_cache[key] = (time.time(), val)
+        return val
+
+def _cached_annual_dividends():
+    return _memo("annual_dividends", compute_annual_dividends)
+
+def _cached_cash_estimate():
+    return _memo("cash_estimate", compute_cash_estimate)
+
+def invalidate_derived_cache():
+    _derived_cache.clear()
 
 def build_reserve_context(filing_date, html_content):
     """Parse this filing's USD Reserve, store it, and compute the runway.
@@ -1481,7 +1710,12 @@ def build_reserve_context(filing_date, html_content):
     except Exception:
         pass
 
-    store_usd_reserve(filing_date, reserve_m)
+    # The INSERT+commit used to run here, ahead of the alert. On a
+    # network-backed volume that is several fsyncs, and behind another
+    # writer it could block for the full SQLite busy timeout — seconds of
+    # delay on the alert, to persist a number the alert does not need.
+    threading.Thread(target=store_usd_reserve, args=(filing_date, reserve_m),
+                     daemon=True).start()
 
     ctx = {
         "usd_reserve_m": reserve_m,
@@ -1498,7 +1732,13 @@ def build_reserve_context(filing_date, html_content):
         # MSTR's own framing for the reserve ("at least twelve months of
         # dividends"), using strategy.com's Annual Dividends figure derived
         # automatically from SEC data.
-        annual = compute_annual_dividends()
+        #
+        # Both of these walk the whole purchase history with a json.loads per
+        # row (twice, and a third time via compute_cash_estimate), which grows
+        # with every filing and used to run inline before the alert. The
+        # inputs are 10-Q/XBRL figures that move quarterly, so a short TTL
+        # cache keeps the alert path reading a number instead of deriving one.
+        annual = _cached_annual_dividends()
         if annual["annual_m"] > 0:
             ctx["annual_div_m"] = annual["annual_m"]
             ctx["div_source"] = annual["source"]
@@ -1506,7 +1746,7 @@ def build_reserve_context(filing_date, html_content):
             ctx["runway_weeks"] = round(reserve_m / (annual["annual_m"] / 52.0), 1)
         else:
             # No dividend data at all — fall back to the calibrated runway
-            flow = compute_cash_estimate() or {}
+            flow = _cached_cash_estimate() or {}
             r = flow.get("runway") or {}
             if r.get("infinite"):
                 ctx["runway_infinite"] = True
@@ -1759,14 +1999,35 @@ def refresh_preferred_baselines():
         print(f"Preferred baselines DB write failed: {e}")
         return 0
 
+def _wait_out_fast_window(label):
+    """Hold heavy background work until the fast-poll band is over.
+
+    These loops parse multi-MB documents with BeautifulSoup, which holds the
+    GIL; a parse overlapping the alert path was measured inflating its
+    network round trips several-fold. cash_refresh_loop in particular slept a
+    flat 12h anchored to process start, so its phase was fixed by deploy time
+    and could land on the filing window every single day.
+    """
+    announced = False
+    while running:
+        mode, _, _ = poll_schedule(now_et())
+        if mode == "Normal Mode":
+            return
+        if not announced:
+            announced = True
+            print(f"Deferring {label} until the fast-poll window closes.")
+        time.sleep(60)
+
 def cash_refresh_loop():
     """Refresh the quarterly cash + dividend data at startup and every 12 hours."""
     while running:
+        _wait_out_fast_window("quarterly cash/dividend refresh")
         try:
             refresh_cash_reserves()
             refresh_dividends()
             refresh_preferred_baselines()
             sync_official_figures_from_env()
+            invalidate_derived_cache()
         except Exception as e:
             print(f"Cash refresh loop error: {e}")
         time.sleep(12 * 3600)
@@ -2498,6 +2759,13 @@ def backfill_usd_reserves(sleep_seconds=1.5):
 groq_keys = [k.strip() for k in os.getenv("GROQ_API_KEY", "").split(",") if k.strip()]
 current_key_idx = 0
 
+# Groq retired llama-3.1-8b-instant in August 2026. A decommissioned model
+# id answers 400, which this code treated like any other error: rotate the
+# key and retry, then give up silently — so the AI follow-up message simply
+# stopped being delivered, with nothing in the alert to show it. Keep the id
+# in config so the next deprecation is an env change, not a redeploy.
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+
 def get_groq_client():
     global current_key_idx
     if not groq_keys:
@@ -2555,7 +2823,7 @@ You must return ONLY the raw JSON object. Do not include markdown code block mar
 """
 
     payload = {
-        "model": "llama-3.1-8b-instant",
+        "model": GROQ_MODEL,
         "messages": [
             {"role": "user", "content": prompt}
         ],
@@ -2596,7 +2864,7 @@ def groq_api_call(prompt, temperature=0.1, max_retries=None):
         return None
     retries = max_retries or len(groq_keys)
     payload = {
-        "model": "llama-3.1-8b-instant",
+        "model": GROQ_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "response_format": {"type": "json_object"},
         "temperature": temperature
@@ -2612,8 +2880,14 @@ def groq_api_call(prompt, temperature=0.1, max_retries=None):
                 print(f"Groq key {current_key_idx % len(groq_keys)} rate limited. Rotating...")
                 rotate_groq_key()
                 time.sleep(2)
+            elif response.status_code == 400:
+                # Almost always a bad/retired model id. Rotating keys cannot
+                # fix it, so say what is wrong instead of failing quietly.
+                print(f"Groq rejected the request (400) for model {GROQ_MODEL!r}: "
+                      f"{response.text[:300]} — set GROQ_MODEL to a current model.")
+                return None
             else:
-                print(f"Groq error {response.status_code}. Rotating...")
+                print(f"Groq error {response.status_code}: {response.text[:200]}. Rotating...")
                 rotate_groq_key()
         except Exception as e:
             print(f"Groq exception: {e}. Rotating...")
@@ -2761,6 +3035,25 @@ Sadece ham JSON döndür."""
 
 # ----------------- TELEGRAM ALERTS -----------------
 
+def _telegram_post(url, payload):
+    """POST to Telegram, surviving a keep-alive socket the peer has closed.
+
+    The pooled connection to api.telegram.org can sit idle for hours between
+    filings. If the peer sends its FIN after we have already written the
+    request, urllib3 cannot transparently recover it and raises
+    ConnectionError — which the caller's bare `except Exception` swallowed,
+    losing the alert entirely with nothing but a line on stdout. One
+    immediate retry on a *connection* error only (never on a response) costs
+    nothing in the happy path and turns a lost alert into one extra RTT.
+    Timeouts are a (connect, read) tuple: a bare float applies the value to
+    each phase separately, so `timeout=5` was really a 10s worst case.
+    """
+    try:
+        return http_session.post(url, json=payload, timeout=(2, 5))
+    except requests.exceptions.ConnectionError as e:
+        print(f"Telegram connection dropped ({e}); retrying once on a fresh socket.")
+        return http_session.post(url, json=payload, timeout=(2, 5))
+
 def send_telegram_alert(message_text, reply_to_message_id=None):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram bot not configured.")
@@ -2771,14 +3064,19 @@ def send_telegram_alert(message_text, reply_to_message_id=None):
         "chat_id": TELEGRAM_CHAT_ID,
         "text": message_text,
         "parse_mode": "Markdown",
-        "disable_web_page_preview": False
+        # Telegram builds the link preview by fetching the SEC page ITSELF
+        # before it answers sendMessage, and every filing URL is a fresh
+        # cache miss for it. That fetch was being waited out on the alert
+        # path. Set TELEGRAM_LINK_PREVIEW=true to trade the latency back for
+        # the preview card.
+        "disable_web_page_preview": not TELEGRAM_LINK_PREVIEW
     }
     if reply_to_message_id:
         payload["reply_to_message_id"] = reply_to_message_id
-        
+
     try:
         # Optimization: Use http_session for Keep-Alive connection reuse
-        resp = http_session.post(url, json=payload, timeout=5)
+        resp = _telegram_post(url, payload)
         if resp.status_code == 200:
             result = resp.json()
             if result.get("ok"):
@@ -2797,7 +3095,7 @@ def send_telegram_alert(message_text, reply_to_message_id=None):
             if reply_to_message_id:
                 payload_plain["reply_to_message_id"] = reply_to_message_id
                 
-            resp_plain = http_session.post(url, json=payload_plain, timeout=5)
+            resp_plain = _telegram_post(url, payload_plain)
             if resp_plain.status_code == 200:
                 print("Fallback plain text send succeeded.")
                 result = resp_plain.json()
@@ -3019,6 +3317,8 @@ def save_to_database(date, parsed_data, url, accession, form):
         )
         conn.commit()
         conn.close()
+        # A new history row changes both derived figures.
+        invalidate_derived_cache()
     except Exception as e:
         print(f"Error saving to database: {e}")
 
@@ -3109,55 +3409,114 @@ def async_groq_analysis(cleaned_text, url, reply_to_id, table_data=None):
     else:
         print("Async Groq analysis finished with no summary output.")
 
-def process_filing(accession, date, form, url):
-    now_trt = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=3)))
-    print(f"Processing new filing: {accession} | Date: {date} | Form: {form} | "
-          f"detected {now_trt.strftime('%H:%M:%S')} TRT")
+FETCH_RETRIES = int(os.getenv("FETCH_RETRIES", "3"))
+FETCH_RETRY_DELAY = float(os.getenv("FETCH_RETRY_DELAY", "0.35"))
 
-    # Anti-Spam Safeguard: Only send Telegram alerts for filings from today or yesterday
-    should_alert = True
+def fetch_filing_html(url):
+    """Fetch the filing document, tolerating EDGAR's publication race.
+
+    EDGAR routinely lists an accession before the Archives front end serves
+    its document, so the first GET can 404 for a second or two. fetch_html
+    returns "" for that, process_filing returned False, and the retry was
+    gated on the POLL INTERVAL — the next attempt came 2s later in the fast
+    window but a full 60s (previously 300s) otherwise. A handful of
+    sub-second retries here turns a routine race into a non-event instead of
+    a minutes-late alert.
+    """
+    for attempt in range(max(1, FETCH_RETRIES)):
+        html = fetch_html(url)
+        if html:
+            return html
+        if attempt + 1 < FETCH_RETRIES:
+            time.sleep(FETCH_RETRY_DELAY)
+    return ""
+
+def _record_without_alert(accession, date, form, url):
+    """Backfill a stale filing's history row, off the poll thread."""
+    try:
+        html_content = fetch_filing_html(url)
+        if not html_content:
+            return
+        tables = extract_filing_tables(html_content)
+        data = parse_btc_tables(tables)
+        if not data:
+            return
+        atm_data = parse_atm_table(tables)
+        if atm_data and atm_data.get("period_scoped", True):
+            data["atm"] = atm_data
+            data["financing_details"] = financing_source_from_atm(atm_data)
+        save_to_database(date, data, url, accession, form)
+    except Exception as e:
+        print(f"Background record of stale filing {accession} failed: {e}")
+
+def process_filing(accession, date, form, url):
+    detected = time.time()
+    print(f"Processing new filing: {accession} | Date: {date} | Form: {form} | "
+          f"detected {now_trt().strftime('%H:%M:%S')} TRT")
+
+    # Anti-Spam Safeguard: only alert on filings from today or yesterday. The
+    # history row is still worth having, so the work still happens — but on a
+    # background thread. It used to run inline, so a backlog of stale filings
+    # (after a DB wipe, say) blocked the poll loop for ~0.7s each while
+    # producing no alert at all.
     try:
         filing_dt = datetime.strptime(date, "%Y-%m-%d").date()
-        today = datetime.now().date()
-        if filing_dt < today - timedelta(days=1):
-            print(f"Filing date {date} is older than yesterday. Suppressing Telegram alert to prevent spam.")
-            should_alert = False
+        stale = filing_dt < now_et().date() - timedelta(days=1)
     except Exception as e:
         print(f"Error parsing filing date for spam check: {e}")
-        should_alert = False
-        
+        stale = True
+    if stale:
+        print(f"Filing date {date} is older than yesterday. Recording it in the "
+              f"background without a Telegram alert.")
+        threading.Thread(target=_record_without_alert,
+                         args=(accession, date, form, url), daemon=True).start()
+        return True
+
     t_start = time.time()
-    html_content = fetch_html(url)
+    html_content = fetch_filing_html(url)
     if not html_content:
         print(f"Could not load HTML for {url}")
         return False
     t_fetch = time.time()
 
-    # First, run the local table parsers (offline, instant, no LLM):
-    # one HTML parse feeds both the BTC parser and the ATM parser.
-    tables = extract_filing_tables(html_content)
-    fallback_data = parse_btc_tables(tables)
-    atm_data = parse_atm_table(tables)
-    t_parse = time.time()
+    # Everything from here to the send is wrapped: an exception used to
+    # propagate out of process_filing, leaving the filing unmarked, and
+    # because a parse or format failure is DETERMINISTIC on the same
+    # document, the poll loop retried it forever and never alerted at all.
+    # A broken parse must cost the alert its detail, never its existence.
+    try:
+        # Local table parsers (offline, instant, no LLM): one HTML parse
+        # feeds both the BTC parser and the ATM parser.
+        tables = extract_filing_tables(html_content)
+        fallback_data = parse_btc_tables(tables)
+        atm_data = parse_atm_table(tables)
+        t_parse = time.time()
 
-    # Parse the disclosed USD Reserve for the alert itself (fast windowed
-    # parse — sub-ms) so the first Telegram message can state cash + months
-    # of coverage. If the fast parse misses, retry with the full-text parse
-    # in the background so the weekly series never loses a datapoint.
-    reserve_ctx = build_reserve_context(date, html_content)
+        # The disclosed USD Reserve, from a bounded windowed parse, so the
+        # first Telegram message can state cash + months of coverage.
+        reserve_ctx = build_reserve_context(date, html_content)
+        t_enrich = time.time()
+    except Exception as e:
+        print(f"Parsing failed for {accession} ({e}); sending the bare alert.")
+        main_msg_id = send_telegram_alert(
+            f"📋 **MSTR Yeni SEC Bildirimi (Form 8-K)**\n\n"
+            f"📅 Tarih: {date}\n"
+            f"📄 Bildirim ayrıştırılamadı, içerik analiz ediliyor...\n\n"
+            f"🔗 [SEC Bildirimi]({url})")
+        if main_msg_id is None:
+            return False
+        threading.Thread(target=_deferred_analysis,
+                         args=(html_content, url, main_msg_id, date, accession, form),
+                         daemon=True).start()
+        return True
+
     if reserve_ctx is not None:
         print(f"USD reserve for {date}: ${reserve_ctx['usd_reserve_m']:,.0f}M "
               f"(~{reserve_ctx.get('runway_months')} ay temettü karşılığı)")
-    else:
-        def _extract_reserve():
-            val_m = parse_usd_reserve(clean_html(html_content))
-            if val_m is not None:
-                store_usd_reserve(date, val_m)
-                print(f"USD reserve for {date}: ${val_m:,.0f}M (from 8-K, full-text parse)")
-        threading.Thread(target=_extract_reserve, daemon=True).start()
 
     if fallback_data:
-        # Table is present! We can determine event and statistics instantly without Groq.
+        # Table is present! We can determine event and statistics instantly
+        # without Groq.
         print("BTC update table found in filing! Bypassing synchronous Groq call for instant alert.")
 
         if atm_data and atm_data.get("period_scoped", True):
@@ -3167,15 +3526,20 @@ def process_filing(accession, date, form, url):
             fallback_data.update(reserve_ctx)
 
         # SPEED: Send Telegram FIRST, then save to DB async
-        main_msg_id = None
-        if should_alert:
-            alert_text = format_alert(fallback_data, url)
-            main_msg_id = send_telegram_alert(alert_text)
-            sent_trt = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=3)))
-            print(f"Alert latency: fetch {(t_fetch-t_start)*1000:.0f}ms | "
-                  f"parse {(t_parse-t_fetch)*1000:.0f}ms | "
-                  f"telegram {(time.time()-t_parse)*1000:.0f}ms | "
-                  f"sent {sent_trt.strftime('%H:%M:%S')} TRT")
+        alert_text = format_alert(fallback_data, url)
+        main_msg_id = send_telegram_alert(alert_text)
+        sent = time.time()
+        print(f"Alert latency: fetch {(t_fetch-t_start)*1000:.0f}ms | "
+              f"parse {(t_parse-t_fetch)*1000:.0f}ms | "
+              f"enrich {(t_enrich-t_parse)*1000:.0f}ms | "
+              f"telegram {(sent-t_enrich)*1000:.0f}ms | "
+              f"detect→sent {(sent-detected)*1000:.0f}ms | "
+              f"sent {now_trt().strftime('%H:%M:%S')} TRT")
+        if main_msg_id is None:
+            # The alert never landed. Returning True here marked the filing
+            # processed and the message was lost for good.
+            print(f"Telegram send failed for {accession} — will retry.")
+            return False
 
         # Save to DB in background — don't block the alert pipeline
         threading.Thread(
@@ -3184,21 +3548,15 @@ def process_filing(accession, date, form, url):
             daemon=True
         ).start()
 
-        # Run Groq in the background asynchronously for the interpretation summary
-        if groq_keys and should_alert:
-            cleaned_text = clean_html(html_content)
-            threading.Thread(
-                target=async_groq_analysis,
-                args=(cleaned_text, url, main_msg_id, fallback_data),
-                daemon=True
-            ).start()
+        _start_background_enrichment(html_content, url, main_msg_id, date,
+                                     fallback_data, reserve_ctx)
+
     elif atm_data and atm_data.get("sold_any") and atm_data.get("period_scoped", True):
         # ATM-only filing: shares were sold but there is no BTC table.
         # Send an instant financing alert from the parsed ATM data; do NOT
         # add a purchase_history row (no holdings snapshot → would corrupt
         # the charts), only mark the filing as processed.
         print("ATM table found (no BTC table). Sending instant financing alert...")
-        cleaned_text = clean_html(html_content)
 
         atm_parsed = {
             "event_type": "financing",
@@ -3209,315 +3567,435 @@ def process_filing(accession, date, form, url):
         if reserve_ctx:
             atm_parsed.update(reserve_ctx)
 
-        main_msg_id = None
-        if should_alert:
-            main_msg_id = send_telegram_alert(format_alert(atm_parsed, url))
+        # clean_html used to run HERE, before the send, purely to feed the
+        # background Groq thread — a full second parse of the document on
+        # the alert path.
+        main_msg_id = send_telegram_alert(format_alert(atm_parsed, url))
+        if main_msg_id is None:
+            print(f"Telegram send failed for {accession} — will retry.")
+            return False
+        print(f"Alert latency: detect→sent {(time.time()-detected)*1000:.0f}ms | "
+              f"sent {now_trt().strftime('%H:%M:%S')} TRT")
 
-        try:
-            conn = get_db_connection()
-            conn.execute(
-                "INSERT OR IGNORE INTO processed_filings (accession_number, filing_date, form, url) VALUES (?, ?, ?, ?)",
-                (accession, date, form, url)
-            )
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            print(f"Error marking ATM-only filing processed: {e}")
+        _start_background_enrichment(html_content, url, main_msg_id, date,
+                                     atm_parsed, reserve_ctx)
 
-        if groq_keys and should_alert:
-            threading.Thread(
-                target=async_groq_analysis,
-                args=(cleaned_text, url, main_msg_id, atm_parsed),
-                daemon=True
-            ).start()
     else:
-        # No table found — but we MUST still send an immediate alert, then analyze async
+        # No table found — but we MUST still send an immediate alert, then
+        # analyze async.
         print("No BTC table found. Sending immediate alert, then running async Groq analysis...")
-        cleaned_text = clean_html(html_content)
 
-        main_msg_id = None
-        if should_alert:
-            # Send an immediate "new filing detected" alert — don't wait for Groq
-            instant_alert = (
-                f"📋 **MSTR Yeni SEC Bildirimi (Form 8-K)**\n\n"
-                f"📅 Tarih: {date}\n"
-                f"📄 Yeni bir Form 8-K bildirimi tespit edildi. İçerik analiz ediliyor...\n\n"
-                f"🔗 [SEC Bildirimi]({url})"
-            )
-            main_msg_id = send_telegram_alert(instant_alert)
-        
-        # Run Groq analysis in background thread — reply with details when ready
-        def async_no_table_analysis():
-            parsed_data = None
-            if groq_keys:
-                parsed_data = analyze_filing_deep_groq(cleaned_text, url)
-            
-            if not parsed_data:
-                try:
-                    conn2 = get_db_connection()
-                    cursor2 = conn2.cursor()
-                    cursor2.execute("SELECT total_debt FROM purchase_history ORDER BY id DESC LIMIT 1")
-                    last_row = cursor2.fetchone()
-                    conn2.close()
-                    last_debt = last_row["total_debt"] if last_row else "$6.7B"
-                except Exception:
-                    last_debt = "$6.7B"
+        instant_alert = (
+            f"📋 **MSTR Yeni SEC Bildirimi (Form 8-K)**\n\n"
+            f"📅 Tarih: {date}\n"
+            f"📄 Yeni bir Form 8-K bildirimi tespit edildi. İçerik analiz ediliyor...\n\n"
+            f"🔗 [SEC Bildirimi]({url})"
+        )
+        main_msg_id = send_telegram_alert(instant_alert)
+        if main_msg_id is None:
+            print(f"Telegram send failed for {accession} — will retry.")
+            return False
+        print(f"Alert latency: detect→sent {(time.time()-detected)*1000:.0f}ms | "
+              f"sent {now_trt().strftime('%H:%M:%S')} TRT")
 
-                # Debt carries forward (cumulative); financing_source must
-                # describe THIS filing, so it is never carried forward.
-                parsed_data = {
-                    "event_type": "corporate_update",
-                    "summary_turkish": "Filtrelenemeyen veya tablo içermeyen yeni 8-K bildirimi.",
-                    "total_debt_usd": last_debt,
-                    "financing_source_turkish": "-"
-                }
-                
-            save_to_database(date, parsed_data, url, accession, form)
-            
-            if should_alert and main_msg_id:
-                summary = parsed_data.get("summary_turkish", "")
-                if summary:
-                    detail_text = f"💡 **[AI Analizi — Detaylı Rapor]**\n\n{summary}\n\n🔗 [SEC Bildirimi]({url})"
-                    send_telegram_alert(detail_text, reply_to_message_id=main_msg_id)
-                    print("Async no-table Groq analysis completed and sent.")
-                
-        threading.Thread(target=async_no_table_analysis, daemon=True).start()
+        threading.Thread(target=_deferred_analysis,
+                         args=(html_content, url, main_msg_id, date, accession, form),
+                         daemon=True).start()
 
     return True
 
-# Cache for processed filings — avoid DB query every 250ms
+def _start_background_enrichment(html_content, url, main_msg_id, date,
+                                 parsed_data, reserve_ctx):
+    """Post-alert work: the full-text reserve repair and the Groq summary.
+
+    Both parse the whole document again. Started only AFTER the send, since
+    clean_html holds the GIL and a parse overlapping the Telegram POST was
+    measured inflating that request's round trip several-fold.
+    """
+    def run():
+        cleaned_text = None
+        if reserve_ctx is None:
+            try:
+                cleaned_text = clean_html(html_content)
+                val_m = parse_usd_reserve(cleaned_text)
+                if val_m is not None:
+                    store_usd_reserve(date, val_m)
+                    print(f"USD reserve for {date}: ${val_m:,.0f}M (from 8-K, full-text parse)")
+            except Exception as e:
+                print(f"Background reserve parse failed: {e}")
+        if groq_keys:
+            try:
+                if cleaned_text is None:
+                    cleaned_text = clean_html(html_content)
+                async_groq_analysis(cleaned_text, url, main_msg_id, parsed_data)
+            except Exception as e:
+                print(f"Background Groq analysis failed: {e}")
+    threading.Thread(target=run, daemon=True).start()
+
+def _deferred_analysis(html_content, url, main_msg_id, date, accession, form):
+    """Full analysis for a filing we could not parse into a table."""
+    try:
+        cleaned_text = clean_html(html_content)
+    except Exception as e:
+        print(f"Deferred clean_html failed: {e}")
+        return
+
+    parsed_data = None
+    if groq_keys:
+        parsed_data = analyze_filing_deep_groq(cleaned_text, url)
+
+    if not parsed_data:
+        try:
+            conn2 = get_db_connection()
+            cursor2 = conn2.cursor()
+            cursor2.execute("SELECT total_debt FROM purchase_history ORDER BY id DESC LIMIT 1")
+            last_row = cursor2.fetchone()
+            conn2.close()
+            last_debt = last_row["total_debt"] if last_row else "$6.7B"
+        except Exception:
+            last_debt = "$6.7B"
+
+        # Debt carries forward (cumulative); financing_source must describe
+        # THIS filing, so it is never carried forward.
+        parsed_data = {
+            "event_type": "corporate_update",
+            "summary_turkish": "Filtrelenemeyen veya tablo içermeyen yeni 8-K bildirimi.",
+            "total_debt_usd": last_debt,
+            "financing_source_turkish": "-"
+        }
+
+    save_to_database(date, parsed_data, url, accession, form)
+
+    summary = parsed_data.get("summary_turkish", "")
+    if summary and main_msg_id:
+        detail_text = f"💡 **[AI Analizi — Detaylı Rapor]**\n\n{summary}\n\n🔗 [SEC Bildirimi]({url})"
+        send_telegram_alert(detail_text, reply_to_message_id=main_msg_id)
+        print("Async no-table Groq analysis completed and sent.")
+
+# Cache for processed filings — avoid a DB query on every 250ms tick
 _processed_cache = set()
 _processed_cache_time = 0
 
-# EFTS polls are staggered to at most 1/s (see check_for_new_filings)
+# Per-source stagger clocks and in-flight guards. A fetch that outlives its
+# join must not have a second copy started on top of it.
 _last_efts_time = 0.0
-_last_submissions_time = 0.0
+_last_atom_time = 0.0
+_inflight = {"submissions": False, "atom": False, "efts": False}
+# Mailbox the fetch threads publish into, drained by whichever tick gets
+# there next — so a fetch slower than the tick still delivers.
+_pending_lock = threading.Lock()
+_pending = {"submissions": None, "atom": [], "efts": []}
+_inflight_since = {"submissions": 0.0, "atom": 0.0, "efts": 0.0}
+# A socket that wedges past its own timeouts must not retire a source for
+# good; after this long the guard is dropped and the source is retried.
+INFLIGHT_MAX_AGE = float(os.getenv("INFLIGHT_MAX_AGE", "30"))
+
+# check_for_new_filings mutates module-global conditional-GET and stagger
+# state, and is reachable from the poll loop, the Flask admin route and the
+# Telegram /check handler. Without this lock two concurrent scans both see an
+# accession as unprocessed and both alert on it.
+_scan_lock = threading.Lock()
 
 def _refresh_processed_cache():
     """Refresh the processed filings cache from DB. Called sparingly."""
     global _processed_cache, _processed_cache_time
+    # Stamp the attempt first: on a DB error the old code left the timestamp
+    # untouched, so the >30s guard stayed true and every subsequent tick
+    # retried — turning one lock event into a stall on every tick.
+    _processed_cache_time = time.time()
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT accession_number FROM processed_filings")
-        _processed_cache = set(row['accession_number'] for row in cursor.fetchall())
+        rows = set(row['accession_number'] for row in cursor.fetchall())
         conn.close()
-        _processed_cache_time = time.time()
+        # Union, never replace: an accession added in-memory after a
+        # successful alert may not have reached the DB yet (save_to_database
+        # runs in a background thread), and dropping it re-alerts the filing.
+        _processed_cache |= rows
     except Exception as e:
         print(f"Error refreshing processed cache: {e}")
 
+def _mark_processed(accession, date, form, url):
+    """Record the filing as handled, in memory and on disk, right away."""
+    _processed_cache.add(accession)
+    try:
+        conn = get_db_connection()
+        conn.execute(
+            "INSERT OR IGNORE INTO processed_filings "
+            "(accession_number, filing_date, form, url) VALUES (?, ?, ?, ?)",
+            (accession, date, form, url))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Error marking {accession} processed: {e}")
+
 def check_for_new_filings():
-    global last_checked_time
-    last_checked_time = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-    
-    # Refresh cache every 30 seconds (not every poll cycle)
-    if time.time() - _processed_cache_time > 30:
-        _refresh_processed_cache()
-    
-    processed = _processed_cache
-    
-    new_filings_found = []
-    seen_accessions = set()
-
-    # Run BOTH sources in parallel threads for maximum speed. The submissions
-    # index is polled every tick (conditional GET makes unchanged responses
-    # cheap 304s); EFTS is staggered to at most once per second to stay well
-    # under the SEC's 10 req/s fair-use limit at 4 ticks/s.
-    # Request budget under the SEC's 10 req/s fair-use limit. The atom feed
-    # is the fastest signal and only a few KB, so it runs every tick; the
-    # multi-MB submissions index (which merely confirms, and supplies the
-    # exact document name) and the slow-to-index EFTS are staggered.
-    global _last_efts_time, _last_submissions_time
+    global last_checked_time, _last_tick_time
+    global _last_efts_time, _last_atom_time
     global _submissions_etag, _submissions_last_modified
-    now = time.time()
-    run_efts = now - _last_efts_time >= 5.0
-    run_submissions = now - _last_submissions_time >= 2.0
 
-    # Single-cell tuple assignment keeps (data, state) atomic: a join timeout
-    # must never observe the payload without its conditional-GET state or
-    # vice versa.
-    submissions_fetch = [(None, None)]
-    efts_result = [[]]
-    atom_result = [[]]
+    if not _scan_lock.acquire(blocking=False):
+        # Another scan is already in flight (manual /check or /api/trigger).
+        return 0
+    try:
+        last_checked_time = now_trt().strftime("%d.%m.%Y %H:%M:%S")
+        _last_tick_time = time.time()
 
-    def _fetch_submissions():
-        submissions_fetch[0] = fetch_mstr_filings(return_state=True)
-    def _fetch_efts():
-        efts_result[0] = fetch_mstr_filings_efts()
-    def _fetch_atom():
-        atom_result[0] = fetch_mstr_filings_atom()
+        # Refresh cache every 30 seconds (not every poll cycle)
+        if time.time() - _processed_cache_time > 30:
+            _refresh_processed_cache()
 
-    # The atom feed is the fastest signal and tiny — query it every tick
-    t3 = threading.Thread(target=_fetch_atom, daemon=True)
-    t3.start()
-    t1 = None
-    if run_submissions:
-        _last_submissions_time = now
-        t1 = threading.Thread(target=_fetch_submissions, daemon=True)
-        t1.start()
-    t2 = None
-    if run_efts:
-        _last_efts_time = now
-        t2 = threading.Thread(target=_fetch_efts, daemon=True)
-        t2.start()
-    t3.join(timeout=4)
-    if t1:
-        t1.join(timeout=4)
-    if t2:
-        t2.join(timeout=4)
+        processed = _processed_cache
 
-    # Process atom results FIRST — it sees the filing before the other two
-    for result in atom_result[0]:
-        acc = result["accession"]
-        if acc in processed or acc in seen_accessions:
-            continue
-        url = result.get("url") or _resolve_primary_document(acc)
-        if not url:
-            # Could not resolve the document yet; the submissions path will
-            # pick it up with the correct URL on a later tick
-            print(f"Atom saw new filing {acc} but the document is not readable yet.")
-            continue
-        print(f"Atom feed detected new 8-K {acc} ({result['date']}) — "
-              f"ahead of the submissions index.")
-        new_filings_found.append((acc, result["date"], "8-K", url))
-        seen_accessions.add(acc)
+        # Source cadence. data.sec.gov/submissions is the only endpoint the
+        # SEC publishes a latency figure for ("typical processing delay of
+        # less than a second"), it supports conditional GET so an unchanged
+        # index is a tiny 304, and it carries primaryDocument inline — no
+        # follow-up request needed to learn the document name. It runs every
+        # tick. The atom feed is a corroborator on the aggressively
+        # rate-limited browse-edgar CGI, and EFTS is a full-text index built
+        # downstream of dissemination, so it is a backstop, not a trigger.
+        now = time.time()
+        run_atom = now - _last_atom_time >= 1.0
+        run_efts = now - _last_efts_time >= 5.0
 
-    # Process submissions results
-    data, sub_state = submissions_fetch[0]
-    if data:
-        recent = data.get('filings', {}).get('recent', {})
-        if recent:
-            forms = recent.get('form', [])
-            accession_numbers = recent.get('accessionNumber', [])
-            filing_dates = recent.get('filingDate', [])
-            primary_docs = recent.get('primaryDocument', [])
-            # EDGAR updates these parallel arrays as a filing is indexed, so
-            # they can be momentarily uneven. Never index past the shortest —
-            # an IndexError here used to abort the whole poll cycle.
-            usable = min(len(forms), len(accession_numbers),
-                         len(filing_dates), len(primary_docs))
-            if usable < len(forms):
-                print(f"Submissions index arrays uneven ({len(forms)} forms vs "
-                      f"{usable} usable) — scanning the consistent prefix.")
 
-            for idx in range(usable):
-                if forms[idx] == '8-K':
-                    acc_num = accession_numbers[idx]
-                    if acc_num not in processed and acc_num not in seen_accessions:
-                        filing_date = filing_dates[idx]
+        def _guarded(name, fn):
+            def run():
+                try:
+                    fn()
+                finally:
+                    _inflight[name] = False
+            return run
+
+        def _busy(name):
+            if not _inflight[name]:
+                return False
+            if now - _inflight_since[name] > INFLIGHT_MAX_AGE:
+                print(f"SEC {name} fetch has been in flight for "
+                      f"{now - _inflight_since[name]:.0f}s — retrying it.")
+                return False
+            return True
+
+        def _spawn(name, fn):
+            _inflight[name] = True
+            _inflight_since[name] = now
+            t = threading.Thread(target=_guarded(name, fn), daemon=True)
+            t.start()
+            return t
+
+        # Fetches publish into a module-level mailbox rather than a per-tick
+        # cell. A fetch that outruns the join deadline is then delivered on
+        # the NEXT tick (250ms later) instead of being discarded — which
+        # matters now that SEC reads are allowed longer than the tick.
+        def _fetch_submissions():
+            data, state = fetch_mstr_filings(return_state=True)
+            if data is not None:
+                with _pending_lock:
+                    # Single-tuple assignment keeps (data, state) atomic: a
+                    # reader must never see the payload without its
+                    # conditional-GET state, or vice versa.
+                    _pending["submissions"] = (data, state)
+        def _fetch_efts():
+            res = fetch_mstr_filings_efts()
+            if res:
+                with _pending_lock:
+                    _pending["efts"] = res
+        def _fetch_atom():
+            res = fetch_mstr_filings_atom()
+            if res:
+                with _pending_lock:
+                    _pending["atom"] = res
+
+        threads = []
+        if not _busy("submissions"):
+            threads.append(_spawn("submissions", _fetch_submissions))
+        if run_atom and not _busy("atom"):
+            _last_atom_time = now
+            threads.append(_spawn("atom", _fetch_atom))
+        if run_efts and not _busy("efts"):
+            _last_efts_time = now
+            threads.append(_spawn("efts", _fetch_efts))
+
+        # ONE shared deadline, not one timeout per thread. Three sequential
+        # join(timeout=4) calls stacked to a 12s stall inside a window that
+        # asks for a tick every 250ms. Results are read from the cells below
+        # whether or not their thread finished, so a slow source costs only
+        # its own signal for this tick — it can no longer withhold the two
+        # that already came back.
+        deadline = time.time() + max(1.5, min(4.0, POLL_INTERVAL_CRITICAL * 8))
+        for t in threads:
+            t.join(timeout=max(0.0, deadline - time.time()))
+
+        # Drain whatever has arrived, from this tick or a slow earlier one.
+        with _pending_lock:
+            submissions_result = _pending["submissions"]
+            atom_result = _pending["atom"]
+            efts_result = _pending["efts"]
+            _pending["submissions"] = None
+            _pending["atom"] = []
+            _pending["efts"] = []
+
+        # Collect candidates keyed by accession. The submissions index is
+        # authoritative for the document URL, so it always wins over the
+        # atom path's index.json guess; previously whichever source was
+        # scanned first claimed the accession and shadowed the others, which
+        # could livelock a filing on a wrong URL forever.
+        candidates = {}
+
+        def _offer(acc, date, form, url, authoritative=False):
+            if not acc or acc in processed:
+                return
+            cur = candidates.get(acc)
+            if cur is None:
+                candidates[acc] = {"date": date, "form": form, "url": url,
+                                   "authoritative": authoritative}
+                return
+            if (authoritative and not cur["authoritative"]) or (url and not cur["url"]):
+                cur["url"] = url or cur["url"]
+                cur["authoritative"] = cur["authoritative"] or authoritative
+            if date and not cur["date"]:
+                cur["date"] = date
+
+        # Submissions (authoritative URL, every tick)
+        data, sub_state = submissions_result or (None, None)
+        if data:
+            recent = data.get('filings', {}).get('recent', {})
+            if recent:
+                forms = recent.get('form', [])
+                accession_numbers = recent.get('accessionNumber', [])
+                filing_dates = recent.get('filingDate', [])
+                primary_docs = recent.get('primaryDocument', [])
+                # EDGAR updates these parallel arrays as a filing is indexed,
+                # so they can be momentarily uneven. Never index past the
+                # shortest — an IndexError here used to abort the whole poll.
+                usable = min(len(forms), len(accession_numbers),
+                             len(filing_dates), len(primary_docs))
+                if usable < len(forms):
+                    print(f"Submissions index arrays uneven ({len(forms)} forms vs "
+                          f"{usable} usable) — scanning the consistent prefix.")
+
+                for idx in range(usable):
+                    if forms[idx] == '8-K':
+                        acc_num = accession_numbers[idx]
                         doc = primary_docs[idx]
                         acc_num_no_dash = acc_num.replace('-', '')
-                        url = f"https://www.sec.gov/Archives/edgar/data/1050446/{acc_num_no_dash}/{doc}"
-                        new_filings_found.append((acc_num, filing_date, forms[idx], url))
-                        seen_accessions.add(acc_num)
-        # The payload has been scanned — only NOW is it safe to remember the
-        # validators. A timed-out fetch leaves data None, nothing is
-        # committed, and the next poll re-fetches with the OLD ETag.
-        _commit_submissions_state(sub_state)
+                        url = (f"https://www.sec.gov/Archives/edgar/data/1050446/"
+                               f"{acc_num_no_dash}/{doc}") if doc else ""
+                        _offer(acc_num, filing_dates[idx], forms[idx], url,
+                               authoritative=bool(doc))
+            # The payload has been scanned — only NOW is it safe to remember
+            # the validators. A timed-out fetch leaves data None, nothing is
+            # committed, and the next poll re-fetches with the OLD ETag.
+            _commit_submissions_state(sub_state)
 
-    # Process EFTS results
-    for result in efts_result[0]:
-        acc = result["accession"]
-        if acc not in processed and acc not in seen_accessions:
-            new_filings_found.append((acc, result["date"], "8-K", result["url"]))
-            seen_accessions.add(acc)
-                
-    for acc, date, form, url in reversed(new_filings_found):
-        ok = False
-        try:
-            ok = process_filing(acc, date, form, url)
-        except Exception as e:
-            print(f"Error processing filing {acc}: {e}")
-        if ok:
-            # Immediately add to cache so we don't re-process
-            _processed_cache.add(acc)
-        else:
-            # Invalidate the conditional-GET state: without this, the next
-            # polls would get 304 (index unchanged) and never retry this
-            # filing until the index changes again.
-            _submissions_etag = None
-            _submissions_last_modified = None
-            print(f"Filing {acc} not fully processed — will retry on the next poll.")
+        # Atom (fastest to publish, but carries no document name)
+        for result in atom_result:
+            _offer(result["accession"], result["date"], "8-K", result.get("url") or "")
 
-    return len(new_filings_found)
+        # EFTS (lagging full-text index, backstop only)
+        for result in efts_result:
+            _offer(result["accession"], result["date"], "8-K", result["url"])
+
+        if not candidates:
+            return 0
+
+        # Newest first. The sources hand back newest-first lists and the old
+        # code reversed them, so on any multi-filing batch the just-landed
+        # filing was alerted LAST, behind every stale one.
+        ordered = sorted(candidates.items(),
+                         key=lambda kv: (kv[1]["date"] or "", kv[0]), reverse=True)
+
+        for acc, info in ordered:
+            url = info["url"]
+            if not url:
+                # Only the atom path can be URL-less. One extra round trip,
+                # and only for an accession no other source has resolved.
+                url = _resolve_primary_document(acc)
+            if not url:
+                print(f"Saw new filing {acc} but no document URL yet — "
+                      f"retrying on the next tick.")
+                continue
+            print(f"New 8-K {acc} ({info['date']}) via "
+                  f"{'submissions' if info['authoritative'] else 'atom/efts'}.")
+            ok = False
+            try:
+                ok = process_filing(acc, info["date"], info["form"], url)
+            except Exception as e:
+                print(f"Error processing filing {acc}: {e}")
+            if ok:
+                # Persist immediately so a cache refresh landing before the
+                # background save cannot resurrect the filing.
+                _mark_processed(acc, info["date"], info["form"], url)
+            else:
+                # Invalidate the conditional-GET state: without this, the
+                # next polls would get 304 (index unchanged) and never retry
+                # this filing until the index changes again.
+                _submissions_etag = None
+                _submissions_last_modified = None
+                print(f"Filing {acc} not fully processed — will retry on the next poll.")
+
+        return len(candidates)
+    finally:
+        _scan_lock.release()
 
 def connection_warmer_loop():
-    """Keep TCP/TLS connections hot during the ultra-critical window.
+    """Keep TCP/TLS connections hot across the whole fast band.
 
-    A tiny request every ~50s to www.sec.gov (the Archives host used by
-    fetch_html) and to the Telegram API keeps the pooled connections open,
-    so the first real fetch/alert skips both handshakes (~0.02 req/s cost).
+    A cold connection costs a DNS lookup plus 2-3 round trips before the
+    first request byte. The previous version warmed only www.sec.gov and
+    Telegram, only inside the ultra window, and only every 50s — long
+    enough for a NAT/proxy idle reaper to have closed the socket again, and
+    starting too late to help the run-up. It now covers every host on the
+    detection and alert paths for the whole fast band.
     """
-    trt_tz = timezone(timedelta(hours=3))
+    warm_targets = [
+        "https://www.sec.gov/robots.txt",
+        "https://data.sec.gov/submissions/CIK0001050446.json",
+        "https://efts.sec.gov/LATEST/search-index?forms=8-K&ciks=0001050446",
+    ]
     while running:
         try:
-            now_trt = datetime.now(timezone.utc).astimezone(trt_tz)
-            in_window = now_trt.weekday() < 5 and (
-                (now_trt.hour == 14 and now_trt.minute >= 30) or
-                (now_trt.hour == 15 and now_trt.minute <= 15)
-            )
-            if in_window:
+            mode, _, _ = poll_schedule(now_et())
+            if mode == "Normal Mode":
+                time.sleep(30)
+                continue
+            for url in warm_targets:
                 try:
-                    http_session.get("https://www.sec.gov/robots.txt", timeout=3)
+                    http_session.head(url, timeout=3)
                 except Exception:
                     pass
-                if TELEGRAM_BOT_TOKEN:
-                    try:
-                        http_session.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMe", timeout=3)
-                    except Exception:
-                        pass
-                time.sleep(50)
-            else:
-                time.sleep(30)
+            if TELEGRAM_BOT_TOKEN:
+                try:
+                    http_session.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMe", timeout=3)
+                except Exception:
+                    pass
+            time.sleep(20)
         except Exception:
             time.sleep(30)
 
 def polling_loop():
     global current_mode, running
     print("Starting SEC Polling Loop...")
-    
-    trt_tz = timezone(timedelta(hours=3))
-    
+
     while running:
-        # The interval is derived from the clock BEFORE the scan, so a failed
-        # scan can never demote the fast windows. Falling back to the 300s
-        # normal interval after an exception used to blind the bot for five
-        # minutes — exactly when a filing lands is when the SEC payloads are
-        # most likely to be malformed mid-index-update.
+        # The cadence is derived from the US Eastern clock BEFORE the scan,
+        # so a failed scan can never demote the fast windows, and the sleep
+        # is capped at the distance to the next window boundary so the loop
+        # can never sleep through one.
+        interval = POLL_INTERVAL_NORMAL
+        budget = interval
         try:
-            now_trt = datetime.now(timezone.utc).astimezone(trt_tz)
-
-            is_weekday = now_trt.weekday() < 5
-
-            # Ultra-critical: 14:30 - 15:15 TRT (sub-second polling)
-            is_ultra_critical = (
-                (now_trt.hour == 14 and now_trt.minute >= 30) or
-                (now_trt.hour == 15 and now_trt.minute <= 15)
-            )
-            # Extended fast: 14:00-14:30 and 15:15-16:00 TRT (15s polling)
-            is_extended_fast = (
-                (now_trt.hour == 14 and now_trt.minute < 30) or
-                (now_trt.hour == 15 and now_trt.minute > 15)
-            )
-
-            if is_weekday and is_ultra_critical:
-                if current_mode != "Ultra High-Speed Mode":
-                    print(f"Entering ULTRA HIGH-SPEED POLLING MODE at {now_trt.strftime('%H:%M:%S')} TRT")
-                    current_mode = "Ultra High-Speed Mode"
-                interval = POLL_INTERVAL_CRITICAL
-            elif is_weekday and is_extended_fast:
-                if current_mode != "Extended Fast Mode":
-                    print(f"Entering EXTENDED FAST POLLING MODE at {now_trt.strftime('%H:%M:%S')} TRT")
-                    current_mode = "Extended Fast Mode"
-                interval = 15.0
-            else:
-                if current_mode != "Normal Mode":
-                    print(f"Entering NORMAL POLLING MODE at {now_trt.strftime('%H:%M:%S')} TRT")
-                    current_mode = "Normal Mode"
-                interval = POLL_INTERVAL_NORMAL
+            et = now_et()
+            mode, interval, to_boundary = poll_schedule(et)
+            budget = min(interval, to_boundary)
+            if current_mode != mode:
+                print(f"Entering {mode.upper()} at {et.strftime('%H:%M:%S')} ET "
+                      f"({now_trt().strftime('%H:%M:%S')} TRT), interval={interval}s")
+                current_mode = mode
         except Exception as e:
             print(f"Polling schedule computation failed: {e}")
-            interval = POLL_INTERVAL_NORMAL
 
         try:
             check_for_new_filings()
@@ -3526,9 +4004,14 @@ def polling_loop():
             # normal mode so a persistent failure doesn't spin.
             print(f"Exception in polling loop: {e}")
             if interval >= POLL_INTERVAL_NORMAL:
-                interval = POLL_INTERVAL_NORMAL
+                budget = POLL_INTERVAL_NORMAL
 
-        time.sleep(interval)
+        try:
+            time.sleep(max(0.05, budget))
+        except ValueError as e:
+            # A hostile POLL_INTERVAL_* env value must not crash-loop the bot.
+            print(f"Bad poll interval ({e}); falling back to 1s.")
+            time.sleep(1)
 
 # ----------------- FLASK WEB ROUTES & APIS -----------------
 
@@ -3538,11 +4021,44 @@ def dashboard_index():
 
 @app.route('/api/status')
 def get_bot_status():
+    et = now_et()
+    mode, interval, to_boundary = poll_schedule(et)
     return jsonify({
         "mode": current_mode,
+        "scheduled_mode": mode,
+        "interval_seconds": interval,
+        "seconds_to_next_window_change": to_boundary,
+        "et_time": et.strftime("%Y-%m-%d %H:%M:%S %Z"),
+        "trt_time": now_trt().strftime("%Y-%m-%d %H:%M:%S"),
+        "ultra_window_et": f"{ULTRA_WINDOW_ET[0]//60:02d}:{ULTRA_WINDOW_ET[0]%60:02d}"
+                           f"-{ULTRA_WINDOW_ET[1]//60:02d}:{ULTRA_WINDOW_ET[1]%60:02d}",
+        "fast_window_et": f"{FAST_WINDOW_ET[0]//60:02d}:{FAST_WINDOW_ET[0]%60:02d}"
+                          f"-{FAST_WINDOW_ET[1]//60:02d}:{FAST_WINDOW_ET[1]%60:02d}",
         "last_checked": last_checked_time,
         "db_path": DB_PATH
     })
+
+@app.route('/health')
+def health_check():
+    """Liveness probe: fails when the poll loop has stopped ticking.
+
+    Point Railway's healthcheckPath here so a wedged poller is restarted
+    instead of sitting silent until someone notices no alerts arrived.
+    """
+    mode, interval, _ = poll_schedule(now_et())
+    # Generous multiple of the cadence, floored so a 0.25s window doesn't
+    # trip on one slow tick.
+    stale_after = max(120.0, interval * 20)
+    age = None
+    if _last_tick_time:
+        age = time.time() - _last_tick_time
+    ok = age is not None and age < stale_after
+    return jsonify({
+        "ok": ok,
+        "mode": mode,
+        "seconds_since_last_poll": round(age, 1) if age is not None else None,
+        "stale_after_seconds": stale_after,
+    }), (200 if ok else 503)
 
 @app.route('/api/history')
 def get_purchase_history():
@@ -3808,11 +4324,17 @@ def get_dividends():
 
 @app.route('/api/trigger', methods=['POST'])
 def force_trigger():
-    if ADMIN_PASSWORD:
-        req_pass = request.args.get("password") or request.headers.get("X-Admin-Password")
-        if req_pass != ADMIN_PASSWORD:
-            return jsonify({"status": "error", "message": "Yetkisiz işlem: Şifre hatalı."}), 401
-            
+    # Fail closed. With ADMIN_PASSWORD unset this endpoint was open to
+    # anyone, and it runs SEC fetches, a full document parse and Groq calls
+    # synchronously on the request thread — competing with the poller for
+    # the connection pool and the GIL, and able to fire real Telegram alerts.
+    if not ADMIN_PASSWORD:
+        return jsonify({"status": "error",
+                        "message": "ADMIN_PASSWORD ayarlanmadan bu uç nokta kullanılamaz."}), 403
+    req_pass = request.args.get("password") or request.headers.get("X-Admin-Password")
+    if req_pass != ADMIN_PASSWORD:
+        return jsonify({"status": "error", "message": "Yetkisiz işlem: Şifre hatalı."}), 401
+    
     trigger_type = request.args.get("type", "poll")
     
     if trigger_type == "poll":
@@ -3942,15 +4464,17 @@ if bot:
 
     @bot.message_handler(commands=['status'])
     def send_status(message):
-        trt_tz = timezone(timedelta(hours=3))
-        now_trt = datetime.now(timezone.utc).astimezone(trt_tz)
-        
+        et = now_et()
+        mode, interval, _ = poll_schedule(et)
+        us, ue = ULTRA_WINDOW_ET
         bot.reply_to(
             message,
             f"🤖 **Bot Durum Raporu**\n\n"
             f"🟢 **Durum**: Çalışıyor\n"
-            f"⚡ **Aktif Mod**: {current_mode}\n"
-            f"⏰ **Sunucu Saati (TR)**: {now_trt.strftime('%d.%m.%Y %H:%M:%S')}\n"
+            f"⚡ **Aktif Mod**: {mode} ({interval}s)\n"
+            f"⏰ **Sunucu Saati (TR)**: {now_trt().strftime('%d.%m.%Y %H:%M:%S')}\n"
+            f"🇺🇸 **SEC Saati (ET)**: {et.strftime('%d.%m.%Y %H:%M:%S %Z')}\n"
+            f"🎯 **Ultra pencere**: {us//60:02d}:{us%60:02d}-{ue//60:02d}:{ue%60:02d} ET\n"
             f"🔄 **Son SEC Kontrolü**: {last_checked_time or 'Yapılmadı'}\n"
             f"📁 **Veritabanı Yolu**: `{DB_PATH}`",
             parse_mode="Markdown"
@@ -4075,8 +4599,16 @@ if __name__ == '__main__':
 
     # Backfill per-security ATM data + the weekly USD Reserve series in the background
     def _backfill_all():
-        backfill_atm_history()
-        backfill_usd_reserves()
+        # Minutes of sequential fetch + full-document parse. Held out of the
+        # fast window, and each half guarded so a failure in the first can no
+        # longer silently skip the second.
+        _wait_out_fast_window("historical backfill")
+        for name, fn in (("ATM history", backfill_atm_history),
+                         ("USD reserves", backfill_usd_reserves)):
+            try:
+                fn()
+            except Exception as e:
+                print(f"Backfill of {name} failed: {e}")
     backfill_thread = threading.Thread(target=_backfill_all, daemon=True)
     backfill_thread.start()
 
