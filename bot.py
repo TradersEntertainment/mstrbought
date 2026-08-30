@@ -414,7 +414,21 @@ def mark_current_filings_processed(conn):
     """
     cursor = conn.cursor()
     print("Marking existing SEC filings in EDGAR index as processed to prevent backfilling...")
-    data = fetch_mstr_filings(use_conditional=False)
+    # One transient failure here used to mark NOTHING, and the scanner then
+    # treated every 8-K still visible in the feeds as new. Production logs
+    # show this fetch failing for real ("Error fetching SEC JSON: Connection
+    # aborted / RemoteDisconnected"), so retry before giving up.
+    data = None
+    for attempt in range(3):
+        data = fetch_mstr_filings(use_conditional=False)
+        if data:
+            break
+        if attempt < 2:
+            print(f"Startup index fetch failed (attempt {attempt + 1}/3); retrying...")
+            time.sleep(1.5)
+    if not data:
+        print("WARNING: could not read the EDGAR index at startup — historical "
+              "filings are unmarked and may be re-detected once each.")
     if data:
         recent = data.get('filings', {}).get('recent', {})
         forms = recent.get('form', [])
@@ -3844,14 +3858,20 @@ def check_for_new_filings():
         # could livelock a filing on a wrong URL forever.
         candidates = {}
 
-        def _offer(acc, date, form, url, authoritative=False):
+        def _offer(acc, date, form, url, source, authoritative=False):
             if not acc or acc in processed:
                 return
             cur = candidates.get(acc)
             if cur is None:
+                # `seen_by` records every source that saw it, in arrival
+                # order, so the logs answer which endpoint is actually
+                # winning the race instead of naming a pair of candidates.
                 candidates[acc] = {"date": date, "form": form, "url": url,
-                                   "authoritative": authoritative}
+                                   "authoritative": authoritative,
+                                   "seen_by": [source]}
                 return
+            if source not in cur["seen_by"]:
+                cur["seen_by"].append(source)
             if (authoritative and not cur["authoritative"]) or (url and not cur["url"]):
                 cur["url"] = url or cur["url"]
                 cur["authoritative"] = cur["authoritative"] or authoritative
@@ -3884,7 +3904,7 @@ def check_for_new_filings():
                         url = (f"https://www.sec.gov/Archives/edgar/data/1050446/"
                                f"{acc_num_no_dash}/{doc}") if doc else ""
                         _offer(acc_num, filing_dates[idx], forms[idx], url,
-                               authoritative=bool(doc))
+                               "submissions", authoritative=bool(doc))
             # The payload has been scanned — only NOW is it safe to remember
             # the validators. A timed-out fetch leaves data None, nothing is
             # committed, and the next poll re-fetches with the OLD ETag.
@@ -3892,11 +3912,12 @@ def check_for_new_filings():
 
         # Atom (fastest to publish, but carries no document name)
         for result in atom_result:
-            _offer(result["accession"], result["date"], "8-K", result.get("url") or "")
+            _offer(result["accession"], result["date"], "8-K",
+                   result.get("url") or "", "atom")
 
         # EFTS (lagging full-text index, backstop only)
         for result in efts_result:
-            _offer(result["accession"], result["date"], "8-K", result["url"])
+            _offer(result["accession"], result["date"], "8-K", result["url"], "efts")
 
         if not candidates:
             return 0
@@ -3917,8 +3938,8 @@ def check_for_new_filings():
                 print(f"Saw new filing {acc} but no document URL yet — "
                       f"retrying on the next tick.")
                 continue
-            print(f"New 8-K {acc} ({info['date']}) via "
-                  f"{'submissions' if info['authoritative'] else 'atom/efts'}.")
+            print(f"New 8-K {acc} ({info['date']}) first seen via "
+                  f"{'+'.join(info['seen_by'])}.")
             ok = False
             try:
                 ok = process_filing(acc, info["date"], info["form"], url)
