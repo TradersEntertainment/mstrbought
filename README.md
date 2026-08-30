@@ -5,7 +5,7 @@ Bu Telegram botu, MicroStrategy (Strategy Inc., CIK `0001050446`) şirketinin SE
 ## Özellikler
 
 - ⚡ **Yüksek Hızlı Polling (High-Speed Mode)**: Pencereler **ABD Doğu Saati'ne (ET)** göre belirlenir — EDGAR'ın yayın yaptığı saat dilimi. Türkiye sabit UTC+3 iken ET yaz saatiyle kaydığı için, pencereyi TRT'ye sabitlemek yılda iki kez bir saatlik kayma yaratır (MSTR'ın 07:55-08:25 ET bandı yazın 14:55-15:25 TRT, kışın 15:55-16:25 TRT'ye denk gelir).
-  - **07:30-09:15 ET** (haftalık 8-K bandı): her **0.25 saniyede** bir.
+  - **07:30-09:30 ET** (haftalık 8-K bandı — yazın 14:30-16:30 TRT, kışın 15:30-17:30 TRT): her **0.25 saniyede** bir.
   - **06:00-18:00 ET** (EDGAR'ın geri kalan yayın günü): her **2 saniyede** bir.
   - Kalan saatler ve hafta sonu: 60 saniyede bir.
   - Kaynaklar: her tick'te `data.sec.gov/submissions` (SEC'in "1 saniyeden az" gecikme belirttiği tek uç nokta; değişmediğinde ucuz bir 304 döner ve belge adını doğrudan taşır), saniyede en fazla bir kez atom feed, 5 saniyede bir EFTS.
@@ -69,7 +69,7 @@ Railway paneline gidip aşağıdaki çevre değişkenlerini ekleyin:
 | `POLL_INTERVAL_NORMAL` | `60` *(EDGAR kapalıyken)* |
 | `POLL_INTERVAL_CRITICAL` | `0.25` *(8-K bandında)* |
 | `POLL_INTERVAL_FAST` | `2` *(EDGAR'ın yayın günü)* |
-| `ULTRA_WINDOW_ET` | `07:30-09:15` *(ET, opsiyonel)* |
+| `ULTRA_WINDOW_ET` | `07:30-09:30` *(ET, opsiyonel)* |
 | `FAST_WINDOW_ET` | `06:00-18:00` *(ET, opsiyonel)* |
 | `TELEGRAM_LINK_PREVIEW` | `false` *(önizleme açmak gecikme ekler)* |
 

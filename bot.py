@@ -56,7 +56,10 @@ POLL_INTERVAL_FAST = float(os.getenv("POLL_INTERVAL_FAST", "2"))
 
 # Windows in US Eastern minutes-of-day, weekdays only.
 #   ULTRA covers the observed 07:55-08:25 ET filing band with margin on both
-#   sides (and the 09:04 ET outlier seen in the record).
+#   sides (and the 09:04 ET outlier seen in the record). 07:30-09:30 ET is
+#   14:30-16:30 Turkish time in summer and 15:30-17:30 in winter — the window
+#   is deliberately pinned to the SEC's clock, not Turkey's, so it travels
+#   with the filings across the DST change instead of sliding off them.
 #   FAST covers the rest of EDGAR's dissemination day, so the non-BTC 8-Ks
 #   that land at 16:11 / 16:27 / 17:22 ET are seconds late, not minutes.
 def _win(env, default_start, default_end):
@@ -71,7 +74,7 @@ def _win(env, default_start, default_end):
             print(f"Ignoring malformed {env}={raw!r}; expected 'HH:MM-HH:MM' ET.")
     return default_start, default_end
 
-ULTRA_WINDOW_ET = _win("ULTRA_WINDOW_ET", 7 * 60 + 30, 9 * 60 + 15)
+ULTRA_WINDOW_ET = _win("ULTRA_WINDOW_ET", 7 * 60 + 30, 9 * 60 + 30)
 FAST_WINDOW_ET = _win("FAST_WINDOW_ET", 6 * 60, 18 * 60)
 
 def describe_poll_config():

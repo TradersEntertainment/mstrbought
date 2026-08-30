@@ -126,7 +126,7 @@ def test_boot_line_states_the_effective_config(monkeypatch):
     monkeypatch.setattr(bot, 'POLL_INTERVAL_NORMAL', 60.0)
 
     line = bot.describe_poll_config()
-    assert "ultra 07:30-09:15 ET @0.25s" in line
+    assert "ultra 07:30-09:30 ET @0.25s" in line
     assert "fast 06:00-18:00 ET @2.0s" in line
     assert "normal @60.0s" in line
     assert "WARNING" not in line
@@ -140,3 +140,20 @@ def test_boot_line_flags_a_critical_interval_that_is_too_slow(monkeypatch):
     line = bot.describe_poll_config()
     assert "WARNING" in line
     assert "POLL_INTERVAL_CRITICAL" in line
+
+
+def test_the_ultra_window_is_pinned_to_the_secs_clock_not_turkeys():
+    """14:30-16:30 Turkish time was the ask; it is stored as 07:30-09:30 ET so
+    it travels with the filings across the DST change rather than sliding off
+    them — which is the bug this whole schedule exists to avoid."""
+    from datetime import timezone as _tz, timedelta as _td
+    TRT = _tz(_td(hours=3))
+    summer_open = et(2026, 8, 31, 7, 30).astimezone(TRT)
+    winter_open = et(2026, 12, 14, 7, 30).astimezone(TRT)
+
+    assert (summer_open.hour, summer_open.minute) == (14, 30)
+    assert (winter_open.hour, winter_open.minute) == (15, 30)
+    # and the filing band moves with it, staying inside ultra both times
+    for y, m, d in ((2026, 8, 31), (2026, 12, 14)):
+        for hh, mm in ((7, 55), (8, 25), (9, 4)):
+            assert bot.poll_schedule(et(y, m, d, hh, mm))[0] == "Ultra High-Speed Mode"
