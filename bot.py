@@ -74,6 +74,26 @@ def _win(env, default_start, default_end):
 ULTRA_WINDOW_ET = _win("ULTRA_WINDOW_ET", 7 * 60 + 30, 9 * 60 + 15)
 FAST_WINDOW_ET = _win("FAST_WINDOW_ET", 6 * 60, 18 * 60)
 
+def describe_poll_config():
+    """One line stating the cadence actually in effect.
+
+    Env vars override these constants, and the mode-change line only prints
+    when a window boundary is crossed — so on a weekend, or any quiet
+    stretch, there was no way to confirm a config change had taken effect
+    without waiting for the next trading morning. This prints at boot.
+    """
+    us, ue = ULTRA_WINDOW_ET
+    fs, fe = FAST_WINDOW_ET
+    warn = ""
+    if POLL_INTERVAL_CRITICAL > 1.0:
+        warn = ("  <-- WARNING: the ultra window is slower than 1s/tick; "
+                "POLL_INTERVAL_CRITICAL is meant to be ~0.25")
+    return (f"Poll config: ultra {us//60:02d}:{us%60:02d}-{ue//60:02d}:{ue%60:02d} ET "
+            f"@{POLL_INTERVAL_CRITICAL}s | "
+            f"fast {fs//60:02d}:{fs%60:02d}-{fe//60:02d}:{fe%60:02d} ET "
+            f"@{POLL_INTERVAL_FAST}s | normal @{POLL_INTERVAL_NORMAL}s | "
+            f"now {now_et():%Y-%m-%d %H:%M:%S %Z}{warn}")
+
 def poll_schedule(now):
     """Pick the poll cadence for a US-Eastern datetime.
 
@@ -4104,8 +4124,12 @@ def connection_warmer_loop():
             time.sleep(30)
 
 def polling_loop():
-    global current_mode, running
+    global current_mode, running, _source_report_time
     print("Starting SEC Polling Loop...")
+    print(describe_poll_config())
+    # Anchor the first health report a full interval out; otherwise it fires
+    # on the first tick and reports "over 0min" with a two-request sample.
+    _source_report_time = time.time()
 
     while running:
         # The cadence is derived from the US Eastern clock BEFORE the scan,
@@ -4159,6 +4183,13 @@ def get_bot_status():
         "seconds_to_next_window_change": to_boundary,
         "et_time": et.strftime("%Y-%m-%d %H:%M:%S %Z"),
         "trt_time": now_trt().strftime("%Y-%m-%d %H:%M:%S"),
+        "intervals": {
+            "critical": POLL_INTERVAL_CRITICAL,
+            "fast": POLL_INTERVAL_FAST,
+            "normal": POLL_INTERVAL_NORMAL,
+        },
+        "config_warning": ("POLL_INTERVAL_CRITICAL is slower than 1s/tick"
+                           if POLL_INTERVAL_CRITICAL > 1.0 else None),
         "ultra_window_et": f"{ULTRA_WINDOW_ET[0]//60:02d}:{ULTRA_WINDOW_ET[0]%60:02d}"
                            f"-{ULTRA_WINDOW_ET[1]//60:02d}:{ULTRA_WINDOW_ET[1]%60:02d}",
         "fast_window_et": f"{FAST_WINDOW_ET[0]//60:02d}:{FAST_WINDOW_ET[0]%60:02d}"
