@@ -2143,29 +2143,40 @@ def refresh_preferred_baselines():
         print(f"Preferred baselines DB write failed: {e}")
         return 0
 
-def _wait_out_fast_window(label):
-    """Hold heavy background work until the fast-poll band is over.
+# Don't start a job that runs for minutes right before the window opens.
+ULTRA_LEAD_IN = float(os.getenv("ULTRA_LEAD_IN", "600"))
+
+def _wait_out_ultra_window(label):
+    """Hold heavy background work out of the ultra window only.
 
     These loops parse multi-MB documents with BeautifulSoup, which holds the
     GIL; a parse overlapping the alert path was measured inflating its
     network round trips several-fold. cash_refresh_loop in particular slept a
     flat 12h anchored to process start, so its phase was fixed by deploy time
     and could land on the filing window every single day.
+
+    Gating on the whole fast band was too blunt: that band is twelve hours,
+    so a weekday deploy at 10:00 ET postponed the historical backfill until
+    evening and left the dashboard half-populated all day. Contention only
+    matters where ticks are 250ms apart and a filing may actually land, so
+    the gate is the ultra window plus a lead-in long enough that a job which
+    runs for minutes cannot spill into it.
     """
     announced = False
     while running:
-        mode, _, _ = poll_schedule(now_et())
-        if mode == "Normal Mode":
+        mode, _, to_boundary = poll_schedule(now_et())
+        opening_soon = mode == "Fast Mode" and to_boundary <= ULTRA_LEAD_IN
+        if mode != "Ultra High-Speed Mode" and not opening_soon:
             return
         if not announced:
             announced = True
-            print(f"Deferring {label} until the fast-poll window closes.")
+            print(f"Deferring {label} until the ultra window closes.")
         time.sleep(60)
 
 def cash_refresh_loop():
     """Refresh the quarterly cash + dividend data at startup and every 12 hours."""
     while running:
-        _wait_out_fast_window("quarterly cash/dividend refresh")
+        _wait_out_ultra_window("quarterly cash/dividend refresh")
         try:
             refresh_cash_reserves()
             refresh_dividends()
@@ -4768,7 +4779,7 @@ if __name__ == '__main__':
         # Minutes of sequential fetch + full-document parse. Held out of the
         # fast window, and each half guarded so a failure in the first can no
         # longer silently skip the second.
-        _wait_out_fast_window("historical backfill")
+        _wait_out_ultra_window("historical backfill")
         for name, fn in (("ATM history", backfill_atm_history),
                          ("USD reserves", backfill_usd_reserves)):
             try:
