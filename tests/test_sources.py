@@ -586,7 +586,7 @@ def test_source_health_counts_both_outcomes(monkeypatch):
         bot.fetch_mstr_filings_atom()
 
     snap = bot.source_health_snapshot()["atom"]
-    assert snap == {"ok": 2, "fail": 2, "fail_pct": 50.0,
+    assert snap == {"ok": 2, "fail": 2, "blocked": 0, "fail_pct": 50.0,
                     "last_error": "Read timed out."}
 
 
@@ -608,3 +608,35 @@ def test_repeated_identical_failures_are_not_logged_every_tick(monkeypatch):
     assert len([l for l in printed if "Atom feed query error" in l]) == 1
     # every failure is still counted, only the printing is throttled
     assert snap["atom"]["fail"] == 10
+
+
+def test_a_backed_off_source_is_reported_not_silently_absent(monkeypatch):
+    """A source in backoff returned early without recording anything, so it
+    simply vanished from the health line with no indication why — which is
+    how EFTS came to be missing from three consecutive reports."""
+    monkeypatch.setattr(bot, '_source_stats', {})
+    monkeypatch.setattr(bot, '_sec_backoff',
+                        {'efts': {'until': bot.time.time() + 30, 'delay': 4}})
+    monkeypatch.setattr(bot.http_session, 'get',
+                        lambda *a, **k: pytest.fail("must not hit the network"))
+
+    assert bot.fetch_mstr_filings_efts() == []
+    snap = bot.source_health_snapshot()["efts"]
+    assert snap["blocked"] == 1
+    # backoff is us declining to ask, so it must not inflate the error rate
+    assert snap["fail"] == 0 and snap["fail_pct"] is None
+
+
+def test_the_atom_feed_gets_a_shorter_read_budget(monkeypatch):
+    """It is the flaky corroborator; while it hangs its in-flight slot is
+    held, and 6s of that is 24 skipped ticks in the ultra window."""
+    seen = []
+    monkeypatch.setattr(bot.http_session, 'get',
+                        lambda url, timeout=None, headers=None:
+                            seen.append(timeout) or TextResp(200, ATOM_BODY))
+    bot.fetch_mstr_filings_atom()
+    bot.fetch_mstr_filings_efts()
+
+    assert seen[0] == (bot.SEC_CONNECT_TIMEOUT, bot.ATOM_READ_TIMEOUT)
+    assert seen[1] == (bot.SEC_CONNECT_TIMEOUT, bot.SEC_READ_TIMEOUT)
+    assert bot.ATOM_READ_TIMEOUT < bot.SEC_READ_TIMEOUT
