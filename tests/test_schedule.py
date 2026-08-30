@@ -115,3 +115,28 @@ def test_boundary_distance_is_always_positive():
     for minute in range(0, 24 * 60, 7):
         _, _, to_boundary = bot.poll_schedule(et(2026, 8, 3, minute // 60, minute % 60, 30))
         assert to_boundary > 0
+
+
+def test_boot_line_states_the_effective_config(monkeypatch):
+    """Env vars override the constants and the mode-change line only prints on
+    a window boundary, so on a weekend there was no way to confirm a config
+    change had landed without waiting for the next trading morning."""
+    monkeypatch.setattr(bot, 'POLL_INTERVAL_CRITICAL', 0.25)
+    monkeypatch.setattr(bot, 'POLL_INTERVAL_FAST', 2.0)
+    monkeypatch.setattr(bot, 'POLL_INTERVAL_NORMAL', 60.0)
+
+    line = bot.describe_poll_config()
+    assert "ultra 07:30-09:15 ET @0.25s" in line
+    assert "fast 06:00-18:00 ET @2.0s" in line
+    assert "normal @60.0s" in line
+    assert "WARNING" not in line
+
+
+def test_boot_line_flags_a_critical_interval_that_is_too_slow(monkeypatch):
+    """The README used to instruct POLL_INTERVAL_CRITICAL=2 against a code
+    default of 0.25 — an 8x handicap in the one window that matters, and
+    invisible in the logs."""
+    monkeypatch.setattr(bot, 'POLL_INTERVAL_CRITICAL', 2.0)
+    line = bot.describe_poll_config()
+    assert "WARNING" in line
+    assert "POLL_INTERVAL_CRITICAL" in line
