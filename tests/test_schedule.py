@@ -157,3 +157,48 @@ def test_the_ultra_window_is_pinned_to_the_secs_clock_not_turkeys():
     for y, m, d in ((2026, 8, 31), (2026, 12, 14)):
         for hh, mm in ((7, 55), (8, 25), (9, 4)):
             assert bot.poll_schedule(et(y, m, d, hh, mm))[0] == "Ultra High-Speed Mode"
+
+
+def test_background_work_is_held_only_out_of_the_ultra_window(monkeypatch):
+    """Gating on the whole fast band was too blunt: it is twelve hours, so a
+    weekday deploy at 10:00 ET postponed the historical backfill until
+    evening and left the dashboard half-populated all day."""
+    slept = []
+    monkeypatch.setattr(bot.time, 'sleep', lambda s: slept.append(s))
+
+    real_now_et = bot.now_et
+    def at(hh, mm):
+        monkeypatch.setattr(bot, 'now_et', lambda: et(2026, 8, 31, hh, mm))
+
+    # Mid-morning, well clear of the window: proceed immediately.
+    at(10, 30)
+    slept.clear()
+    bot._wait_out_ultra_window("test")
+    assert slept == []
+
+    # Overnight: proceed immediately.
+    at(2, 0)
+    slept.clear()
+    bot._wait_out_ultra_window("test")
+    assert slept == []
+
+    monkeypatch.setattr(bot, 'now_et', real_now_et)
+
+
+def test_background_work_waits_inside_the_ultra_window_and_its_lead_in(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_sleep(_):
+        # Let the loop escape after a couple of turns by moving the clock past
+        # the window; otherwise the test would hang.
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            monkeypatch.setattr(bot, 'now_et', lambda: et(2026, 8, 31, 12, 0))
+
+    monkeypatch.setattr(bot.time, 'sleep', fake_sleep)
+
+    for hh, mm in ((8, 0), (7, 25)):     # inside the window, and its lead-in
+        calls["n"] = 0
+        monkeypatch.setattr(bot, 'now_et', lambda hh=hh, mm=mm: et(2026, 8, 31, hh, mm))
+        bot._wait_out_ultra_window("test")
+        assert calls["n"] >= 1, f"{hh:02d}:{mm:02d} ET should have waited"
