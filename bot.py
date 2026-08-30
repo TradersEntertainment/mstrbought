@@ -681,10 +681,21 @@ _source_report_time = 0.0
 # minute and let the periodic summary carry the true rate.
 _source_error_logged = {}
 
-def _record_source(name, ok, err=None):
+def _record_source(name, ok, err=None, blocked=False):
+    """Record one source outcome.
+
+    `blocked` is a third state, not a failure: it means we declined to ask
+    because the source is in backoff. Counting it as a failure would inflate
+    the error rate, but leaving it out entirely made a backed-off source
+    vanish from the report — which is how EFTS came to be missing from three
+    consecutive health lines with no indication why.
+    """
     with _source_stats_lock:
-        st = _source_stats.setdefault(name, {"ok": 0, "fail": 0, "last_error": ""})
-        if ok:
+        st = _source_stats.setdefault(
+            name, {"ok": 0, "fail": 0, "blocked": 0, "last_error": ""})
+        if blocked:
+            st["blocked"] += 1
+        elif ok:
             st["ok"] += 1
         else:
             st["fail"] += 1
@@ -705,6 +716,7 @@ def source_health_snapshot():
             total = st["ok"] + st["fail"]
             out[name] = {
                 "ok": st["ok"], "fail": st["fail"],
+                "blocked": st.get("blocked", 0),
                 "fail_pct": round(100.0 * st["fail"] / total, 1) if total else None,
                 "last_error": st["last_error"] or None,
             }
@@ -719,19 +731,22 @@ def report_source_health(force=False):
     window = now - _source_report_time if _source_report_time else 0
     _source_report_time = now
     with _source_stats_lock:
-        if not any(v["ok"] or v["fail"] for v in _source_stats.values()):
+        if not any(v["ok"] or v["fail"] or v.get("blocked")
+                   for v in _source_stats.values()):
             return
         parts = []
         for name in ("submissions", "atom", "efts"):
             st = _source_stats.get(name)
-            if not st or not (st["ok"] or st["fail"]):
+            if not st or not (st["ok"] or st["fail"] or st.get("blocked")):
                 continue
             total = st["ok"] + st["fail"]
-            pct = 100.0 * st["fail"] / total
+            pct = 100.0 * st["fail"] / total if total else 0.0
             parts.append(f"{name} {st['ok']}ok/{st['fail']}fail ({pct:.0f}% fail)")
+            if st.get("blocked"):
+                parts[-1] += f" +{st['blocked']}blocked"
             if st["fail"]:
                 parts[-1] += f" last={st['last_error']}"
-            st["ok"] = st["fail"] = 0
+            st["ok"] = st["fail"] = st["blocked"] = 0
             st["last_error"] = ""
     if parts:
         print(f"SEC source health over {window/60:.0f}min in {current_mode}: "
@@ -771,6 +786,12 @@ def _commit_submissions_state(state):
 # for one tick rather than stalling the loop.
 SEC_CONNECT_TIMEOUT = float(os.getenv("SEC_CONNECT_TIMEOUT", "2"))
 SEC_READ_TIMEOUT = float(os.getenv("SEC_READ_TIMEOUT", "6"))
+# The atom feed lives on browse-edgar, SEC's legacy dynamic CGI, and
+# production measures it failing ~19% of the time while data.sec.gov over the
+# same window fails 0%. It is a corroborator, not the source detection rests
+# on, and while a request hangs its in-flight slot is held — 6s of that is 24
+# skipped ticks in the ultra window. Give up sooner and try again instead.
+ATOM_READ_TIMEOUT = float(os.getenv("ATOM_READ_TIMEOUT", "2.5"))
 
 def sec_get(url, headers=None, read_timeout=None):
     """GET an SEC endpoint, retrying once on a dropped keep-alive socket."""
@@ -799,6 +820,7 @@ def fetch_mstr_filings(use_conditional=True, return_state=False):
     it never saw.
     """
     if _sec_blocked('submissions'):
+        _record_source('submissions', False, blocked=True)
         return (None, None) if return_state else None
     cik = "0001050446"
     url = f"https://data.sec.gov/submissions/CIK{cik}.json"
@@ -881,9 +903,10 @@ def fetch_mstr_filings_atom():
     """
     global _atom_shape_logged, _atom_empty_since
     if _sec_blocked('atom'):
+        _record_source('atom', False, blocked=True)
         return []
     try:
-        resp = sec_get(ATOM_URL)
+        resp = sec_get(ATOM_URL, read_timeout=ATOM_READ_TIMEOUT)
         if resp.status_code != 200:
             _record_source('atom', False, f"HTTP {resp.status_code}")
             _register_sec_throttle('atom', resp.status_code)
@@ -947,6 +970,7 @@ def fetch_mstr_filings_efts():
     """
     global _efts_shape_logged
     if _sec_blocked('efts'):
+        _record_source('efts', False, blocked=True)
         return []
     # EDGAR dates are US Eastern; datetime.now() is the container's UTC
     # clock, which is a day ahead late in the US evening. And q= is a hard
