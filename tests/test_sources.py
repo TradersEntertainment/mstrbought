@@ -510,3 +510,56 @@ def test_sec_get_does_not_retry_a_slow_origin(monkeypatch):
     with pytest.raises(_rq.exceptions.ReadTimeout):
         bot.sec_get("https://www.sec.gov/x")
     assert len(attempts) == 1
+
+
+def test_the_log_names_the_source_that_actually_saw_it_first(monkeypatch):
+    """"via atom/efts" could not answer the question it existed to answer:
+    which endpoint is winning the race."""
+    monkeypatch.setattr(bot, '_processed_cache', set())
+    monkeypatch.setattr(bot, '_processed_cache_time', bot.time.time())
+    acc = '0001050446-26-000036'
+    monkeypatch.setattr(bot, 'fetch_mstr_filings',
+                        lambda use_conditional=True, return_state=False:
+                            (None, None) if return_state else None)
+    monkeypatch.setattr(bot, 'fetch_mstr_filings_efts', lambda: [])
+    monkeypatch.setattr(bot, 'fetch_mstr_filings_atom',
+                        lambda: [{"accession": acc, "date": "2026-07-31",
+                                  "url": "https://www.sec.gov/Archives/x/a.htm"}])
+    monkeypatch.setattr(bot, 'process_filing', lambda a, d, f, u: True)
+
+    printed = []
+    monkeypatch.setattr('builtins.print', lambda *a, **k: printed.append(" ".join(map(str, a))))
+    bot.check_for_new_filings()
+    monkeypatch.undo()
+
+    line = next(l for l in printed if l.startswith("New 8-K"))
+    assert "first seen via atom." in line
+
+
+def test_startup_marking_retries_a_failed_index_fetch(monkeypatch):
+    """One transient failure used to mark NOTHING, after which every 8-K
+    still visible in the feeds looked new."""
+    import sqlite3
+    attempts = []
+
+    def flaky(use_conditional=True, return_state=False):
+        attempts.append(1)
+        if len(attempts) < 3:
+            return (None, None) if return_state else None
+        data = {"filings": {"recent": {
+            "form": ["8-K"], "accessionNumber": ["0001050446-26-000036"],
+            "filingDate": ["2026-07-31"], "primaryDocument": ["a.htm"]}}}
+        return (data, {}) if return_state else data
+
+    monkeypatch.setattr(bot, 'fetch_mstr_filings', flaky)
+    monkeypatch.setattr(bot.time, 'sleep', lambda s: None)
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("""CREATE TABLE processed_filings (accession_number TEXT PRIMARY KEY,
+                    filing_date TEXT, form TEXT, url TEXT)""")
+    bot.mark_current_filings_processed(conn)
+
+    rows = conn.execute("SELECT accession_number FROM processed_filings").fetchall()
+    assert len(attempts) == 3
+    assert [r[0] for r in rows] == ["0001050446-26-000036"]
