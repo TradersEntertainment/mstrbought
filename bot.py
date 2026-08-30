@@ -666,6 +666,77 @@ def _sec_blocked(source):
 def _sec_clear_backoff(source):
     _sec_backoff.pop(source, None)
 
+
+# ----------------- SOURCE HEALTH TELEMETRY -----------------
+# Only failures were ever logged, so a source that fails a quarter of the
+# time and a source that fails nine times in ten look identical in the log:
+# a scroll of red. Count both outcomes per source and report the ratio
+# periodically, so "the atom feed is flaky" becomes a number and it is
+# visible whether submissions is quietly carrying detection on its own.
+SOURCE_REPORT_INTERVAL = float(os.getenv("SOURCE_REPORT_INTERVAL", "300"))
+_source_stats = {}
+_source_stats_lock = threading.Lock()
+_source_report_time = 0.0
+# Identical failures repeat every tick; print at most one per source per
+# minute and let the periodic summary carry the true rate.
+_source_error_logged = {}
+
+def _record_source(name, ok, err=None):
+    with _source_stats_lock:
+        st = _source_stats.setdefault(name, {"ok": 0, "fail": 0, "last_error": ""})
+        if ok:
+            st["ok"] += 1
+        else:
+            st["fail"] += 1
+            st["last_error"] = str(err)[:160]
+
+def _should_log_source_error(name):
+    now = time.time()
+    if now - _source_error_logged.get(name, 0) < 60:
+        return False
+    _source_error_logged[name] = now
+    return True
+
+def source_health_snapshot():
+    """Read-only view of the counters, for /api/status. Does not reset."""
+    with _source_stats_lock:
+        out = {}
+        for name, st in _source_stats.items():
+            total = st["ok"] + st["fail"]
+            out[name] = {
+                "ok": st["ok"], "fail": st["fail"],
+                "fail_pct": round(100.0 * st["fail"] / total, 1) if total else None,
+                "last_error": st["last_error"] or None,
+            }
+        return out
+
+def report_source_health(force=False):
+    """Print a per-source ok/fail summary and reset the counters."""
+    global _source_report_time
+    now = time.time()
+    if not force and now - _source_report_time < SOURCE_REPORT_INTERVAL:
+        return
+    window = now - _source_report_time if _source_report_time else 0
+    _source_report_time = now
+    with _source_stats_lock:
+        if not any(v["ok"] or v["fail"] for v in _source_stats.values()):
+            return
+        parts = []
+        for name in ("submissions", "atom", "efts"):
+            st = _source_stats.get(name)
+            if not st or not (st["ok"] or st["fail"]):
+                continue
+            total = st["ok"] + st["fail"]
+            pct = 100.0 * st["fail"] / total
+            parts.append(f"{name} {st['ok']}ok/{st['fail']}fail ({pct:.0f}% fail)")
+            if st["fail"]:
+                parts[-1] += f" last={st['last_error']}"
+            st["ok"] = st["fail"] = 0
+            st["last_error"] = ""
+    if parts:
+        print(f"SEC source health over {window/60:.0f}min in {current_mode}: "
+              + " | ".join(parts))
+
 # Conditional-GET state for the (large) submissions JSON
 _submissions_etag = None
 _submissions_last_modified = None
@@ -740,6 +811,7 @@ def fetch_mstr_filings(use_conditional=True, return_state=False):
         resp = sec_get(url, headers=headers)
         if resp.status_code == 200:
             _sec_clear_backoff('submissions')
+            _record_source('submissions', True)
             state = {
                 'etag': resp.headers.get('ETag'),
                 'last_modified': resp.headers.get('Last-Modified'),
@@ -748,11 +820,14 @@ def fetch_mstr_filings(use_conditional=True, return_state=False):
             return (data, state) if return_state else data
         elif resp.status_code == 304:
             # Index unchanged since the last poll — nothing new
-            pass
+            _record_source('submissions', True)
         else:
+            _record_source('submissions', False, f"HTTP {resp.status_code}")
             _register_sec_throttle('submissions', resp.status_code)
     except Exception as e:
-        print(f"Error fetching SEC JSON: {e}")
+        _record_source('submissions', False, e)
+        if _should_log_source_error('submissions'):
+            print(f"Error fetching SEC JSON: {e}")
     return (None, None) if return_state else None
 
 _atom_shape_logged = False
@@ -810,9 +885,11 @@ def fetch_mstr_filings_atom():
     try:
         resp = sec_get(ATOM_URL)
         if resp.status_code != 200:
+            _record_source('atom', False, f"HTTP {resp.status_code}")
             _register_sec_throttle('atom', resp.status_code)
             return []
         _sec_clear_backoff('atom')
+        _record_source('atom', True)
         body = resp.text
         results = []
         for entry in re.findall(r'<entry>(.*?)</entry>', body, re.S):
@@ -849,7 +926,9 @@ def fetch_mstr_filings_atom():
                       f"changed. Body starts: {body[:200]!r}")
         return results
     except Exception as e:
-        print(f"Atom feed query error (non-critical): {e}")
+        _record_source('atom', False, e)
+        if _should_log_source_error('atom'):
+            print(f"Atom feed query error (non-critical): {e}")
     return []
 
 _efts_shape_logged = False
@@ -880,9 +959,11 @@ def fetch_mstr_filings_efts():
     try:
         resp = sec_get(url)
         if resp.status_code != 200:
+            _record_source('efts', False, f"HTTP {resp.status_code}")
             _register_sec_throttle('efts', resp.status_code)
             return []
         _sec_clear_backoff('efts')
+        _record_source('efts', True)
         data = resp.json()
         hits = data.get("hits", {}).get("hits", [])
         if hits and not _efts_shape_logged:
@@ -918,7 +999,9 @@ def fetch_mstr_filings_efts():
                 print(f"EFTS: unrecognized hit shape, _id={hit_id[:120]}")
         return results
     except Exception as e:
-        print(f"EFTS query error (non-critical): {e}")
+        _record_source('efts', False, e)
+        if _should_log_source_error('efts'):
+            print(f"EFTS query error (non-critical): {e}")
     return []
 
 def fetch_html(url):
@@ -4020,6 +4103,7 @@ def polling_loop():
 
         try:
             check_for_new_filings()
+            report_source_health()
         except Exception as e:
             # Keep the cadence the clock asked for; only back off a little in
             # normal mode so a persistent failure doesn't spin.
@@ -4056,6 +4140,9 @@ def get_bot_status():
         "fast_window_et": f"{FAST_WINDOW_ET[0]//60:02d}:{FAST_WINDOW_ET[0]%60:02d}"
                           f"-{FAST_WINDOW_ET[1]//60:02d}:{FAST_WINDOW_ET[1]%60:02d}",
         "last_checked": last_checked_time,
+        "seconds_since_last_poll": (round(time.time() - _last_tick_time, 1)
+                                    if _last_tick_time else None),
+        "sources": source_health_snapshot(),
         "db_path": DB_PATH
     })
 
