@@ -563,3 +563,48 @@ def test_startup_marking_retries_a_failed_index_fetch(monkeypatch):
     rows = conn.execute("SELECT accession_number FROM processed_filings").fetchall()
     assert len(attempts) == 3
     assert [r[0] for r in rows] == ["0001050446-26-000036"]
+
+
+def test_source_health_counts_both_outcomes(monkeypatch):
+    """Only failures were logged, so a source failing 25% of the time and one
+    failing 90% of the time looked identical: a scroll of red."""
+    import requests as _rq
+
+    monkeypatch.setattr(bot, '_source_stats', {})
+    monkeypatch.setattr(bot, '_source_error_logged', {})
+
+    calls = []
+
+    def sometimes(url, timeout=None, headers=None):
+        calls.append(1)
+        if len(calls) % 2:
+            raise _rq.exceptions.ReadTimeout("Read timed out.")
+        return TextResp(200, ATOM_BODY)
+
+    monkeypatch.setattr(bot.http_session, 'get', sometimes)
+    for _ in range(4):
+        bot.fetch_mstr_filings_atom()
+
+    snap = bot.source_health_snapshot()["atom"]
+    assert snap == {"ok": 2, "fail": 2, "fail_pct": 50.0,
+                    "last_error": "Read timed out."}
+
+
+def test_repeated_identical_failures_are_not_logged_every_tick(monkeypatch):
+    import requests as _rq
+
+    monkeypatch.setattr(bot, '_source_stats', {})
+    monkeypatch.setattr(bot, '_source_error_logged', {})
+    monkeypatch.setattr(bot.http_session, 'get',
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            _rq.exceptions.ReadTimeout("Read timed out.")))
+    printed = []
+    monkeypatch.setattr('builtins.print', lambda *a, **k: printed.append(" ".join(map(str, a))))
+    for _ in range(10):
+        bot.fetch_mstr_filings_atom()
+    snap = bot.source_health_snapshot()   # before undo restores the real dict
+    monkeypatch.undo()
+
+    assert len([l for l in printed if "Atom feed query error" in l]) == 1
+    # every failure is still counted, only the printing is throttled
+    assert snap["atom"]["fail"] == 10
