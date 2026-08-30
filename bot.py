@@ -671,6 +671,33 @@ def _commit_submissions_state(state):
         _submissions_etag = state.get('etag')
         _submissions_last_modified = state.get('last_modified')
 
+# Railway's egress to www.sec.gov is measurably slow and flaky: production
+# logs show constant "Read timed out (read timeout=3)" against the atom feed
+# and "RemoteDisconnected" against the submissions index — the latter being a
+# pooled keep-alive socket the peer closed after we had already written the
+# request, which urllib3 cannot transparently recover.
+#
+# A single flat timeout=3 was both too tight for a slow origin and applied to
+# connect and read separately. Split them: a connect that has not landed in
+# SEC_CONNECT_TIMEOUT is dead, while a read deserves longer than 3s. This is
+# only safe because the poll tick no longer blocks on these — each source
+# runs on its own thread behind a shared deadline and its result is read
+# whether or not the thread finished, so a slow fetch costs its own signal
+# for one tick rather than stalling the loop.
+SEC_CONNECT_TIMEOUT = float(os.getenv("SEC_CONNECT_TIMEOUT", "2"))
+SEC_READ_TIMEOUT = float(os.getenv("SEC_READ_TIMEOUT", "6"))
+
+def sec_get(url, headers=None, read_timeout=None):
+    """GET an SEC endpoint, retrying once on a dropped keep-alive socket."""
+    timeout = (SEC_CONNECT_TIMEOUT, read_timeout or SEC_READ_TIMEOUT)
+    try:
+        return http_session.get(url, timeout=timeout, headers=headers)
+    except requests.exceptions.ConnectionError:
+        # Stale pooled connection: retry immediately on a fresh socket. Costs
+        # nothing in the happy path, and a read timeout is NOT retried here —
+        # that one is a slow origin, and hammering it would make things worse.
+        return http_session.get(url, timeout=timeout, headers=headers)
+
 def fetch_mstr_filings(use_conditional=True, return_state=False):
     """Fetch the EDGAR submissions index.
 
@@ -696,7 +723,7 @@ def fetch_mstr_filings(use_conditional=True, return_state=False):
     if use_conditional and _submissions_last_modified:
         headers['If-Modified-Since'] = _submissions_last_modified
     try:
-        resp = http_session.get(url, timeout=3, headers=headers)
+        resp = sec_get(url, headers=headers)
         if resp.status_code == 200:
             _sec_clear_backoff('submissions')
             state = {
@@ -739,7 +766,7 @@ def _resolve_primary_document(accession):
     acc_no_dash = accession.replace('-', '')
     base = f"https://www.sec.gov/Archives/edgar/data/1050446/{acc_no_dash}"
     try:
-        resp = http_session.get(f"{base}/index.json", timeout=3)
+        resp = sec_get(f"{base}/index.json")
         if resp.status_code != 200:
             return ""
         items = ((resp.json() or {}).get("directory") or {}).get("item") or []
@@ -767,7 +794,7 @@ def fetch_mstr_filings_atom():
     if _sec_blocked('atom'):
         return []
     try:
-        resp = http_session.get(ATOM_URL, timeout=3)
+        resp = sec_get(ATOM_URL)
         if resp.status_code != 200:
             _register_sec_throttle('atom', resp.status_code)
             return []
@@ -837,7 +864,7 @@ def fetch_mstr_filings_efts():
     url = (f"https://efts.sec.gov/LATEST/search-index?"
            f"forms=8-K&ciks=0001050446&startdt={today}&enddt={today}")
     try:
-        resp = http_session.get(url, timeout=3)
+        resp = sec_get(url)
         if resp.status_code != 200:
             _register_sec_throttle('efts', resp.status_code)
             return []
@@ -882,7 +909,7 @@ def fetch_mstr_filings_efts():
 
 def fetch_html(url):
     try:
-        resp = http_session.get(url, timeout=3)
+        resp = sec_get(url)
         if resp.status_code == 200:
             return resp.text
     except Exception as e:
@@ -3654,6 +3681,10 @@ _processed_cache_time = 0
 _last_efts_time = 0.0
 _last_atom_time = 0.0
 _inflight = {"submissions": False, "atom": False, "efts": False}
+# Mailbox the fetch threads publish into, drained by whichever tick gets
+# there next — so a fetch slower than the tick still delivers.
+_pending_lock = threading.Lock()
+_pending = {"submissions": None, "atom": [], "efts": []}
 _inflight_since = {"submissions": 0.0, "atom": 0.0, "efts": 0.0}
 # A socket that wedges past its own timeouts must not retire a source for
 # good; after this long the guard is dropped and the source is retried.
@@ -3729,12 +3760,6 @@ def check_for_new_filings():
         run_atom = now - _last_atom_time >= 1.0
         run_efts = now - _last_efts_time >= 5.0
 
-        # Single-cell tuple assignment keeps (data, state) atomic: a join
-        # timeout must never observe the payload without its conditional-GET
-        # state or vice versa.
-        submissions_fetch = [(None, None)]
-        efts_result = [[]]
-        atom_result = [[]]
 
         def _guarded(name, fn):
             def run():
@@ -3760,12 +3785,28 @@ def check_for_new_filings():
             t.start()
             return t
 
+        # Fetches publish into a module-level mailbox rather than a per-tick
+        # cell. A fetch that outruns the join deadline is then delivered on
+        # the NEXT tick (250ms later) instead of being discarded — which
+        # matters now that SEC reads are allowed longer than the tick.
         def _fetch_submissions():
-            submissions_fetch[0] = fetch_mstr_filings(return_state=True)
+            data, state = fetch_mstr_filings(return_state=True)
+            if data is not None:
+                with _pending_lock:
+                    # Single-tuple assignment keeps (data, state) atomic: a
+                    # reader must never see the payload without its
+                    # conditional-GET state, or vice versa.
+                    _pending["submissions"] = (data, state)
         def _fetch_efts():
-            efts_result[0] = fetch_mstr_filings_efts()
+            res = fetch_mstr_filings_efts()
+            if res:
+                with _pending_lock:
+                    _pending["efts"] = res
         def _fetch_atom():
-            atom_result[0] = fetch_mstr_filings_atom()
+            res = fetch_mstr_filings_atom()
+            if res:
+                with _pending_lock:
+                    _pending["atom"] = res
 
         threads = []
         if not _busy("submissions"):
@@ -3786,6 +3827,15 @@ def check_for_new_filings():
         deadline = time.time() + max(1.5, min(4.0, POLL_INTERVAL_CRITICAL * 8))
         for t in threads:
             t.join(timeout=max(0.0, deadline - time.time()))
+
+        # Drain whatever has arrived, from this tick or a slow earlier one.
+        with _pending_lock:
+            submissions_result = _pending["submissions"]
+            atom_result = _pending["atom"]
+            efts_result = _pending["efts"]
+            _pending["submissions"] = None
+            _pending["atom"] = []
+            _pending["efts"] = []
 
         # Collect candidates keyed by accession. The submissions index is
         # authoritative for the document URL, so it always wins over the
@@ -3809,7 +3859,7 @@ def check_for_new_filings():
                 cur["date"] = date
 
         # Submissions (authoritative URL, every tick)
-        data, sub_state = submissions_fetch[0]
+        data, sub_state = submissions_result or (None, None)
         if data:
             recent = data.get('filings', {}).get('recent', {})
             if recent:
@@ -3841,11 +3891,11 @@ def check_for_new_filings():
             _commit_submissions_state(sub_state)
 
         # Atom (fastest to publish, but carries no document name)
-        for result in atom_result[0]:
+        for result in atom_result:
             _offer(result["accession"], result["date"], "8-K", result.get("url") or "")
 
         # EFTS (lagging full-text index, backstop only)
-        for result in efts_result[0]:
+        for result in efts_result:
             _offer(result["accession"], result["date"], "8-K", result["url"])
 
         if not candidates:

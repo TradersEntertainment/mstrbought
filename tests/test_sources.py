@@ -30,6 +30,7 @@ def reset_source_state(monkeypatch):
     monkeypatch.setattr(bot, '_last_efts_time', 0.0)
     monkeypatch.setattr(bot, '_last_atom_time', 0.0)
     monkeypatch.setattr(bot, '_inflight', {"submissions": False, "atom": False, "efts": False})
+    monkeypatch.setattr(bot, '_pending', {"submissions": None, "atom": [], "efts": []})
     # _mark_processed writes to the real DB; the scan tests only care that
     # the accession stops being re-offered.
     monkeypatch.setattr(bot, '_mark_processed',
@@ -444,3 +445,68 @@ def test_concurrent_scans_do_not_double_alert(monkeypatch):
         t.join(timeout=10)
 
     assert calls == ['0001193125-26-320011']
+
+
+def test_a_fetch_slower_than_the_tick_is_delivered_on_the_next_one(monkeypatch):
+    """Production logs show constant 3s read timeouts against www.sec.gov, so
+    reads are now allowed longer than a tick. A result that lands after the
+    join deadline must not be thrown away."""
+    monkeypatch.setattr(bot, '_processed_cache', set())
+    monkeypatch.setattr(bot, '_processed_cache_time', bot.time.time())
+    monkeypatch.setattr(bot, 'POLL_INTERVAL_CRITICAL', 0.25)
+    monkeypatch.setattr(bot, 'fetch_mstr_filings',
+                        lambda use_conditional=True, return_state=False:
+                            (None, None) if return_state else None)
+    monkeypatch.setattr(bot, 'fetch_mstr_filings_efts', lambda: [])
+
+    def slow_atom():
+        bot.time.sleep(2.5)   # outruns the ~2s join deadline
+        return [{"accession": '0001193125-26-320011', "date": "2026-08-03",
+                 "url": "https://www.sec.gov/Archives/x/mstr.htm"}]
+
+    monkeypatch.setattr(bot, 'fetch_mstr_filings_atom', slow_atom)
+    calls = []
+    monkeypatch.setattr(bot, 'process_filing',
+                        lambda a, d, f, u: calls.append(a) or True)
+
+    assert bot.check_for_new_filings() == 0   # tick 1: not back yet
+    assert calls == []
+
+    bot.time.sleep(1.5)                        # the fetch lands meanwhile
+    monkeypatch.setattr(bot, '_last_atom_time', 0.0)
+    bot.check_for_new_filings()                # tick 2 drains the mailbox
+    assert calls == ['0001193125-26-320011']
+
+
+def test_sec_get_retries_a_dropped_keepalive_socket(monkeypatch):
+    """Production logs show RemoteDisconnected on the submissions index: a
+    pooled socket the peer closed after we wrote the request."""
+    import requests as _rq
+    attempts = []
+
+    def flaky(url, timeout=None, headers=None):
+        attempts.append(timeout)
+        if len(attempts) == 1:
+            raise _rq.exceptions.ConnectionError("Connection aborted.")
+        return FakeResp(200, {})
+
+    monkeypatch.setattr(bot.http_session, 'get', flaky)
+    assert bot.sec_get("https://data.sec.gov/x").status_code == 200
+    assert len(attempts) == 2
+    # split connect/read timeouts, not one flat value applied to each phase
+    assert attempts[0] == (bot.SEC_CONNECT_TIMEOUT, bot.SEC_READ_TIMEOUT)
+
+
+def test_sec_get_does_not_retry_a_slow_origin(monkeypatch):
+    """A read timeout means SEC is slow; retrying would only add load."""
+    import requests as _rq
+    attempts = []
+
+    def always_slow(url, timeout=None, headers=None):
+        attempts.append(1)
+        raise _rq.exceptions.ReadTimeout("Read timed out.")
+
+    monkeypatch.setattr(bot.http_session, 'get', always_slow)
+    with pytest.raises(_rq.exceptions.ReadTimeout):
+        bot.sec_get("https://www.sec.gov/x")
+    assert len(attempts) == 1
