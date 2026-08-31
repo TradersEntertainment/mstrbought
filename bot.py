@@ -502,6 +502,7 @@ def apply_data_migrations(conn):
         ("2026-07-13-repair-july-rows", _migrate_repair_july_2026_rows),
         ("2026-07-14-backfill-july13-atm-json", _migrate_backfill_july13_atm_json),
         ("2026-07-14-backfill-event-types", _migrate_backfill_event_types),
+        ("2026-08-30-drop-false-sale-rows", _migrate_drop_false_sale_rows),
     ]
     cursor = conn.cursor()
     for migration_id, fn in migrations:
@@ -515,6 +516,53 @@ def apply_data_migrations(conn):
             print(f"Data migration applied: {migration_id}")
         except Exception as e:
             print(f"Data migration {migration_id} failed (will retry next boot): {e}")
+
+def _migrate_drop_false_sale_rows(conn):
+    """Remove history rows written from a misparsed holdings column.
+
+    The August 30, 2026 filing was parsed with the week's purchase columns
+    read as the whole treasury, so the row records 4,603 BTC held against
+    843,775 the week before, and an inferred sale of the difference. Left in
+    place it puts a cliff in the dashboard chart and hands the next filing a
+    nonsense baseline to compare against.
+
+    Deliberately narrow. Whether a row came from the filing's own numbers or
+    from inference is not recorded, so the discriminator has to be the shape
+    of the damage: a collapse of more than 90% of the treasury in one week.
+    A real disposal on that scale would be the story of the decade and no
+    operator would need this migration to notice it; a 99.5% drop with the
+    week's purchase figures sitting in the holdings columns is a parse
+    failure. The next filing restores the week from its own snapshot.
+    """
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, filing_date, total_holdings, btc_acquired, event_type "
+                   "FROM purchase_history ORDER BY filing_date, id")
+    rows = cursor.fetchall()
+
+    def as_int(v):
+        try:
+            return int(str(v).replace(',', '').replace(' ', '').lstrip('+'))
+        except (ValueError, TypeError, AttributeError):
+            return None
+
+    removed = []
+    prev = None
+    for row in rows:
+        holdings = as_int(row["total_holdings"])
+        acquired = as_int(row["btc_acquired"])
+        if (prev and holdings and holdings < prev * 0.1
+                and row["event_type"] == "btc_sale"
+                and acquired is not None and acquired < 0):
+            removed.append((row["id"], row["filing_date"], row["total_holdings"]))
+            continue
+        if holdings:
+            prev = holdings
+
+    for row_id, date, holdings in removed:
+        cursor.execute("DELETE FROM purchase_history WHERE id = ?", (row_id,))
+        print(f"Removed false-sale row id={row_id} ({date}, holdings={holdings}).")
+    if not removed:
+        print("No false-sale rows found.")
 
 def _migrate_repair_july_2026_rows(conn):
     """Repair production rows corrupted by the pre-multi-table parser.
@@ -1138,6 +1186,22 @@ def parse_table_fallback(html_content):
     """Back-compat wrapper: extract tables once, then parse the BTC data."""
     return parse_btc_tables(extract_filing_tables(html_content))
 
+# Column labels, matched loosely: \s covers the non-breaking spaces the
+# extractor can leave behind, and the alternations cover MSTR rewording a
+# header without changing what the column means.
+# An inferred move larger than this fraction of the known balance is treated
+# as a parse failure rather than news.
+MAX_INFERRED_MOVE = float(os.getenv("MAX_INFERRED_MOVE", "0.25"))
+
+BTC_SOLD_RE = re.compile(r'BTC\s+(?:Sold|Disposed)', re.I)
+BTC_ACQUIRED_RE = re.compile(r'BTC\s+(?:Acquired|Purchased|Bought|Added)', re.I)
+BTC_HOLDINGS_RE = re.compile(r'Aggregate\s+BTC\s+Holdings', re.I)
+
+def _holdings_column_index(header_row):
+    """Where the holdings block starts in the header row, or None."""
+    return next((i for i, h in enumerate(header_row or [])
+                 if BTC_HOLDINGS_RE.search(h or '')), None)
+
 def parse_btc_tables(tables):
     """Parse BTC activity and holdings tables from pre-extracted table data.
 
@@ -1160,9 +1224,14 @@ def parse_btc_tables(tables):
         header_text = ' '.join(row_data[1]) if len(row_data) > 1 else ''
         period_text = row_data[0][0] if row_data[0] else ''
 
-        is_sold = 'BTC Sold' in header_text or 'BTC Sold' in table_text
-        is_acquired = 'BTC Acquired' in header_text or 'BTC Acquired' in table_text
-        is_holdings = 'Aggregate BTC Holdings' in header_text or 'Aggregate BTC Holdings' in table_text
+        # Match the labels loosely. A literal 'BTC Acquired' comparison is a
+        # single point of failure for the whole parse: if MSTR reworded the
+        # column, or the extractor left a non-breaking space in it, the
+        # activity table stops being recognised and its columns get read as
+        # something else entirely.
+        is_sold = bool(BTC_SOLD_RE.search(header_text) or BTC_SOLD_RE.search(table_text))
+        is_acquired = bool(BTC_ACQUIRED_RE.search(header_text) or BTC_ACQUIRED_RE.search(table_text))
+        is_holdings = bool(BTC_HOLDINGS_RE.search(header_text) or BTC_HOLDINGS_RE.search(table_text))
 
         if (is_sold or is_acquired) and len(row_data) >= 3:
             try:
@@ -1199,16 +1268,19 @@ def parse_btc_tables(tables):
                 # Combined format: one table holding both the period activity
                 # (columns 0-2) and the cumulative holdings (columns 3-5),
                 # e.g. [BTC Acquired, Price(M), Avg Price, Aggregate BTC Holdings, Price(B), Avg Price]
-                if is_holdings and len(cleaned) >= 6:
-                    holdings_header_idx = next((h for h, hdr in enumerate(row_data[1]) if 'Aggregate BTC Holdings' in hdr), None)
-                    if holdings_header_idx is not None:
-                        h_cost_header = row_data[1][holdings_header_idx + 1].lower() if holdings_header_idx + 1 < len(row_data[1]) else ''
+                hi = _holdings_column_index(row_data[1])
+                if is_holdings and hi is not None and len(cleaned) >= hi + 3:
+                        h_cost_header = row_data[1][hi + 1].lower() if hi + 1 < len(row_data[1]) else ''
                         h_cost_unit = "M" if "millions" in h_cost_header else ("B" if "billions" in h_cost_header else "")
-                        h_holdings = re.sub(r'\(\d+\)', '', cleaned[3]).strip() or '-'
-                        h_cost_val = re.sub(r'\(\d+\)', '', cleaned[4]).strip() or '-'
+                        # Read from where the header says the holdings block
+                        # begins. These indices were hardcoded to 3/4/5, which
+                        # is right only for the layout that happened to be in
+                        # front of us.
+                        h_holdings = re.sub(r'\(\d+\)', '', cleaned[hi]).strip() or '-'
+                        h_cost_val = re.sub(r'\(\d+\)', '', cleaned[hi + 1]).strip() or '-'
                         if h_cost_val != '-' and h_cost_unit and not h_cost_val.endswith(h_cost_unit):
                             h_cost_val = f"{h_cost_val}{h_cost_unit}"
-                        h_avg_cost = (re.sub(r'\(\d+\)', '', cleaned[5]).strip() or '-') if len(cleaned) > 5 else '-'
+                        h_avg_cost = re.sub(r'\(\d+\)', '', cleaned[hi + 2]).strip() or '-'
 
                         # Extract "As of" date from period header row
                         as_of_parts = [p for p in row_data[0] if 'As of' in p]
@@ -1229,20 +1301,34 @@ def parse_btc_tables(tables):
                 if len(cleaned) < 3:
                     cleaned += ['-'] * (3 - len(cleaned))
 
-                # Detect cost unit; strip footnote markers from all values
-                cost_header = row_data[1][1].lower() if len(row_data[1]) > 1 else ''
+                # Where the holdings block actually starts. This branch used
+                # to assume column 0, which is only true for a holdings-only
+                # table. On a combined table whose activity header we failed
+                # to recognise, it read the week's PURCHASE columns as the
+                # entire treasury — reporting 4,603 BTC held instead of
+                # 4,603 BTC bought, and turning a purchase into a 839,172 BTC
+                # "sale" against the previous balance.
+                hi = _holdings_column_index(row_data[1]) or 0
+                if len(cleaned) < hi + 3:
+                    print(f"Holdings table has {len(cleaned)} values but its header puts "
+                          f"holdings at column {hi}; skipping rather than guessing.")
+                    continue
+
+                cost_header = row_data[1][hi + 1].lower() if hi + 1 < len(row_data[1]) else ''
                 cost_unit = "M" if "millions" in cost_header else ("B" if "billions" in cost_header else "")
-                cost_val = re.sub(r'\(\d+\)', '', cleaned[1]).strip() or '-'
+                cost_val = re.sub(r'\(\d+\)', '', cleaned[hi + 1]).strip() or '-'
                 if cost_val != '-' and cost_unit and not cost_val.endswith(cost_unit):
                     cost_val = f"{cost_val}{cost_unit}"
 
-                as_of = period_text.replace("As of ", "").replace("*", "").strip()
+                as_of_parts = [p for p in row_data[0] if 'As of' in p]
+                as_of = (as_of_parts[0] if as_of_parts else period_text
+                         ).replace("As of ", "").replace("*", "").strip()
 
                 holdings_snapshots.append({
                     "as_of": as_of,
-                    "holdings": re.sub(r'\(\d+\)', '', cleaned[0]).strip() or '-',
+                    "holdings": re.sub(r'\(\d+\)', '', cleaned[hi]).strip() or '-',
                     "total_cost": cost_val,
-                    "avg_cost": re.sub(r'\(\d+\)', '', cleaned[2]).strip() or '-'
+                    "avg_cost": re.sub(r'\(\d+\)', '', cleaned[hi + 2]).strip() or '-'
                 })
             except Exception as e:
                 print(f"Error parsing holdings table: {e}")
@@ -1314,11 +1400,32 @@ def parse_btc_tables(tables):
             btc_net_signed = current_holdings_num - prev_holdings_num
         else:
             btc_net_signed = 0
+
+        # A sale we did not read in the filing, we do not announce.
+        #
+        # This path once published "MSTR BTC SATTI: -839,172 BTC" — 99.5% of
+        # the treasury — off a misparsed holdings figure, on a week MSTR had
+        # in fact bought. Labelling it "(estimated)" is not a safeguard: the
+        # headline is what reaches the channel. A real disposal is stated in
+        # the filing's own BTC Sold table and goes down the primary path
+        # above; a negative delta reached only by subtraction is far more
+        # likely to be a parse failure, so treat it as one.
+        if btc_net_signed < 0:
+            print(f"REFUSING to infer a sale: holdings {prev_holdings_num:,} -> "
+                  f"{current_holdings_num:,} ({btc_net_signed:+,}) with no BTC Sold "
+                  f"table in the filing. Treating this as a parse failure.")
+            return None
+
+        # An inferred purchase is announced, but only when it is credible.
+        # A jump larger than this is the same class of parse error pointing
+        # the other way.
         if btc_net_signed > 0:
+            if prev_holdings_num > 0 and btc_net_signed > prev_holdings_num * MAX_INFERRED_MOVE:
+                print(f"REFUSING to infer a purchase of {btc_net_signed:,} BTC against a "
+                      f"{prev_holdings_num:,} BTC balance — implausible, treating as a "
+                      f"parse failure.")
+                return None
             event_type = "btc_purchase"
-            inferred = True
-        elif btc_net_signed < 0:
-            event_type = "btc_sale"
             inferred = True
         else:
             event_type = "no_purchase"
