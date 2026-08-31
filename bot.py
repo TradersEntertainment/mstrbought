@@ -1579,6 +1579,16 @@ def parse_atm_table(tables):
                     total_net_proceeds = money
                 continue
 
+            # A footnote rendered INSIDE the table is still a <tr>, and one
+            # of them reads "(4) As previously disclosed, on March 23, 2026,
+            # Strategy announced a new $21.0 billion offering of MSTR Stock."
+            # The ticker search below happily matched the MSTR in that
+            # sentence and produced a second, all-blank MSTR security — which
+            # then showed up in the alert as "MSTR: satış yok" on the very
+            # week MSTR sold 4,531,421 shares.
+            if re.match(r'\s*\(\d+\)', first):
+                continue
+
             m = ATM_TICKER_RE.search(first)
             if m:
                 ticker = m.group(1)
@@ -1589,6 +1599,15 @@ def parse_atm_table(tables):
                 continue
 
             cleaned = clean_row_values(row[1:])
+            # A real security row always carries at least its remaining
+            # capacity, even in a week it sold nothing. A row whose every
+            # value cell is blank is prose that happens to name a ticker.
+            if not any(v.strip() not in ('-', '') for v in cleaned):
+                continue
+            if any(sec["ticker"] == ticker for sec in securities):
+                print(f"ATM table lists {ticker} more than once; keeping the first row.")
+                continue
+
             while len(cleaned) < len(value_keys):
                 cleaned.append('-')
 
@@ -3223,13 +3242,16 @@ Parsed table data (authoritative — from the filing's own tables):
         atm = table_data.get("atm")
         if atm:
             table_context += "ATM offering activity this period (per security):\n"
-            for s in atm.get("securities", []):
-                if s.get("shares_sold_num", 0) > 0:
-                    table_context += (f"  - {s['ticker']}: {s.get('shares_sold', '-')} shares sold, "
-                                      f"net proceeds {s.get('net_proceeds', '-')}, "
-                                      f"remaining capacity {s.get('available', '-')}\n")
-                else:
-                    table_context += f"  - {s['ticker']}: no shares sold (remaining capacity {s.get('available', '-')})\n"
+            g_sold, g_flagged, g_unsold = partition_atm_securities(atm)
+            for s in g_sold:
+                table_context += (f"  - {s['ticker']}: {s.get('shares_sold', '-')} shares sold, "
+                                  f"net proceeds {s.get('net_proceeds', '-')}, "
+                                  f"remaining capacity {s.get('available', '-')}\n")
+            for s in g_flagged:
+                table_context += (f"  - {s['ticker']}: shares sold but the figures failed a "
+                                  f"sanity check — do not quote them\n")
+            for s in g_unsold:
+                table_context += f"  - {s['ticker']}: no shares sold (remaining capacity {s.get('available', '-')})\n"
             table_context += f"  Total net proceeds: {atm.get('total_net_proceeds', '-')}\n"
 
         if table_data.get("usd_reserve_m") is not None:
@@ -3379,6 +3401,36 @@ def _abs_amount(parsed_data):
     raw = str(parsed_data.get("btc_acquired") or "-")
     return raw.lstrip('+-') or "-"
 
+def partition_atm_securities(atm):
+    """Split the parsed securities into (sold, flagged, unsold).
+
+    One place decides which bucket a security belongs to, so the sold line,
+    the "satış yok" line and the Groq context can never disagree:
+
+    - sold    — shares moved and no sanity guard objected
+    - flagged — shares moved but a guard doubts the numbers (counts=False),
+                which financing_source_from_atm already excludes. These used
+                to be printed as fact on the sold line while being absent
+                from the unsold line.
+    - unsold  — everything else, deduped, and never a ticker that appears in
+                one of the other two buckets.
+    """
+    sold, flagged, unsold = [], [], []
+    for s in atm.get("securities", []) if atm else []:
+        if s.get("shares_sold_num", 0) > 0:
+            (flagged if s.get("counts") is False else sold).append(s)
+        else:
+            unsold.append(s)
+    moved = {s["ticker"] for s in sold} | {s["ticker"] for s in flagged}
+    seen = set()
+    quiet = []
+    for s in unsold:
+        if s["ticker"] in moved or s["ticker"] in seen:
+            continue
+        seen.add(s["ticker"])
+        quiet.append(s)
+    return sold, flagged, quiet
+
 def _atm_sold_lines(parsed_data):
     """Per-security ATM sale lines for Telegram (tickers only).
 
@@ -3388,27 +3440,31 @@ def _atm_sold_lines(parsed_data):
     atm = parsed_data.get("atm")
     if not atm:
         return None
-    lines = []
-    for s in atm.get("securities", []):
-        if s.get("shares_sold_num", 0) > 0:
-            lines.append(f"{s['ticker']}: {s.get('shares_sold', '-')} adet → **{s.get('net_proceeds', '-')}** net")
-    return lines
+    sold, _, _ = partition_atm_securities(atm)
+    return [f"{s['ticker']}: {s.get('shares_sold', '-')} adet → **{s.get('net_proceeds', '-')}** net"
+            for s in sold]
 
 def _atm_block(parsed_data, emoji="💸"):
     """Compact ATM section shared by the alert templates."""
-    lines = _atm_sold_lines(parsed_data)
-    if lines is None:
+    atm = parsed_data.get("atm")
+    if not atm:
         source = parsed_data.get("financing_source_turkish") or parsed_data.get("financing_details")
         if source and source != "-":
             return f"{emoji} Finansman: {source}"
         return f"{emoji} ATM Satışı: Yok"
-    if not lines:
+
+    sold, flagged, unsold = partition_atm_securities(atm)
+    if not sold and not flagged:
         return f"{emoji} ATM Satışı: Yok"
-    atm = parsed_data.get("atm") or {}
-    unsold = [s["ticker"] for s in atm.get("securities", []) if s.get("shares_sold_num", 0) <= 0]
-    block = f"{emoji} **ATM Satışı VAR:** " + "\n   ".join(lines)
+
+    lines = [f"{s['ticker']}: {s.get('shares_sold', '-')} adet → **{s.get('net_proceeds', '-')}** net"
+             for s in sold]
+    block = f"{emoji} **ATM Satışı VAR:** " + "\n   ".join(lines) if lines else f"{emoji} **ATM Satışı VAR:**"
+    for s in flagged:
+        # Say that something moved without stating a number we do not trust.
+        block += f"\n   ⚠️ {s['ticker']}: satış var, rakam doğrulanamadı"
     if unsold:
-        block += f"\n   {' / '.join(unsold)}: satış yok"
+        block += f"\n   {' / '.join(s['ticker'] for s in unsold)}: satış yok"
     return block
 
 def _breakdown_lines(parsed_data):
