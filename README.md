@@ -16,6 +16,7 @@ Bu Telegram botu, MicroStrategy (Strategy Inc., CIK `0001050446`) şirketinin SE
   - `/data` veya `/history` - En son portföy özetini ve son 6 alımın geçmişini gösterir.
   - `/insider` - Polymarket içeriden takip özetini şimdi kanala gönderir.
   - `/insider_test` - Özeti kanala göndermeden sadece size gösterir (canlı doğrulama için).
+  - `/markets_test` - Polymarket'te bulunan açık MSTR marketlerini oranlarıyla listeler.
   - `/status` - Botun aktif durumunu, anlık çalışma modunu (Normal/High-Speed) ve zaman damgalarını gösterir.
 
 ---
@@ -79,6 +80,9 @@ Railway paneline gidip aşağıdaki çevre değişkenlerini ekleyin:
 | `POLYMARKET_MIN_USD` | `100` *(bu tutarın altındaki hareketler gösterilmez)* |
 | `POLYMARKET_MIN_DELTA_PCT` | `5` *(pozisyonun %5'inden küçük değişim gürültü sayılır)* |
 | `POLYMARKET_LIVE_INTERVAL_S` | `3600` *(sitedeki balina panelinin tazelenme aralığı)* |
+| `POLYMARKET_MARKETS` | `true` *(market kataloğu; cüzdan listesinden bağımsız)* |
+| `POLYMARKET_SEARCH_TERMS` | `microstrategy,mstr,strategy bitcoin` *(Gamma araması; pozisyonsuz marketleri bulur)* |
+| `POLYMARKET_ODDS_ALERT_PCT` | `20` *(oran bu kadar puan oynarsa Telegram)* |
 | `RECONCILE_MAX` | `30` *(açılışta kurtarılacak azami eksik hafta)* |
 
 > ⚠️ Bu tablonun eski hali `POLL_INTERVAL_CRITICAL=2` diyordu; kodun varsayılanı ise
@@ -152,11 +156,77 @@ dijestin hareketleri sessizce kaybetmesine yol açardı.
 | satış | Evet | MSTR **satacak** |
 | satış | Hayır | MSTR **satmayacak** |
 
+Fiil çekimlerinin hepsi tanınır — Polymarket soruları ulaç yazar ("announce
+**selling** any Bitcoin"), ve ilk sürüm yalnızca `sell|sells|sold` eşleştirdiği
+için panel apaçık bir satış sorusuna "yorum yok" diyordu. Ayrıca üçüncü bir
+sınıf var: **eşik soruları** ("announce holding 1M+ BTC by December 31") →
+Evet ise MSTR **tutacak**, Hayır ise **tutmayacak**.
+
 Sınıflandırılamayan bir başlık (örn. "Will MicroStrategy be added to the
 S&P 500?") **yorumsuz** gösterilir — market ve olasılık görünür, beklenti
-sütunu boş kalır. Çıkaramadığımız bir şeyi uydurmuyoruz.
+sütunu boş kalır. Çıkaramadığımız bir şeyi uydurmuyoruz. Başlıkta
+`bitcoin|btc|treasury|holdings|stack` geçmiyorsa hiçbir yorum yapılmaz: bu
+koruma olmadan "be **added** to the S&P 500" alım sayılıp panelde "MSTR
+alacak" yazıyordu.
 
 **Bu bir bahistir, şirket açıklaması değil.** Panel dipnotu bunu söyler.
+
+### Balinası olmayan marketler
+
+Cüzdan uç noktası yalnızca **birinin tuttuğu** pozisyonları döner, yani hiç
+balinası olmayan bir marketi asla göremez. Haftalık yenilenen
+`will-microstrategy-announce-a-bitcoin-purchase-<hafta>` marketi tam olarak
+böyleydi. Onlar için marketin kendisi Gamma katalog API'sinden çekilir
+(`polymarket_markets` tablosu) ve panelde balina satırı yerine marketin
+"evet" oranıyla görünür.
+
+Sabit slug yazılmaz. Slug her hafta değişiyor (`…-september-1-7` →
+`…-september-8-14`), soru şablonu bir kez zaten değişti
+(`purchase-bitcoin` → `announce-a-bitcoin-purchase`) ve marketler bir
+`pastSlugs` alanı taşıyor, yani Polymarket slug'ları yerinde de değiştiriyor.
+Bunun yerine `POLYMARKET_SEARCH_TERMS` ile arama yapılır, sonuçlar
+`POLYMARKET_MARKET_RE` ile süzülür; arama boş dönerse açık marketler
+sayfalanarak taranır.
+
+Bu katman `POLYMARKET_INSIDERS`'dan **bağımsızdır** — cüzdan listesi boş olsa
+bile marketler ve oranları panelde görünür. `POLYMARKET_MARKETS=false` ile
+tamamen kapatılabilir.
+
+Canlıda doğrulamak için Telegram'dan **`/markets_test`**: Gamma'dan o an ne
+döndüğünü kanala göndermeden size listeler. Uç nokta bu kodun yazıldığı
+ortamdan erişilemediği için ilk cevabın şekli ayrıca bir kez loglanır
+(`GAMMA /public-search first-response shape`).
+
+### Telegram uyarıları
+
+Saatlik döngü iki şeyi bildirir, ikisi de yalnızca MSTR marketlerinde:
+
+- **Balina hareketi** — açılan, kapanan veya büyütülen pozisyon.
+- **Oran hareketi** — marketin ima ettiği olasılık `POLYMARKET_ODDS_ALERT_PCT`
+  puandan fazla oynarsa.
+
+İkisi de **son uyarılan** değere göre ölçülür, son görülene göre değil: saatte
+5 puanlık bir kayma aksi halde hiçbir zaman eşiği geçmezdi. Ve bu değerler
+yalnızca **başarılı gönderimden sonra** ilerler (`alerted_size`,
+`alerted_price`), yani bir Telegram kesintisi hareketi geciktirir, kaybetmez.
+Site tarafı (`size`, `yes_price`) her saat ilerlemeye devam eder — tek tablo,
+iki saat.
+
+Uyarılar sabah 07:30-09:30 ET bandında da gider. O bandın gate'i HTML
+ayrıştıran döngüler için var; bu döngü cüzdan başına küçük bir JSON çekiyor ve
+sinyalin en değerli olduğu saat dosyalamadan hemen önceki saat.
+
+**Bilinçli bir kör nokta:** cüzdanın *bütün* pozisyonlarını kapatması
+bildirilmez. HTTP 200 + boş liste, yanlış bir adresten veya bir edge
+hatasından gelen cevapla birebir aynı görünüyor; onu kapanış saymak API her
+takıldığında her açık pozisyon için sahte "KAPANDI" bildirimi demekti. Kısmi
+çıkışlar bildirilir, çünkü onlar cevabın gerçek olduğunu kanıtlayan
+pozisyonlarla birlikte gelir.
+
+Bir cüzdanın **ilk** senkronu sessizdir: adres yeni eklendiğinde zaten açık
+olan her bahis "yeni hareket" diye kanala düşmez. Bu, anlık görüntünün boş
+olmasından değil ayrı bir işaretten (`polymarket_seen`) okunur — çünkü her
+şeyi kapatmış bir balinanın anlık görüntüsü de boştur.
 
 ---
 
