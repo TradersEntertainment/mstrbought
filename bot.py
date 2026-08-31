@@ -222,6 +222,64 @@ http_session.mount('http://', _https_adapter)
 # lands squarely on the alert path, so previews are off by default.
 TELEGRAM_LINK_PREVIEW = os.getenv("TELEGRAM_LINK_PREVIEW", "false").lower() in ("1", "true", "yes")
 
+def _envbool(name, default="false"):
+    return os.getenv(name, default).strip().lower() in ("1", "true", "yes")
+
+# ----------------- POLYMARKET CONFIG -----------------
+# A daily digest of tracked wallets' new betting activity. The endpoints are
+# public and unauthenticated, but they could not be reached from the machine
+# this was written on, so every field access below is defensive and the first
+# response shape is logged once.
+POLYMARKET_DATA_API = os.getenv("POLYMARKET_DATA_API", "https://data-api.polymarket.com").rstrip("/")
+POLYMARKET_INSIDERS_RAW = os.getenv("POLYMARKET_INSIDERS", "")
+POLYMARKET_MIN_USD = float(os.getenv("POLYMARKET_MIN_USD", "100"))
+POLYMARKET_MIN_DELTA_PCT = float(os.getenv("POLYMARKET_MIN_DELTA_PCT", "5"))
+POLYMARKET_MAX_INSIDERS = int(os.getenv("POLYMARKET_MAX_INSIDERS", "10"))
+POLYMARKET_MAX_MOVES_PER_ADDR = int(os.getenv("POLYMARKET_MAX_MOVES_PER_ADDR", "8"))
+POLYMARKET_PAGE_LIMIT = int(os.getenv("POLYMARKET_PAGE_LIMIT", "500"))
+POLYMARKET_MAX_PAGES = int(os.getenv("POLYMARKET_MAX_PAGES", "3"))
+POLYMARKET_BUDGET_S = float(os.getenv("POLYMARKET_BUDGET_S", "20"))
+POLYMARKET_CONNECT_TIMEOUT = float(os.getenv("POLYMARKET_CONNECT_TIMEOUT", "3"))
+POLYMARKET_READ_TIMEOUT = float(os.getenv("POLYMARKET_READ_TIMEOUT", "6"))
+POLYMARKET_TITLE_MAX = int(os.getenv("POLYMARKET_TITLE_MAX", "70"))
+POLYMARKET_CATCHUP_MIN = float(os.getenv("POLYMARKET_CATCHUP_MIN", "120"))
+POLYMARKET_MSG_LIMIT = int(os.getenv("POLYMARKET_MSG_LIMIT", "3800"))
+POLYMARKET_PART_DELAY_S = float(os.getenv("POLYMARKET_PART_DELAY_S", "1.0"))
+POLYMARKET_REPORT_RESOLVED = _envbool("POLYMARKET_REPORT_RESOLVED")
+POLYMARKET_ULTRA_GATE = _envbool("POLYMARKET_ULTRA_GATE")
+
+def _hhmm(env, default_minute):
+    """Parse 'HH:MM' into minutes-of-day. Sibling of _win()."""
+    raw = os.getenv(env, "").strip()
+    if raw:
+        try:
+            hh, mm = (int(x) for x in raw.split(":"))
+            return hh * 60 + mm
+        except Exception:
+            print(f"Ignoring malformed {env}={raw!r}; expected 'HH:MM' TRT.")
+    return default_minute
+
+# 14:00 TRT is 07:00 ET in summer and 06:00 ET in winter — clear of
+# ULTRA_WINDOW_ET in both. 14:30 TRT would land on 07:30 ET under US DST,
+# the exact minute the ultra window opens.
+POLYMARKET_DIGEST_MINUTE = _hhmm("POLYMARKET_DIGEST_AT_TRT", 14 * 60)
+
+# The shared http_session carries an SEC-branded, email-identified User-Agent
+# that SEC fair-use policy requires. It means nothing to Polymarket's edge and
+# datacenter egress (Railway) is known to draw bot challenges there, so this
+# gets its own identity — and its own small pool, so a hung Polymarket socket
+# can never occupy a slot the SEC or Telegram path wants.
+polymarket_session = requests.Session()
+polymarket_session.headers.update({
+    'User-Agent': os.getenv("POLYMARKET_USER_AGENT",
+                            "Mozilla/5.0 (compatible; MSTRInsiderBot/1.0)"),
+    'Accept': 'application/json',
+    'Accept-Encoding': 'gzip, deflate',
+})
+_pm_adapter = requests.adapters.HTTPAdapter(
+    pool_connections=2, pool_maxsize=4, pool_block=False, max_retries=0)
+polymarket_session.mount('https://', _pm_adapter)
+
 # ----------------- DB MANAGEMENT -----------------
 
 _wal_enabled = False
@@ -342,6 +400,41 @@ def init_db():
     """)
 
     # Quarterly balance-sheet metrics from the SEC XBRL API (e.g. cash reserves)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS polymarket_positions (
+        address       TEXT NOT NULL,
+        condition_id  TEXT NOT NULL,
+        asset         TEXT NOT NULL DEFAULT '',
+        outcome       TEXT,
+        title         TEXT,
+        event_slug    TEXT,
+        size          REAL NOT NULL DEFAULT 0,
+        avg_price     REAL,
+        cur_price     REAL,
+        redeemable    INTEGER NOT NULL DEFAULT 0,
+        end_date      TEXT,
+        snapshot_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        -- asset is in the key because a wallet can hold BOTH the Yes and the
+        -- No token of one market; keyed on condition_id alone the two legs
+        -- would silently overwrite each other.
+        PRIMARY KEY (address, condition_id, asset)
+    )
+    """)
+
+    # Which days the digest has already been posted. This is what makes the
+    # job idempotent across restarts, and what tells "nothing happened today"
+    # apart from "we never ran today".
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS polymarket_digests (
+        digest_date TEXT PRIMARY KEY,
+        posted_at   TIMESTAMP,
+        status      TEXT,
+        movements   INTEGER DEFAULT 0,
+        addresses   INTEGER DEFAULT 0,
+        note        TEXT
+    )
+    """)
+
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS financial_metrics (
         metric TEXT,
@@ -745,6 +838,7 @@ def _sec_clear_backoff(source):
 # periodically, so "the atom feed is flaky" becomes a number and it is
 # visible whether submissions is quietly carrying detection on its own.
 SOURCE_REPORT_INTERVAL = float(os.getenv("SOURCE_REPORT_INTERVAL", "300"))
+_SOURCE_REPORT_ORDER = ("submissions", "atom", "efts", "polymarket")
 _source_stats = {}
 _source_stats_lock = threading.Lock()
 _source_report_time = 0.0
@@ -806,7 +900,11 @@ def report_source_health(force=False):
                    for v in _source_stats.values()):
             return
         parts = []
-        for name in ("submissions", "atom", "efts"):
+        # This list used to be hardcoded, so a source could be counted, be
+        # exposed on /api/status, and still never appear in this line.
+        names = list(_SOURCE_REPORT_ORDER) + sorted(
+            n for n in _source_stats if n not in _SOURCE_REPORT_ORDER)
+        for name in names:
             st = _source_stats.get(name)
             if not st or not (st["ok"] or st["fail"] or st.get("blocked")):
                 continue
@@ -820,7 +918,7 @@ def report_source_health(force=False):
             st["ok"] = st["fail"] = st["blocked"] = 0
             st["last_error"] = ""
     if parts:
-        print(f"SEC source health over {window/60:.0f}min in {current_mode}: "
+        print(f"Source health over {window/60:.0f}min in {current_mode}: "
               + " | ".join(parts))
 
 # Conditional-GET state for the (large) submissions JSON
@@ -3317,6 +3415,671 @@ Sadece ham JSON döndür."""
         print("Deep analysis Pass 3 failed — using Pass 2 result.")
         return pass2_result
 
+# ----------------- POLYMARKET INSIDER DIGEST -----------------
+# Tracks a handful of Polymarket wallets and posts what CHANGED since the
+# last digest. The mechanism is a snapshot diff of /positions rather than a
+# replay of /activity: it needs five fields understood correctly instead of a
+# dozen, it self-heals after a failed day (the next diff runs against the last
+# SUCCESSFUL snapshot, so a movement is reported late rather than lost), and
+# many small fills collapse into one net move instead of a wall of rows.
+
+# Case-insensitive on the 0x prefix too: a pasted "0XABC…" is the same
+# wallet, and dropping it silently for the sake of one character would be a
+# poor way to learn the list was misconfigured.
+_ADDR_RE = re.compile(r'0[xX][0-9a-fA-F]{40}\b')
+_polymarket_shape_logged = False
+_pm_failure_streak = 0
+
+def parse_insider_addresses(raw):
+    """Extract (address, label) pairs from POLYMARKET_INSIDERS.
+
+    Accepts, comma- or newline-separated and freely mixed:
+        0xa0c37cb0587b0dd1542f794bcfa345762bba5b9a
+        Balina=0xa0c3...
+        https://polymarket.com/profile/0xa0c3...?via=betmoar
+
+    The address is located by regex FIRST and the label taken from whatever
+    precedes it, and only when that prefix is not itself a URL. The ordering
+    matters: a pasted profile link ends in "?via=betmoar", so splitting on
+    "=" to find a label would name the wallet "betmoar" — or worse, take the
+    URL as the address.
+
+    Addresses are lowercased. A checksummed address and its lowercase form
+    are the same wallet, and storing both would create two snapshot rows that
+    diff against each other forever.
+    """
+    out, seen = [], set()
+    for token in re.split(r'[,\n;]+', raw or ''):
+        token = token.strip()
+        if not token:
+            continue
+        m = _ADDR_RE.search(token)
+        if not m:
+            print(f"POLYMARKET_INSIDERS: ignoring {token[:60]!r} — no 0x address in it.")
+            continue
+        addr = m.group(0).lower()
+        # "Balina=https://polymarket.com/profile/0x…" — the label is the part
+        # before the first '=', so a named wallet keeps its name even when the
+        # value is a pasted URL. Anything that still looks like a URL is not a
+        # name.
+        candidate = token[:m.start()].split('=', 1)[0].strip()
+        label = candidate if candidate and '/' not in candidate and ':' not in candidate else ''
+        if addr in seen:
+            continue
+        seen.add(addr)
+        out.append((addr, label or f"{addr[:6]}…{addr[-4:]}"))
+        if len(out) >= POLYMARKET_MAX_INSIDERS:
+            break
+    return out
+
+INSIDER_WALLETS = parse_insider_addresses(POLYMARKET_INSIDERS_RAW)
+POLYMARKET_ENABLED = bool(INSIDER_WALLETS)
+
+def _pm_num(row, *names, default=0.0):
+    """First present key as a float, tolerating numeric strings."""
+    for n in names:
+        v = row.get(n)
+        if v is None or v == '':
+            continue
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            continue
+    return default
+
+def _pm_str(row, *names, default=""):
+    for n in names:
+        v = row.get(n)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+        if v not in (None, ''):
+            return str(v)
+    return default
+
+def _as_rows(payload):
+    """Coerce a decoded response into a list of dicts, defensively.
+
+    The docs imply a bare array, but other Polymarket surfaces wrap the list
+    in an object, and this could not be verified against a live response. A
+    shape we do not recognise must degrade to "no data", never to an
+    exception on a background thread.
+    """
+    if isinstance(payload, list):
+        return [r for r in payload if isinstance(r, dict)]
+    if isinstance(payload, dict):
+        for key in ("data", "positions", "results", "items"):
+            inner = payload.get(key)
+            if isinstance(inner, list):
+                return [r for r in inner if isinstance(r, dict)]
+    return []
+
+def _normalise_position(row):
+    """One /positions entry reduced to the fields the diff needs."""
+    return {
+        "condition_id": _pm_str(row, "conditionId", "condition_id"),
+        "asset": _pm_str(row, "asset", "tokenId", "asset_id"),
+        "outcome": _pm_str(row, "outcome", default="?"),
+        "title": _pm_str(row, "title", default="(başlıksız market)"),
+        "event_slug": _pm_str(row, "eventSlug", "event_slug"),
+        "size": _pm_num(row, "size", "tokens"),
+        "avg_price": _pm_num(row, "avgPrice", "avg_price"),
+        "cur_price": _pm_num(row, "curPrice", "cur_price"),
+        "redeemable": 1 if row.get("redeemable") else 0,
+        "end_date": _pm_str(row, "endDate", "end_date"),
+    }
+
+def _pm_get(path, params, deadline):
+    """GET a data-api path within the run's wall-clock budget.
+
+    Returns a Response or None. Not wired into _sec_backoff: that machinery
+    assumes a source polled several times a second, and an exponential
+    backoff measured in minutes is meaningless for a job that runs once a
+    day.
+    """
+    if time.time() >= deadline:
+        return None
+    try:
+        return polymarket_session.get(
+            f"{POLYMARKET_DATA_API}{path}", params=params,
+            timeout=(POLYMARKET_CONNECT_TIMEOUT, POLYMARKET_READ_TIMEOUT))
+    except requests.exceptions.ConnectionError:
+        if time.time() >= deadline:
+            return None
+        try:
+            return polymarket_session.get(
+                f"{POLYMARKET_DATA_API}{path}", params=params,
+                timeout=(POLYMARKET_CONNECT_TIMEOUT, POLYMARKET_READ_TIMEOUT))
+        except Exception:
+            return None
+    except Exception:
+        return None
+
+def fetch_polymarket_positions(address, deadline):
+    """One wallet's open positions, normalised.
+
+    Returns (rows, truncated), or (None, False) on ANY failure — non-200,
+    timeout, unparseable body.
+
+    None and [] mean different things and the caller depends on it: [] is
+    "this wallet genuinely holds nothing", None is "we do not know". A 200
+    with an empty array is also what a well-formed but wrong address returns,
+    which is why the guard for that lives in the diff, not here.
+
+    sortBy=CURRENT descending so that if the page cap is hit, what survives
+    is the largest positions. sizeThreshold is passed explicitly because the
+    documented default of 1.0 hides dust — and a position drifting across
+    that line would otherwise flap between "opened" and "closed" daily.
+    """
+    global _polymarket_shape_logged
+    rows, truncated = [], False
+    for page in range(max(1, POLYMARKET_MAX_PAGES)):
+        resp = _pm_get("/positions", {
+            "user": address,
+            "limit": POLYMARKET_PAGE_LIMIT,
+            "offset": page * POLYMARKET_PAGE_LIMIT,
+            "sizeThreshold": 0,
+            "sortBy": "CURRENT",
+            "sortDirection": "DESC",
+        }, deadline)
+        if resp is None:
+            _record_source('polymarket', False, "connection/timeout")
+            if _should_log_source_error('polymarket'):
+                print(f"Polymarket fetch failed for {address} (connection/timeout).")
+            return None, False
+        if resp.status_code != 200:
+            _record_source('polymarket', False, f"HTTP {resp.status_code}")
+            if _should_log_source_error('polymarket'):
+                # Datacenter egress draws bot challenges on this host; a 403
+                # with an HTML body is the expected shape of that, not JSON.
+                print(f"Polymarket returned {resp.status_code} for {address}: "
+                      f"{resp.text[:200]!r}")
+            return None, False
+        try:
+            page_rows = _as_rows(resp.json())
+        except Exception as e:
+            _record_source('polymarket', False, e)
+            if _should_log_source_error('polymarket'):
+                print(f"Polymarket response was not JSON for {address}: {resp.text[:200]!r}")
+            return None, False
+
+        _record_source('polymarket', True)
+        if page_rows and not _polymarket_shape_logged:
+            _polymarket_shape_logged = True
+            first = page_rows[0]
+            print(f"POLYMARKET /positions first-response shape (one-time log): "
+                  f"{json.dumps(first)[:600]}")
+            # If the profile address is not what ?user= keys on, this line is
+            # where the mismatch becomes visible.
+            print(f"POLYMARKET requested user={address} proxyWallet="
+                  f"{first.get('proxyWallet')!r}")
+
+        rows.extend(_normalise_position(r) for r in page_rows)
+        if len(page_rows) < POLYMARKET_PAGE_LIMIT:
+            break
+        if page + 1 == POLYMARKET_MAX_PAGES:
+            truncated = True
+    return rows, truncated
+
+def load_position_snapshot(conn, address):
+    """{(condition_id, asset): row} for one wallet."""
+    cur = conn.execute(
+        "SELECT condition_id, asset, outcome, title, event_slug, size, "
+        "avg_price, cur_price, redeemable, end_date "
+        "FROM polymarket_positions WHERE address = ?", (address,))
+    return {(r["condition_id"], r["asset"]): dict(r) for r in cur.fetchall()}
+
+def _position_resolved(row):
+    """Did this market resolve, rather than the wallet trading out of it?
+
+    A resolved market's position simply vanishes from the next snapshot.
+    Reporting that as "closed" is the largest single source of false
+    movements in a snapshot diff, so it is suppressed by default.
+    """
+    if row.get("redeemable"):
+        return True
+    end = (row.get("end_date") or "")[:10]
+    if len(end) == 10:
+        try:
+            return datetime.strptime(end, "%Y-%m-%d").date() < now_trt().date()
+        except ValueError:
+            return False
+    return False
+
+def diff_positions(prev, cur, truncated=False):
+    """Classify what moved between two snapshots of one wallet.
+
+    kind is opened / closed / increased / decreased. Three filters keep noise
+    out: a USD floor, a percentage floor on resizes, and the resolved-market
+    suppression above. When the fetch was truncated, closes are dropped
+    entirely for that wallet — a position missing from a capped page set has
+    not been closed, we just did not look far enough.
+    """
+    moves = []
+    for key, new in cur.items():
+        old = prev.get(key)
+        prev_size = float(old["size"]) if old else 0.0
+        new_size = float(new["size"])
+        delta = new_size - prev_size
+        if abs(delta) < 1e-9:
+            continue
+        price = new.get("avg_price") or new.get("cur_price") or 0.0
+        usd = abs(delta) * price
+        if usd < POLYMARKET_MIN_USD:
+            continue
+        if old and prev_size > 0:
+            pct = abs(delta) / prev_size * 100.0
+            if pct < POLYMARKET_MIN_DELTA_PCT:
+                continue
+        else:
+            pct = 100.0
+        moves.append({
+            "kind": "opened" if not old or prev_size <= 0 else
+                    ("increased" if delta > 0 else "decreased"),
+            "title": new["title"], "outcome": new["outcome"],
+            "event_slug": new.get("event_slug", ""),
+            "delta": delta, "new_size": new_size, "prev_size": prev_size,
+            "usd": usd, "pct": pct, "price": price,
+        })
+
+    if not truncated:
+        for key, old in prev.items():
+            if key in cur:
+                continue
+            prev_size = float(old["size"] or 0)
+            if prev_size <= 0:
+                continue
+            if _position_resolved(old) and not POLYMARKET_REPORT_RESOLVED:
+                continue
+            price = old.get("avg_price") or old.get("cur_price") or 0.0
+            usd = prev_size * price
+            if usd < POLYMARKET_MIN_USD:
+                continue
+            moves.append({
+                "kind": "closed", "title": old["title"], "outcome": old["outcome"],
+                "event_slug": old.get("event_slug", ""),
+                "delta": -prev_size, "new_size": 0.0, "prev_size": prev_size,
+                "usd": usd, "pct": 100.0, "price": price,
+            })
+
+    moves.sort(key=lambda m: m["usd"], reverse=True)
+    return moves
+
+def store_position_snapshot(conn, address, rows):
+    """Replace one wallet's snapshot. Called only after a successful send."""
+    conn.execute("DELETE FROM polymarket_positions WHERE address = ?", (address,))
+    conn.executemany(
+        "INSERT OR REPLACE INTO polymarket_positions "
+        "(address, condition_id, asset, outcome, title, event_slug, size, "
+        " avg_price, cur_price, redeemable, end_date) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        [(address, r["condition_id"], r["asset"], r["outcome"], r["title"],
+          r["event_slug"], r["size"], r["avg_price"], r["cur_price"],
+          r["redeemable"], r["end_date"]) for r in rows])
+
+# ----------------- POLYMARKET DIGEST RENDERING -----------------
+
+TELEGRAM_TEXT_LIMIT = 4096
+
+def _tg_len(text):
+    """Telegram counts UTF-16 code units, not Python characters.
+
+    Every emoji is two units while len() reports one, so a Python-len budget
+    undercounts an emoji-led digest badly enough to sail past 4096 and have
+    the whole message rejected.
+    """
+    return len(text.encode('utf-16-le')) // 2
+
+def _md_strip(text):
+    """Neutralise legacy-Markdown metacharacters in untrusted text.
+
+    Market titles are written by third parties and routinely contain * _ ` [
+    ]. send_telegram_alert hardcodes parse_mode='Markdown', so a single
+    unbalanced * in one title makes Telegram reject the ENTIRE digest and
+    drop it to the plain-text fallback, losing every bold in it. Titles are
+    the only untrusted input here, so strip rather than escape — legacy
+    Markdown escaping is unreliable, and moving the shared sender to
+    MarkdownV2 would touch the latency-critical alert path.
+    """
+    return re.sub(r'[*_`\[\]]', '', text or '')
+
+def _short_title(title):
+    clean = _md_strip(title).strip()
+    if len(clean) <= POLYMARKET_TITLE_MAX:
+        return clean
+    return clean[:POLYMARKET_TITLE_MAX - 1].rstrip() + "…"
+
+def _tr_num(x):
+    """Turkish thousands separator: 15400 -> '15.400'."""
+    return f"{int(round(x)):,}".replace(",", ".")
+
+def _usd(x):
+    return f"${x:,.0f}" if abs(x) >= 1 else f"${x:.2f}"
+
+_KIND_STYLE = {
+    "opened":    ("🟢", "YENİ"),
+    "increased": ("🔼", "ARTIRDI"),
+    "decreased": ("🔽", "AZALTTI"),
+    "closed":    ("⚪️", "KAPANDI"),
+}
+
+def format_movement(m):
+    emoji, word = _KIND_STYLE.get(m["kind"], ("•", m["kind"].upper()))
+    head = f"{emoji} {word}: {_short_title(m['title'])} — {_md_strip(m['outcome'])}"
+    if m["kind"] == "opened":
+        detail = f"{_tr_num(m['new_size'])} adet @ ${m['price']:.2f} → **{_usd(m['usd'])}**"
+    elif m["kind"] == "closed":
+        detail = f"{_tr_num(m['prev_size'])} adet · **{_usd(m['usd'])}**"
+    else:
+        sign = "+" if m["delta"] > 0 else "−"
+        detail = (f"{sign}{_tr_num(abs(m['delta']))} adet (%{m['pct']:.0f}) → "
+                  f"toplam {_tr_num(m['new_size'])} · **{_usd(m['usd'])}**")
+    return f"{head}\n   {detail}"
+
+def format_wallet_block(label, address, moves, seeded=None):
+    short = f"{address[:6]}…{address[-4:]}"
+    clean = _md_strip(label)
+    # An unnamed wallet is labelled with its own short address; printing that
+    # twice on one line reads like a mistake.
+    head = f"🐋 **{clean}**" if clean == short else f"🐋 **{clean}** (`{short}`)"
+    if seeded is not None:
+        return f"{head}\n📌 Takibe alındı: {seeded} açık pozisyon"
+    shown = moves[:POLYMARKET_MAX_MOVES_PER_ADDR]
+    body = "\n".join(format_movement(m) for m in shown)
+    if len(moves) > len(shown):
+        body += f"\n   ↳ +{len(moves) - len(shown)} hareket daha"
+    return f"{head}\n{body}"
+
+def split_telegram_blocks(header, blocks, footer, limit=None):
+    """Pack pre-rendered blocks into messages that fit Telegram's limit.
+
+    A block is never split internally — that is what guarantees a Markdown
+    entity cannot be cut in half, which would have Telegram reject the part.
+    The header repeats on every part with a counter; the footer lands on the
+    last one only. A single oversized block is truncated rather than dropped:
+    a clipped movement beats a silently missing one.
+    """
+    limit = limit or POLYMARKET_MSG_LIMIT
+    limit = min(limit, TELEGRAM_TEXT_LIMIT - 64)
+    room = limit - _tg_len(header) - 8          # 8 ≈ the " (2/3)" counter
+    packed, current = [], []
+    for block in blocks:
+        if _tg_len(block) > room:
+            block = block[:max(0, room - 1)].rstrip() + "…"
+        if current and _tg_len("\n\n".join(current + [block])) > room:
+            packed.append(current)
+            current = []
+        current.append(block)
+    if current:
+        packed.append(current)
+    if not packed:
+        packed = [[]]
+
+    parts, total = [], len(packed)
+    for i, group in enumerate(packed, 1):
+        head = header if total == 1 else f"{header} ({i}/{total})"
+        body = "\n\n".join(group)
+        text = f"{head}\n\n{body}" if body else head
+        if i == total and footer:
+            text += f"\n\n{footer}"
+        parts.append(text)
+    return parts
+
+def format_polymarket_digest(result):
+    """Render the digest parts from a build_polymarket_digest() result."""
+    header = (f"🎯 **İçeriden Takip — Polymarket**\n"
+              f"📅 {now_trt().strftime('%d.%m.%Y')} · son özetten bu yana")
+    blocks = []
+    for entry in result["wallets"]:
+        blocks.append(format_wallet_block(
+            entry["label"], entry["address"], entry["moves"],
+            seeded=entry.get("seeded")))
+
+    bits = [f"📊 {result['movements']} hareket · {result['addresses_ok']} cüzdan"]
+    for err in result["errors"]:
+        bits.append(f"⚠️ {err}")
+    footer = "\n".join(bits)
+    return split_telegram_blocks(header, blocks, footer)
+
+def send_telegram_digest(parts):
+    """Send the parts in order, threading them under the first.
+
+    A delay between parts because Telegram's per-chat ceiling is roughly 20
+    messages a minute and _telegram_post does not handle a 429.
+    """
+    sent, first_id = [], None
+    for i, text in enumerate(parts):
+        msg_id = send_telegram_alert(text, reply_to_message_id=first_id)
+        if msg_id is None:
+            print(f"Polymarket digest part {i+1}/{len(parts)} failed to send.")
+            break
+        sent.append(msg_id)
+        if first_id is None:
+            first_id = msg_id
+        if i + 1 < len(parts):
+            time.sleep(POLYMARKET_PART_DELAY_S)
+    return sent
+
+# ----------------- POLYMARKET DIGEST ORCHESTRATION -----------------
+
+def build_polymarket_digest():
+    """Fetch, diff and render. Writes nothing, sends nothing.
+
+    The pending snapshots are deliberately returned rather than stored — see
+    run_polymarket_digest for why the commit must follow the send.
+    """
+    deadline = time.time() + POLYMARKET_BUDGET_S
+    conn = get_db_connection()
+    wallets, errors, pending = [], [], {}
+    movements = addresses_ok = 0
+    try:
+        for address, label in INSIDER_WALLETS:
+            rows, truncated = fetch_polymarket_positions(address, deadline)
+            if rows is None:
+                errors.append(f"{label}: veri alınamadı")
+                continue
+            addresses_ok += 1
+            prev = load_position_snapshot(conn, address)
+            cur = {(r["condition_id"], r["asset"]): r for r in rows}
+
+            # HTTP 200 with an empty list is exactly what a well-formed but
+            # wrong address returns, and what some edge failures return. A
+            # wallet we have positions for coming back empty is a fetch
+            # problem, not a liquidation: skip it and keep the old snapshot.
+            if prev and not cur:
+                errors.append(f"{label}: boş cevap, atlandı")
+                continue
+
+            pending[address] = rows
+            if not prev:
+                # First sight of this wallet: every position would look
+                # "opened". Record it and say so in one line.
+                wallets.append({"address": address, "label": label,
+                                "moves": [], "seeded": len(rows)})
+                continue
+            moves = diff_positions(prev, cur, truncated=truncated)
+            if truncated:
+                errors.append(f"{label}: pozisyon listesi kırpıldı")
+            if moves:
+                movements += len(moves)
+                wallets.append({"address": address, "label": label, "moves": moves})
+    finally:
+        conn.close()
+
+    result = {"wallets": wallets, "movements": movements,
+              "addresses_ok": addresses_ok, "errors": errors,
+              "pending": pending}
+    result["parts"] = format_polymarket_digest(result) if wallets else []
+    return result
+
+def _digest_status(conn, day):
+    row = conn.execute("SELECT status FROM polymarket_digests WHERE digest_date = ?",
+                       (day,)).fetchone()
+    return row["status"] if row else None
+
+def run_polymarket_digest(force=False, dry_run=False):
+    """Fetch, render, send, and only then commit.
+
+    Deliberately the inverse of refresh_cash_reserves, which writes first.
+    If the snapshot were stored before the send and the process died in
+    between, the next run would diff new-against-new, see nothing, and the
+    day's movements would be gone for good. Sending first means the worst
+    case is a repeated digest, not a lost one.
+
+    dry_run renders and returns the text without posting or committing — the
+    only way to check the response shape against production without spending
+    the day's diff or posting to the channel.
+    """
+    global _pm_failure_streak
+    if not POLYMARKET_ENABLED:
+        return {"status": "disabled", "parts": []}
+
+    day = now_trt().strftime("%Y-%m-%d")
+    conn = get_db_connection()
+    try:
+        if not force and not dry_run and _digest_status(conn, day):
+            return {"status": "already_posted", "parts": []}
+    finally:
+        conn.close()
+
+    result = build_polymarket_digest()
+
+    if result["addresses_ok"] == 0 and INSIDER_WALLETS:
+        # A digest made entirely of error lines is noise; stay quiet, but do
+        # not stay quiet forever.
+        _pm_failure_streak += 1
+        print(f"Polymarket digest: every wallet failed "
+              f"({_pm_failure_streak} day(s) in a row).")
+        if not dry_run:
+            conn = get_db_connection()
+            conn.execute("INSERT OR REPLACE INTO polymarket_digests "
+                         "(digest_date, posted_at, status, movements, addresses, note) "
+                         "VALUES (?, CURRENT_TIMESTAMP, 'failed', 0, 0, ?)",
+                         (day, "; ".join(result["errors"])[:400]))
+            conn.commit()
+            conn.close()
+            if _pm_failure_streak >= 3:
+                send_telegram_alert(
+                    f"⚠️ **Polymarket takibi {_pm_failure_streak} gündür veri alamıyor.**\n"
+                    f"{'; '.join(result['errors'])[:300]}")
+                _pm_failure_streak = 0
+        return {"status": "failed", "parts": [], "errors": result["errors"]}
+
+    _pm_failure_streak = 0
+    if dry_run:
+        return {"status": "dry", "parts": result["parts"],
+                "movements": result["movements"], "errors": result["errors"]}
+
+    if not result["parts"]:
+        # Nothing moved. Still record the day so a restart does not re-fetch,
+        # and still commit the snapshot so tomorrow diffs against today.
+        conn = get_db_connection()
+        for address, rows in result["pending"].items():
+            store_position_snapshot(conn, address, rows)
+        conn.execute("INSERT OR REPLACE INTO polymarket_digests "
+                     "(digest_date, posted_at, status, movements, addresses, note) "
+                     "VALUES (?, CURRENT_TIMESTAMP, 'empty', 0, ?, ?)",
+                     (day, result["addresses_ok"], "; ".join(result["errors"])[:400]))
+        conn.commit()
+        conn.close()
+        print(f"Polymarket digest: no movements ({result['addresses_ok']} wallet(s)).")
+        return {"status": "empty", "parts": []}
+
+    # Mark the attempt BEFORE sending. A 'sending' row found on the next run
+    # means a crash mid-send: do not re-send (a duplicated digest is worse
+    # than a truncated one), but do commit, and say so loudly.
+    conn = get_db_connection()
+    conn.execute("INSERT OR REPLACE INTO polymarket_digests "
+                 "(digest_date, posted_at, status, movements, addresses, note) "
+                 "VALUES (?, CURRENT_TIMESTAMP, 'sending', ?, ?, NULL)",
+                 (day, result["movements"], result["addresses_ok"]))
+    conn.commit()
+    conn.close()
+
+    sent = send_telegram_digest(result["parts"])
+
+    conn = get_db_connection()
+    try:
+        if sent:
+            for address, rows in result["pending"].items():
+                store_position_snapshot(conn, address, rows)
+            status = "posted" if len(sent) == len(result["parts"]) else "partial"
+        else:
+            # Nothing reached the channel: leave the snapshots alone so the
+            # same movements are reported again next run.
+            status = "send_failed"
+        conn.execute("UPDATE polymarket_digests SET status = ?, note = ? "
+                     "WHERE digest_date = ?",
+                     (status, "; ".join(result["errors"])[:400], day))
+        conn.commit()
+    finally:
+        conn.close()
+
+    print(f"Polymarket digest {status}: {result['movements']} movement(s), "
+          f"{len(sent)}/{len(result['parts'])} message(s).")
+    return {"status": status, "parts": result["parts"],
+            "movements": result["movements"], "errors": result["errors"]}
+
+def seconds_until_digest(now):
+    """Seconds until the next weekday digest slot, in TRT.
+
+    Recomputed from the clock every time rather than accumulated from a
+    start time. cash_refresh_loop's flat sleep(12*3600) is anchored to
+    process start, so a redeploy pins it to whatever wall clock it happened
+    to boot at — its own docstring admits as much.
+    """
+    minute = now.hour * 60 + now.minute
+    if now.weekday() < 5 and minute < POLYMARKET_DIGEST_MINUTE:
+        target_day = 0
+    else:
+        target_day = 1
+        while (now.weekday() + target_day) % 7 >= 5:
+            target_day += 1
+    secs = (target_day * 24 * 60 + POLYMARKET_DIGEST_MINUTE - minute) * 60 - now.second
+    return max(secs, 1)
+
+def describe_polymarket_config():
+    hh, mm = divmod(POLYMARKET_DIGEST_MINUTE, 60)
+    if not POLYMARKET_ENABLED:
+        return "Polymarket digest: disabled (POLYMARKET_INSIDERS not set)."
+    try:
+        conn = get_db_connection()
+        counts = {a: conn.execute(
+            "SELECT COUNT(*) FROM polymarket_positions WHERE address = ?",
+            (a,)).fetchone()[0] for a, _ in INSIDER_WALLETS}
+        conn.close()
+    except Exception:
+        counts = {}
+    # The stored count is how a permanently-empty (i.e. wrong) address
+    # becomes visible without a dedicated alert.
+    who = ", ".join(f"{label} {a[:6]}…{a[-4:]} ({counts.get(a, '?')} stored)"
+                    for a, label in INSIDER_WALLETS)
+    return (f"Polymarket digest: weekdays {hh:02d}:{mm:02d} TRT | "
+            f"{len(INSIDER_WALLETS)} wallet(s): {who} | "
+            f"min ${POLYMARKET_MIN_USD:.0f} / {POLYMARKET_MIN_DELTA_PCT:.0f}%")
+
+def polymarket_digest_loop():
+    """Post the insider digest on weekdays at POLYMARKET_DIGEST_AT_TRT."""
+    print(describe_polymarket_config())
+    while running:
+        try:
+            wait = seconds_until_digest(now_trt())
+            # Sleep in slices so a clock step, an NTP correction or shutdown
+            # is noticed within a minute.
+            time.sleep(min(wait, 60))
+            now = now_trt()
+            minute = now.hour * 60 + now.minute
+            due = (now.weekday() < 5
+                   and POLYMARKET_DIGEST_MINUTE <= minute
+                   < POLYMARKET_DIGEST_MINUTE + POLYMARKET_CATCHUP_MIN)
+            if not due:
+                continue
+            if POLYMARKET_ULTRA_GATE:
+                _wait_out_ultra_window("Polymarket insider digest")
+            run_polymarket_digest()
+        except Exception as e:
+            print(f"Polymarket digest loop error: {e}")
+            time.sleep(60)
+
 # ----------------- TELEGRAM ALERTS -----------------
 
 def _telegram_post(url, payload):
@@ -4676,6 +5439,11 @@ def force_trigger():
         return jsonify({"status": "error", "message": "Yetkisiz işlem: Şifre hatalı."}), 401
     
     trigger_type = request.args.get("type", "poll")
+
+    if trigger_type in ("polymarket", "polymarket_dry"):
+        res = run_polymarket_digest(force=True,
+                                    dry_run=(trigger_type == "polymarket_dry"))
+        return jsonify({"status": "success", "result": res})
     
     if trigger_type == "poll":
         try:
@@ -4797,6 +5565,8 @@ if bot:
             "**Komutlar:**\n"
             "/data veya /history - Son BTC alım geçmişini ve toplam portföy durumunu gösterir.\n"
             "/check - Hemen şimdi zorla SEC EDGAR kontrolü yapar.\n"
+            "/insider - Polymarket içeriden takip özetini şimdi kanala gönderir.\n"
+            "/insider_test - Özeti kanala göndermeden sadece size gösterir.\n"
             "/test_integration - Son BTC alım raporunu (22 Haziran) okuyup analiz testi yapar.\n"
             "/status - Botun çalışma durumunu ve anlık modunu gösterir.",
             parse_mode="Markdown"
@@ -4828,6 +5598,40 @@ if bot:
             bot.reply_to(message, f"Sorgulama tamamlandı. {new_count} adet yeni bildirim bulundu.")
         except Exception as e:
             bot.reply_to(message, f"Sorgulama sırasında hata oluştu: {str(e)}")
+
+    @bot.message_handler(commands=['insider'])
+    def insider_digest_telegram(message):
+        if not POLYMARKET_ENABLED:
+            bot.reply_to(message, "Polymarket takibi kapalı: POLYMARKET_INSIDERS ayarlanmamış.")
+            return
+        bot.reply_to(message, "🎯 Polymarket özeti hazırlanıyor...")
+        # Can take up to POLYMARKET_BUDGET_S; must not block infinity_polling.
+        threading.Thread(target=lambda: run_polymarket_digest(force=True),
+                         daemon=True).start()
+
+    @bot.message_handler(commands=['insider_test'])
+    def insider_dry_run_telegram(message):
+        """Render the digest back to the requester without posting it.
+
+        The endpoints could not be reached from the machine this was written
+        on, so this is how the real response shape gets verified: against
+        production data, without spending the day's diff or posting to the
+        channel.
+        """
+        if not POLYMARKET_ENABLED:
+            bot.reply_to(message, "Polymarket takibi kapalı: POLYMARKET_INSIDERS ayarlanmamış.")
+            return
+
+        def _run():
+            res = run_polymarket_digest(dry_run=True)
+            if res["parts"]:
+                for part in res["parts"]:
+                    bot.reply_to(message, part, parse_mode="Markdown")
+            else:
+                bot.reply_to(message,
+                             f"Yeni hareket yok. Durum: {res['status']}. "
+                             f"{'; '.join(res.get('errors') or []) or '-'}")
+        threading.Thread(target=_run, daemon=True).start()
 
     @bot.message_handler(commands=['test_integration'])
     def test_integration_telegram(message):
@@ -4955,6 +5759,13 @@ if __name__ == '__main__':
     # Quarterly cash reserves from SEC XBRL (startup + every 12 hours)
     cash_thread = threading.Thread(target=cash_refresh_loop, daemon=True)
     cash_thread.start()
+
+    # Polymarket insider digest (weekdays at POLYMARKET_DIGEST_AT_TRT)
+    if POLYMARKET_ENABLED:
+        pm_thread = threading.Thread(target=polymarket_digest_loop, daemon=True)
+        pm_thread.start()
+    else:
+        print("Polymarket insider digest disabled (POLYMARKET_INSIDERS not set).")
 
     # Run Polling Loop in main thread
     try:
