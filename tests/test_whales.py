@@ -580,3 +580,31 @@ def test_the_panel_shows_the_owners_two_markets_correctly(db):
                     "December 31, 2026?"]
     assert hold["verdict"] == "tutacak"
     assert "bV81" not in hold["title"]
+
+
+def test_a_whale_position_survives_the_catalogue_topic_filter(db):
+    """The subject filter culls the catalogue, never the whale rows.
+
+    Money is information. If the tracked wallet backs "Will MicroStrategy be
+    margin called in 2026?", that belongs on the panel — unreadable, so shown
+    without a verdict, which is what an unclassifiable question has always
+    done here.
+    """
+    add("c1", "Will MicroStrategy be margin called in 2026?", "Yes", size=5000)
+
+    markets = bot.build_whale_expectations()["markets"]
+    assert len(markets) == 1
+    assert markets[0]["verdict"] is None
+    assert markets[0]["positions"][0]["size"] == 5000
+
+
+def test_the_panel_after_the_cull_is_only_readable_markets(db):
+    """The shape the owner asked for: no "yorum yok" rows from the catalogue."""
+    add_market("c1", "Will Microstrategy announce a Bitcoin purchase "
+                     "September 1-7?", yes_price=0.18)
+    add_market("c2", "Will Microstrategy announce selling any Bitcoin "
+                     "September 1-7?", yes_price=0.17)
+
+    markets = bot.build_whale_expectations()["markets"]
+    assert len(markets) == 2
+    assert all(m["market_verdict"] for m in markets)

@@ -255,6 +255,14 @@ def test_paging_stops_at_a_short_page(monkeypatch):
 
 # ------------------------------------------------------- odds alerts
 
+@pytest.fixture
+def odds_on(monkeypatch):
+    """The odds alert ships DISABLED (POLYMARKET_ODDS_ALERT_PCT=0) — the
+    channel is for the tracked whale. These tests are about the mechanism, so
+    they turn it on explicitly."""
+    monkeypatch.setattr(bot, 'POLYMARKET_ODDS_ALERT_PCT', 20.0)
+
+
 def _stub_send(monkeypatch, ok=True):
     sent = []
 
@@ -266,7 +274,7 @@ def _stub_send(monkeypatch, ok=True):
     return sent
 
 
-def test_the_first_sighting_of_a_market_never_alerts(db, monkeypatch):
+def test_the_first_sighting_of_a_market_never_alerts(db, odds_on, monkeypatch):
     """A market we have not seen before has no baseline to have moved from.
     Alerting on it would mean a burst of noise on every fresh deploy."""
     monkeypatch.setattr(bot, 'fetch_mstr_markets', lambda: [bot._gamma_market_row(market())])
@@ -281,7 +289,7 @@ def test_the_first_sighting_of_a_market_never_alerts(db, monkeypatch):
     assert row["yes_price"] == 0.63 and row["alerted_price"] == 0.63
 
 
-def test_a_small_drift_does_not_alert(db, monkeypatch):
+def test_a_small_drift_does_not_alert(db, odds_on, monkeypatch):
     monkeypatch.setattr(bot, 'fetch_mstr_markets', lambda: [bot._gamma_market_row(market())])
     _stub_send(monkeypatch)
     bot.refresh_mstr_markets()
@@ -293,7 +301,7 @@ def test_a_small_drift_does_not_alert(db, monkeypatch):
     assert sent == []
 
 
-def test_a_big_move_alerts_once_and_rebaselines(db, monkeypatch):
+def test_a_big_move_alerts_once_and_rebaselines(db, odds_on, monkeypatch):
     monkeypatch.setattr(bot, 'fetch_mstr_markets', lambda: [bot._gamma_market_row(market())])
     _stub_send(monkeypatch)
     bot.refresh_mstr_markets()
@@ -311,7 +319,7 @@ def test_a_big_move_alerts_once_and_rebaselines(db, monkeypatch):
     assert sent2 == []
 
 
-def test_slow_drift_still_reports_once_it_adds_up(db, monkeypatch):
+def test_slow_drift_still_reports_once_it_adds_up(db, odds_on, monkeypatch):
     """Measured against the last ALERTED price, not the last seen one.
 
     Eight points an hour never trips a 20-point threshold if each hour is
@@ -331,7 +339,7 @@ def test_slow_drift_still_reports_once_it_adds_up(db, monkeypatch):
     assert "53" in "".join(all_sent[0])
 
 
-def test_a_failed_send_does_not_advance_the_baseline(db, monkeypatch):
+def test_a_failed_send_does_not_advance_the_baseline(db, odds_on, monkeypatch):
     """The alert must survive a Telegram outage. If alerted_price moved anyway,
     the move would be silently swallowed and never reported."""
     monkeypatch.setattr(bot, 'fetch_mstr_markets', lambda: [bot._gamma_market_row(market())])
@@ -377,3 +385,120 @@ def test_no_alert_path_writes_the_digest_baseline(db, monkeypatch):
                         lambda: [bot._gamma_market_row(market())])
     _stub_send(monkeypatch)
     bot.refresh_mstr_markets()      # would raise if it tried
+
+
+def test_the_odds_alert_is_off_by_default(db, monkeypatch):
+    """The channel is for the tracked whale's moves, and nothing else.
+
+    Polymarket runs a price ladder on MSTR where dozens of illiquid markets
+    sit at exactly 50% — the ones that swing hardest and mean least. The
+    owner asked for whale movements only, so this ships silent and a positive
+    POLYMARKET_ODDS_ALERT_PCT turns it back on.
+    """
+    assert bot.POLYMARKET_ODDS_ALERT_PCT == 0
+
+    monkeypatch.setattr(bot, 'fetch_mstr_markets',
+                        lambda: [bot._gamma_market_row(market())])
+    _stub_send(monkeypatch)
+    bot.refresh_mstr_markets()
+
+    # A 40-point move — far past any sane threshold — and still nothing.
+    monkeypatch.setattr(bot, 'fetch_mstr_markets',
+                        lambda: [bot._gamma_market_row(market(yes="0.23"))])
+    sent = _stub_send(monkeypatch)
+    bot.refresh_mstr_markets()
+    assert sent == []
+
+    # The page still tracks the new price; only the message is suppressed.
+    conn = bot.get_db_connection()
+    assert conn.execute("SELECT yes_price FROM polymarket_markets"
+                        ).fetchone()["yes_price"] == 0.23
+    conn.close()
+
+
+# ------------------------------------------------------- the subject filter
+#
+# Opening the catalogue produced 55 markets on the live panel and ~50 were
+# noise. Every title below is real, copied from that page. The rule is the
+# subject, not a hand-written blocklist: an MSTR market is not automatically
+# an MSTR *bitcoin* market.
+
+OFF_TOPIC = [
+    # The price ladder — dozens of these, most sitting at exactly 50%
+    # because nothing trades in them.
+    "Will MicroStrategy (MSTR) hit (HIGH) $160 in August?",
+    "Will MicroStrategy (MSTR) hit (LOW) $50 in August?",
+    "Will MicroStrategy (MSTR) hit (LOW) $130 Week of August 31 2026?",
+    "Will MicroStrategy (MSTR) hit (HIGH) $140 in September?",
+    # Company risk, not treasury policy.
+    "Will MicroStrategy announce bankruptcy before 2027?",
+    "Will MicroStrategy be margin called in 2026?",
+    "Michael Saylor federally charged by December 31, 2026?",
+    "Microstrategy delisted from MSCI index by December 31?",
+]
+
+ON_TOPIC = [
+    "Will Microstrategy announce selling any Bitcoin August 25-31?",
+    "Will MicroStrategy announce holding 1M+ BTC by December 31, 2026?",
+    "Will Microstrategy announce a Bitcoin purchase September 1-7?",
+    "Will Microstrategy announce selling any Bitcoin September 1-7?",
+    "MicroStrategy announces >1000 BTC purchase September 1-7?",
+]
+
+
+@pytest.mark.parametrize("title", OFF_TOPIC)
+def test_an_mstr_market_that_is_not_about_bitcoin_is_dropped(title):
+    assert bot._gamma_market_row(market(question=title)) is None
+
+
+@pytest.mark.parametrize("title", ON_TOPIC)
+def test_the_real_treasury_markets_are_kept(title):
+    row = bot._gamma_market_row(market(question=title))
+    assert row is not None
+    # And every one of them is readable — no "yorum yok" rows left.
+    assert bot.classify_mstr_market(title) is not None
+
+
+def test_the_filter_is_the_same_one_the_classifier_guards_with():
+    """"Can we read this?" and "does this belong on the panel?" are the same
+    question. Two regexes would drift apart."""
+    assert bot._BTC_RE is bot.POLYMARKET_TOPIC_RE
+
+
+def test_stored_off_topic_rows_are_pruned(db, monkeypatch):
+    """The live panel already holds 50 of these. Nothing else deletes from
+    this table, so they would sit there forever."""
+    conn = bot.get_db_connection()
+    for i, title in enumerate(OFF_TOPIC):
+        conn.execute("INSERT INTO polymarket_markets (condition_id, question, "
+                     "yes_price) VALUES (?,?,0.5)", (f"old{i}", title))
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(bot, 'fetch_mstr_markets',
+                        lambda: [bot._gamma_market_row(market())])
+    _stub_send(monkeypatch)
+    bot.refresh_mstr_markets()
+
+    conn = bot.get_db_connection()
+    left = [r["question"] for r in
+            conn.execute("SELECT question FROM polymarket_markets").fetchall()]
+    conn.close()
+    assert len(left) == 1
+    assert "Bitcoin purchase" in left[0]
+
+
+def test_a_failed_fetch_does_not_prune_anything(db, monkeypatch):
+    """Pruning runs only after a successful fetch. An API outage must not
+    empty the panel — that is the same failure mode as the empty-200 guard."""
+    monkeypatch.setattr(bot, 'fetch_mstr_markets',
+                        lambda: [bot._gamma_market_row(market())])
+    _stub_send(monkeypatch)
+    bot.refresh_mstr_markets()
+
+    monkeypatch.setattr(bot, 'fetch_mstr_markets', lambda: [])
+    bot.refresh_mstr_markets()
+
+    conn = bot.get_db_connection()
+    assert conn.execute("SELECT COUNT(*) FROM polymarket_markets").fetchone()[0] == 1
+    conn.close()

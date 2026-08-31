@@ -258,15 +258,27 @@ POLYMARKET_SEARCH_TERMS = [t.strip() for t in os.getenv(
 POLYMARKET_SEARCH_LIMIT = int(os.getenv("POLYMARKET_SEARCH_LIMIT", "50"))
 POLYMARKET_MARKET_PAGES = int(os.getenv("POLYMARKET_MARKET_PAGES", "12"))
 POLYMARKET_MARKET_PAGE_SIZE = int(os.getenv("POLYMARKET_MARKET_PAGE_SIZE", "100"))
-# A market's implied probability moving this many points is news on its own,
-# even with no whale in it.
-POLYMARKET_ODDS_ALERT_PCT = float(os.getenv("POLYMARKET_ODDS_ALERT_PCT", "20"))
+# 0 disables the odds-move alert, which is the default: the channel is for the
+# tracked whale's moves. Polymarket runs a price ladder on MSTR ("hit (LOW)
+# $110 in September?") where dozens of illiquid markets sit at exactly 50% —
+# precisely the ones that swing hardest, and none of them worth a message. Set
+# a positive number of points to turn the alert back on.
+POLYMARKET_ODDS_ALERT_PCT = float(os.getenv("POLYMARKET_ODDS_ALERT_PCT", "0"))
 # The company renamed MicroStrategy -> Strategy, so a market title may use
 # either. Two separate outages today came from matching a literal string, so
 # this starts wide and can be narrowed from the env once the real titles are
 # visible in production.
 POLYMARKET_MARKET_RE = re.compile(
     os.getenv("POLYMARKET_MARKET_RE", r'\b(microstrategy|strategy|mstr|saylor)\b'),
+    re.I)
+# ...but "an MSTR market" is not the same question as "an MSTR BITCOIN market",
+# and the catalogue returns both. Opening it up produced 55 markets of which
+# ~50 were noise: the price ladder, bankruptcy, margin calls, the MSCI index,
+# Saylor's legal exposure. This is the subject test that separates them, and it
+# does double duty as the classifier's guard — without it "be ADDED to the S&P
+# 500" read as a buy.
+POLYMARKET_TOPIC_RE = re.compile(
+    os.getenv("POLYMARKET_TOPIC_RE", r'\b(bitcoin|btc|treasury|holdings|stack)\b'),
     re.I)
 
 def _hhmm(env, default_minute):
@@ -4009,7 +4021,9 @@ _HOLD_RE = re.compile(r'\b(hold|holds|holding|reach(?:es|ed|ing)?|'
 # though it never says bitcoin — the market list is already MSTR-only, and
 # MSTR's treasury is what this is all about. The S&P 500 question still has
 # none of these words, which is the case this guard exists for.
-_BTC_RE = re.compile(r'\b(bitcoin|btc|treasury|holdings|stack)\b', re.I)
+# Same regex the catalogue filters on: "can we read this?" and "does this
+# belong on the panel?" are the same question, so they cannot drift apart.
+_BTC_RE = POLYMARKET_TOPIC_RE
 
 def classify_mstr_market(title):
     """Is this market asking whether MSTR will buy, sell, or hold a level?
@@ -4108,6 +4122,13 @@ def _gamma_market_row(m, fallback_title="", event_slug=""):
     if not question or not condition_id:
         return None
     if not POLYMARKET_MARKET_RE.search(question):
+        return None
+    # "An MSTR market" is not "an MSTR bitcoin market". Without this the
+    # catalogue returned 55 markets of which ~50 were the price ladder
+    # ("hit (LOW) $110 in September?"), bankruptcy, margin calls, the MSCI
+    # index and Saylor's legal exposure — none of them an expectation about
+    # the treasury, all of them shown as "yorum yok".
+    if not POLYMARKET_TOPIC_RE.search(question):
         return None
     outcomes, prices = _gamma_prices(m)
     slug = _pm_str(m, "slug")
@@ -4282,7 +4303,8 @@ def refresh_mstr_markets():
             base = (old or {}).get("alerted_price")
             if base is None:
                 base = (old or {}).get("yes_price")
-            if (base is not None and m["yes_price"] is not None
+            if (POLYMARKET_ODDS_ALERT_PCT > 0
+                    and base is not None and m["yes_price"] is not None
                     and abs(m["yes_price"] - base) * 100 >= POLYMARKET_ODDS_ALERT_PCT):
                 moved.append((m, base))
             conn.execute(
@@ -4301,6 +4323,20 @@ def refresh_mstr_markets():
                  json.dumps(m["outcomes"]), json.dumps(m["prices"]),
                  m["end_date"], m["closed"], m["volume"], m["yes_price"],
                  m["yes_price"] if not old else None))
+
+        # Rows stored before the topic filter existed, or under a wider
+        # POLYMARKET_TOPIC_RE, would sit on the panel forever — nothing else
+        # ever deletes from this table. Pruning by the CURRENT filter makes
+        # the panel self-healing when the regex is narrowed. Safe on a bad
+        # fetch: an empty result returned above before reaching this.
+        dropped = [cid for cid, row in prev.items()
+                   if not POLYMARKET_TOPIC_RE.search(row["question"] or "")]
+        for cid in dropped:
+            conn.execute("DELETE FROM polymarket_markets WHERE condition_id = ?",
+                         (cid,))
+        if dropped:
+            print(f"Gamma: pruned {len(dropped)} off-topic market(s) "
+                  f"from the panel.")
         conn.commit()
     finally:
         conn.close()
