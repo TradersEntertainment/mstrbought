@@ -146,6 +146,9 @@ def test_the_migration_removes_the_bad_row_and_spares_the_good_ones(tmp_path, mo
         btc_acquired TEXT, purchase_price TEXT, avg_price TEXT,
         total_holdings TEXT, total_cost TEXT, avg_cost TEXT, url TEXT,
         total_debt TEXT, financing_source TEXT, atm_sales TEXT, event_type TEXT)""")
+    conn.execute("""CREATE TABLE processed_filings (
+        accession_number TEXT PRIMARY KEY, filing_date TEXT, form TEXT, url TEXT)""")
+    conn.execute("INSERT INTO processed_filings VALUES ('acc-bad', '2026-08-30', '8-K', 'u')")
     rows = [
         ('2026-08-17', '520',       '843,255', 'btc_purchase'),
         ('2026-08-24', '520',       '843,775', 'btc_purchase'),
@@ -164,6 +167,12 @@ def test_the_migration_removes_the_bad_row_and_spares_the_good_ones(tmp_path, mo
             conn.execute("SELECT filing_date FROM purchase_history ORDER BY filing_date")]
     assert left == ['2026-08-17', '2026-08-24']
 
+    # ...and the filing is unmarked, so the week can be parsed again. Deleting
+    # only the history row left it processed forever — a hole the migration
+    # could not close.
+    assert conn.execute("SELECT COUNT(*) FROM processed_filings "
+                        "WHERE filing_date='2026-08-30'").fetchone()[0] == 0
+
 
 def test_the_migration_leaves_a_sale_the_filing_actually_stated(tmp_path, monkeypatch):
     """A disposal MSTR really reported must survive, however large."""
@@ -176,6 +185,8 @@ def test_the_migration_leaves_a_sale_the_filing_actually_stated(tmp_path, monkey
         btc_acquired TEXT, purchase_price TEXT, avg_price TEXT,
         total_holdings TEXT, total_cost TEXT, avg_cost TEXT, url TEXT,
         total_debt TEXT, financing_source TEXT, atm_sales TEXT, event_type TEXT)""")
+    conn.execute("""CREATE TABLE processed_filings (
+        accession_number TEXT PRIMARY KEY, filing_date TEXT, form TEXT, url TEXT)""")
     # A stated sale of half the treasury: extraordinary, but it is the
     # filing's own number, so it is not ours to delete.
     conn.execute("INSERT INTO purchase_history "

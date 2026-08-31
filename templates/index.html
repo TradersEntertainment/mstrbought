@@ -17,9 +17,9 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" media="print" onload="this.media='all'">
     <noscript><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"></noscript>
     <!-- Chart.js (bundled locally — no CDN dependency); deferred so it never blocks first paint -->
-    <script src="/static/chart.umd.min.js?v=18" defer></script>
-    <script src="/static/dashboard.js?v=18" defer></script>
-    <link rel="stylesheet" href="/static/style.css?v=18">
+    <script src="/static/chart.umd.min.js?v=19" defer></script>
+    <script src="/static/dashboard.js?v=19" defer></script>
+    <link rel="stylesheet" href="/static/style.css?v=19">
 </head>
 <body>
     <div class="glow-container" aria-hidden="true">
@@ -38,6 +38,7 @@
         </div>
         <div class="topbar-right">
             <span class="last-check" id="lastCheckSubtext">Son sorgu: -</span>
+            <span class="last-check data-age" id="dataAgeSubtext">Veri: -</span>
             <div class="status-badge" id="botStatusBadge">
                 <span class="pulse-dot"></span>
                 <span id="botModeText">Normal Mod</span>
@@ -191,6 +192,30 @@
                         </table>
                     </div>
                     <p class="panel-footnote" id="dividendSummary"></p>
+                </div>
+
+                <div class="history-panel glass-panel">
+                    <div class="panel-header">
+                        <h2><i class="fa-solid fa-fish-fins"></i> Balinalara Göre Beklenti</h2>
+                        <p>Takip edilen Polymarket cüzdanlarının MSTR marketlerindeki açık pozisyonları. Bunlar bahis, şirket açıklaması değil — balinanın parasını hangi tarafa koyduğunu gösterir.</p>
+                    </div>
+                    <div class="table-container">
+                        <table class="history-table">
+                            <thead>
+                                <tr>
+                                    <th>Market</th>
+                                    <th>Piyasa</th>
+                                    <th>Beklenti</th>
+                                </tr>
+                            </thead>
+                            <tbody id="whaleTableBody">
+                                <tr>
+                                    <td colspan="3" class="loading-cell">Yükleniyor...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p class="panel-footnote" id="whaleSummary"></p>
                 </div>
             </aside>
         </div>
