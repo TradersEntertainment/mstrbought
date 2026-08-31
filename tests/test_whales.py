@@ -784,3 +784,66 @@ def test_the_whole_alert_leads_with_the_sentence_then_the_detail(db, monkeypatch
     assert "betini büyütüyor**" in first
     # ...and the numbers are below it, not in it.
     assert "9.000" in text and "9.000" not in first
+
+
+# ------------------------------------------------------- the sell side
+#
+# Everything above builds its headline from the BUY market, so a regression on
+# the sell path would have gone unnoticed by the suite even though the sell
+# alert is the frightening one. These titles are real, from the live panel.
+
+SELL_Q = "Will Microstrategy announce selling any Bitcoin August 25-31?"
+HOLD_Q = "Will MicroStrategy announce holding 1M+ BTC by December 31, 2026?"
+
+
+@pytest.mark.parametrize("kind,outcome,expected", [
+    ("opened",    "Yes", "bitcoin satılacak beti alıyor"),
+    ("increased", "Yes", "bitcoin satılacak betini büyütüyor"),
+    ("decreased", "No",  "bitcoin satılmayacak betini azaltıyor"),
+    ("closed",    "No",  "bitcoin satılmayacak betini kapatıyor"),
+])
+def test_a_sell_market_builds_the_same_sentence(kind, outcome, expected):
+    head = bot.whale_headline(
+        "Balina", [move(kind=kind, title=SELL_Q, outcome=outcome)])
+    assert head == f"🐋 **MicroStrategy Insider balinası bu hafta {expected}**"
+
+
+@pytest.mark.parametrize("kind,outcome,expected", [
+    ("opened",    "Yes", "bitcoin hedefi tutulacak beti alıyor"),
+    ("closed",    "No",  "bitcoin hedefi tutulmayacak betini kapatıyor"),
+])
+def test_a_threshold_market_builds_the_same_sentence(kind, outcome, expected):
+    head = bot.whale_headline(
+        "Balina", [move(kind=kind, title=HOLD_Q, outcome=outcome)])
+    assert expected in head
+
+
+@pytest.mark.parametrize("title,present,absent", [
+    (SELL_Q, "satıl", "alınacak"),
+    (BUY_Q,  "alın",  "satılacak"),
+])
+def test_buying_and_selling_never_bleed_into_each_other(title, present, absent):
+    """The regression that would hurt most: if the classifier ever matched both
+    verbs, the headline would confidently announce the wrong side. Three of
+    this bot's outages came from exactly this kind of quiet mismatch."""
+    for outcome in ("Yes", "No"):
+        head = bot.whale_headline("Balina", [move(title=title, outcome=outcome)])
+        assert present in head
+        assert absent not in head
+
+
+def test_a_real_sell_alert_leads_with_the_sentence(db, monkeypatch):
+    """End to end on the market the owner actually has a position in."""
+    _stub_fetch(monkeypatch, [pos("c1", SELL_Q, "Yes", 1000, cur=0.83, avg=0.83)])
+    _stub_send(monkeypatch)
+    bot.refresh_polymarket_live()
+
+    _stub_fetch(monkeypatch, [pos("c1", SELL_Q, "Yes", 9000, cur=0.83, avg=0.83)])
+    sent = _stub_send(monkeypatch)
+    bot.refresh_polymarket_live()
+
+    text = "".join(sent[0])
+    first = text.split("\n")[0]
+    assert first == ("🐋 **MicroStrategy Insider balinası "
+                     "bitcoin satılacak betini büyütüyor**")
+    assert "bitcoin satılacak" in text.split("\n", 1)[1]   # and in the detail
