@@ -4564,7 +4564,11 @@ def build_whale_expectations():
 
     markets = {}
     for r in rows:
-        title = r["title"] or ""
+        # The live snapshot stores what data-api sent, disambiguator and all
+        # ("…December 31, 2026?-bV81"). The catalogue and the Telegram alert
+        # both clean it; the page was the one place still showing it raw, so
+        # the same market read with two different names in two places.
+        title = clean_market_title(r["title"] or "")
         if not POLYMARKET_MARKET_RE.search(title):
             continue
         # A settled bet is not an expectation.

@@ -555,3 +555,28 @@ def test_an_existing_snapshot_counts_as_already_synced():
         finally:
             bot.DB_PATH = old_path
         assert [r["address"] for r in seen] == [ADDR]
+
+
+def test_the_panel_shows_the_owners_two_markets_correctly(db):
+    """The exact rows from the screenshot that read "yorum yok".
+
+    Both were plainly readable questions: the first said "announce SELLING"
+    (the classifier only knew sell/sells/sold) and the second was a threshold
+    question with a disambiguator suffix the page never stripped.
+    """
+    add("c1", "Will Microstrategy announce selling any Bitcoin August 25-31?",
+        "No", size=790, cur=1.0, avg=1.0)
+    add("c2", "Will MicroStrategy announce holding 1M+ BTC by "
+              "December 31, 2026?-bV81", "Yes", size=1600, cur=0.12, avg=0.12)
+
+    by_title = {m["title"]: m for m in bot.build_whale_expectations()["markets"]}
+
+    sell = by_title["Will Microstrategy announce selling any Bitcoin "
+                    "August 25-31?"]
+    assert sell["verdict"] == "satmayacak"
+
+    # The suffix is gone from the title the page renders.
+    hold = by_title["Will MicroStrategy announce holding 1M+ BTC by "
+                    "December 31, 2026?"]
+    assert hold["verdict"] == "tutacak"
+    assert "bV81" not in hold["title"]
