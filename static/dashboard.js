@@ -813,6 +813,65 @@ function renderCashChart(actuals, flow) {
     });
 }
 
+// What the tracked Polymarket wallets are betting on MSTR itself.
+async function fetchWhales() {
+    try {
+        const d = await (await fetch('/api/polymarket')).json();
+        const tbody = document.getElementById('whaleTableBody');
+        const sum = document.getElementById('whaleSummary');
+        if (!tbody) return;
+
+        // Market titles are third-party text.
+        const esc = (s) => String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+            .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+        if (!d.enabled) {
+            tbody.innerHTML = '<tr><td colspan="3" class="loading-cell">Balina takibi kapalı (POLYMARKET_INSIDERS ayarlanmamış).</td></tr>';
+            if (sum) sum.innerHTML = '';
+            return;
+        }
+        if (!d.markets || !d.markets.length) {
+            tbody.innerHTML = '<tr><td colspan="3" class="loading-cell">Takip edilen cüzdanların açık MSTR pozisyonu yok.</td></tr>';
+            if (sum) sum.innerHTML = d.fetched_at ? `Son kontrol: ${d.fetched_at}` : '';
+            return;
+        }
+
+        const badge = (v) => {
+            if (!v) return '<span class="badge-whale-none">yorum yok</span>';
+            const cls = (v === 'alacak' || v === 'satmayacak')
+                ? 'badge-whale-buy' : 'badge-whale-sell';
+            return `<span class="${cls}">MSTR ${esc(v)}</span>`;
+        };
+
+        tbody.innerHTML = d.markets.map(m => {
+            const who = m.positions.map(p =>
+                `<span class="atm-ticker">${esc(p.label)}</span> ${esc(p.outcome)} · ` +
+                `${p.size.toLocaleString('tr-TR', { maximumFractionDigits: 0 })} adet · ` +
+                formatUsd(p.usd)).join('<br>');
+            // implied_pct is null when the API did not send a price — show
+            // nothing rather than a confident 0%.
+            const odds = (m.implied_pct === null || m.implied_pct === undefined)
+                ? '-' : `%${m.implied_pct.toFixed(0)}`;
+            return `
+            <tr>
+                <td>${esc(m.title)}<span class="whale-sub">${who}</span></td>
+                <td>${odds}</td>
+                <td>${badge(m.verdict)}</td>
+            </tr>`;
+        }).join('');
+
+        if (sum) {
+            sum.innerHTML = `${d.markets.length} market · son kontrol: ${esc(d.fetched_at || '-')}` +
+                '<br>Not: "Piyasa" sütunu balinanın tuttuğu tarafın o anki fiyatı, yani piyasanın ' +
+                'ima ettiği olasılık. Beklenti sütunu balinanın bahsinden çıkarılır — MSTR\'ın ' +
+                'kendi açıklaması değildir.';
+        }
+    } catch (e) {
+        console.error('Whale fetch error:', e);
+    }
+}
+
 // Dividend-paying products (preferred series) + total monthly expense
 async function fetchDividends() {
     try {
@@ -1002,6 +1061,7 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchHistory();
     fetchCash();
     fetchDividends();
+    fetchWhales();
     setupActions();
 
     // Auto-refresh status every 20 seconds
@@ -1015,5 +1075,6 @@ document.addEventListener('DOMContentLoaded', () => {
         fetchHistory();
         fetchCash();
         fetchDividends();
+        fetchWhales();
     }, 60000);
 });

@@ -78,6 +78,8 @@ Railway paneline gidip aşağıdaki çevre değişkenlerini ekleyin:
 | `POLYMARKET_DIGEST_AT_TRT` | `14:00` *(TRT, hafta içi)* |
 | `POLYMARKET_MIN_USD` | `100` *(bu tutarın altındaki hareketler gösterilmez)* |
 | `POLYMARKET_MIN_DELTA_PCT` | `5` *(pozisyonun %5'inden küçük değişim gürültü sayılır)* |
+| `POLYMARKET_LIVE_INTERVAL_S` | `3600` *(sitedeki balina panelinin tazelenme aralığı)* |
+| `RECONCILE_MAX` | `30` *(açılışta kurtarılacak azami eksik hafta)* |
 
 > ⚠️ Bu tablonun eski hali `POLL_INTERVAL_CRITICAL=2` diyordu; kodun varsayılanı ise
 > `0.25` idi. README'yi izleyerek kurulan bir Railway servisi kritik pencerede
@@ -128,3 +130,46 @@ POLYMARKET_INSIDERS=Balina=https://polymarket.com/profile/0xa0c3...?via=betmoar
 - **Saat neden 14:00.** Yazın 07:00 ET, kışın 06:00 ET — SEC ultra
   penceresinin (07:30-09:30 ET) dışında. 14:30 TRT yazın tam 07:30 ET'ye,
   yani pencerenin açıldığı dakikaya denk gelirdi.
+
+---
+
+## Balinalara Göre Beklenti (dashboard paneli)
+
+Takip edilen Polymarket cüzdanlarının **MSTR marketlerindeki** açık
+pozisyonlarını sitede gösterir. Telegram özetiyle aynı cüzdanları kullanır ama
+tamamen ayrı çalışır: kendi tablosuna (`polymarket_live`) saatte bir yazar,
+dijestin fark alma temelini (`polymarket_positions`) hiç ellemez — o tablo
+yalnızca başarılı Telegram gönderiminden sonra yazılabilir, saatlik yazmak
+dijestin hareketleri sessizce kaybetmesine yol açardı.
+
+**Okuma mantığı.** Market başlığından sorunun alım mı satım mı olduğu
+çıkarılır, sonra balinanın tuttuğu tarafla birleştirilir:
+
+| Soru | Balina | Panel |
+|---|---|---|
+| alım | Evet | MSTR **alacak** |
+| alım | Hayır | MSTR **almayacak** |
+| satış | Evet | MSTR **satacak** |
+| satış | Hayır | MSTR **satmayacak** |
+
+Sınıflandırılamayan bir başlık (örn. "Will MicroStrategy be added to the
+S&P 500?") **yorumsuz** gösterilir — market ve olasılık görünür, beklenti
+sütunu boş kalır. Çıkaramadığımız bir şeyi uydurmuyoruz.
+
+**Bu bir bahistir, şirket açıklaması değil.** Panel dipnotu bunu söyler.
+
+---
+
+## Veri tazeliği
+
+Sayfanın başlığındaki **"Veri: <tarih>"** damgası, `Son sorgu`'dan farklı
+olarak *verinin* yaşını gösterir. 4 günden eskiyse sarıya, 10 günden eskiyse
+kırmızıya döner ve telefonda da görünür.
+
+Bu damga bir olay sonrası eklendi: boş bir veritabanıyla açılışta tüm eski
+8-K'lar ayrıştırılmadan "işlendi" işaretleniyordu ve poller onları bir daha
+görmüyordu. Site yedi hafta boyunca Temmuz ortasını gösterdi, üstünde her
+saniye tıkırdayan bir `Son sorgu` ile. Artık hem engelleniyor
+(`mark_current_filings_processed` elindeki en yeni haftadan öteye geçmiyor),
+hem de açılışta `reconcile_missing_history()` eksik haftaları alarm atmadan
+geri dolduruyor.

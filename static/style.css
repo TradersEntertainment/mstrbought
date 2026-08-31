@@ -457,6 +457,42 @@ a { color: var(--cyan); }
     border: 1px solid rgba(248, 113, 113, 0.3);
 }
 
+/* Whale reading. Same formula as the filing badges above: text = the solid
+   token, background at 0.12 alpha, border at 0.30. */
+.badge-whale-buy, .badge-whale-sell, .badge-whale-none {
+    display: inline-block;
+    padding: 0.18rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.badge-whale-buy {
+    color: var(--green);
+    background: rgba(52, 211, 153, 0.12);
+    border: 1px solid rgba(52, 211, 153, 0.3);
+}
+
+.badge-whale-sell {
+    color: var(--red);
+    background: rgba(248, 113, 113, 0.12);
+    border: 1px solid rgba(248, 113, 113, 0.3);
+}
+
+.badge-whale-none {
+    color: var(--text-2);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+}
+
+.whale-sub {
+    display: block;
+    margin-top: 0.2rem;
+    font-size: 0.68rem;
+    color: var(--text-3);
+}
+
 .badge-no-acquired {
     color: var(--text-2);
     background: var(--surface-2);

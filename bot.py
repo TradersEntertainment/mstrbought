@@ -247,6 +247,14 @@ POLYMARKET_MSG_LIMIT = int(os.getenv("POLYMARKET_MSG_LIMIT", "3800"))
 POLYMARKET_PART_DELAY_S = float(os.getenv("POLYMARKET_PART_DELAY_S", "1.0"))
 POLYMARKET_REPORT_RESOLVED = _envbool("POLYMARKET_REPORT_RESOLVED")
 POLYMARKET_ULTRA_GATE = _envbool("POLYMARKET_ULTRA_GATE")
+POLYMARKET_LIVE_INTERVAL_S = float(os.getenv("POLYMARKET_LIVE_INTERVAL_S", "3600"))
+# The company renamed MicroStrategy -> Strategy, so a market title may use
+# either. Two separate outages today came from matching a literal string, so
+# this starts wide and can be narrowed from the env once the real titles are
+# visible in production.
+POLYMARKET_MARKET_RE = re.compile(
+    os.getenv("POLYMARKET_MARKET_RE", r'\b(microstrategy|strategy|mstr|saylor)\b'),
+    re.I)
 
 def _hhmm(env, default_minute):
     """Parse 'HH:MM' into minutes-of-day. Sibling of _win()."""
@@ -424,6 +432,29 @@ def init_db():
     # Which days the digest has already been posted. This is what makes the
     # job idempotent across restarts, and what tells "nothing happened today"
     # apart from "we never ran today".
+    # Separate from polymarket_positions ON PURPOSE. That table is the
+    # digest's diff baseline and may only be written after a successful
+    # Telegram send; writing it hourly for the website would break that
+    # invariant and the digest would silently lose movements. Two tables,
+    # two jobs, no interference.
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS polymarket_live (
+        address       TEXT NOT NULL,
+        condition_id  TEXT NOT NULL,
+        asset         TEXT NOT NULL DEFAULT '',
+        outcome       TEXT,
+        title         TEXT,
+        event_slug    TEXT,
+        size          REAL NOT NULL DEFAULT 0,
+        avg_price     REAL,
+        cur_price     REAL,
+        redeemable    INTEGER NOT NULL DEFAULT 0,
+        end_date      TEXT,
+        fetched_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (address, condition_id, asset)
+    )
+    """)
+
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS polymarket_digests (
         digest_date TEXT PRIMARY KEY,
@@ -3878,6 +3909,161 @@ def store_position_snapshot(conn, address, rows):
           r["event_slug"], r["size"], r["avg_price"], r["cur_price"],
           r["redeemable"], r["end_date"]) for r in rows])
 
+# ----------------- WHALE EXPECTATIONS (WEB) -----------------
+# What the tracked wallets are betting on MSTR itself, for the dashboard.
+# Refreshed on its own hourly loop into its own table, so the daily digest's
+# send-then-commit invariant is never touched.
+
+_BUY_RE = re.compile(r'\b(buy|buys|purchase|purchases|acquire|acquires|'
+                     r'add|adds|accumulate)\b', re.I)
+_SELL_RE = re.compile(r'\b(sell|sells|sold|dispose|disposes|liquidate|'
+                      r'liquidates|offload)\b', re.I)
+
+def classify_mstr_market(title):
+    """Is this market asking whether MSTR will buy, or sell? Or neither.
+
+    Returns 'buy', 'sell' or None. None matters: "Will MicroStrategy be
+    added to the S&P 500?" is neither, and after today's false sale we do
+    not invent a reading we cannot derive — such a market is shown with its
+    odds and no verdict.
+    """
+    if not title:
+        return None
+    buy, sell = bool(_BUY_RE.search(title)), bool(_SELL_RE.search(title))
+    if buy and not sell:
+        return "buy"
+    if sell and not buy:
+        return "sell"
+    return None
+
+_YES_RE = re.compile(r'^(yes|evet)$', re.I)
+
+def whale_verdict(title, outcome):
+    """Turn a market question plus the side held into Turkish.
+
+    buy  + Yes -> alacak      sell + Yes -> satacak
+    buy  + No  -> almayacak   sell + No  -> satmayacak
+
+    This is a bet, not a disclosure. The caller labels it as such.
+    """
+    kind = classify_mstr_market(title)
+    if kind is None:
+        return None
+    yes = bool(_YES_RE.match((outcome or "").strip()))
+    if kind == "buy":
+        return "alacak" if yes else "almayacak"
+    return "satacak" if yes else "satmayacak"
+
+def store_live_positions(conn, address, rows):
+    conn.execute("DELETE FROM polymarket_live WHERE address = ?", (address,))
+    conn.executemany(
+        "INSERT OR REPLACE INTO polymarket_live "
+        "(address, condition_id, asset, outcome, title, event_slug, size, "
+        " avg_price, cur_price, redeemable, end_date) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        [(address, r["condition_id"], r["asset"], r["outcome"], r["title"],
+          r["event_slug"], r["size"], r["avg_price"], r["cur_price"],
+          r["redeemable"], r["end_date"]) for r in rows])
+
+def refresh_polymarket_live():
+    """Refresh the website's whale snapshot. Posts nothing, and never writes
+    polymarket_positions."""
+    if not POLYMARKET_ENABLED:
+        return 0
+    deadline = time.time() + POLYMARKET_BUDGET_S
+    stored = 0
+    for address, _label in INSIDER_WALLETS:
+        rows, _truncated = fetch_polymarket_positions(address, deadline)
+        if rows is None:
+            continue
+        conn = get_db_connection()
+        try:
+            store_live_positions(conn, address, rows)
+            conn.commit()
+            stored += 1
+        except Exception as e:
+            print(f"Polymarket live store failed for {address}: {e}")
+        finally:
+            conn.close()
+    return stored
+
+def polymarket_live_loop():
+    while running:
+        try:
+            _wait_out_ultra_window("Polymarket live refresh")
+            n = refresh_polymarket_live()
+            if n:
+                print(f"Polymarket live snapshot refreshed for {n} wallet(s).")
+        except Exception as e:
+            print(f"Polymarket live loop error: {e}")
+        time.sleep(POLYMARKET_LIVE_INTERVAL_S)
+
+def build_whale_expectations():
+    """Group the live snapshot into MSTR markets with a reading each."""
+    labels = dict(INSIDER_WALLETS)
+    out = {"enabled": POLYMARKET_ENABLED, "fetched_at": None, "markets": []}
+    if not POLYMARKET_ENABLED:
+        return out
+
+    conn = get_db_connection()
+    try:
+        rows = conn.execute(
+            "SELECT address, condition_id, outcome, title, event_slug, size, "
+            "avg_price, cur_price, redeemable, end_date, fetched_at "
+            "FROM polymarket_live").fetchall()
+        stamp = conn.execute("SELECT MAX(fetched_at) FROM polymarket_live").fetchone()
+        out["fetched_at"] = stamp[0] if stamp else None
+    except Exception as e:
+        print(f"build_whale_expectations error: {e}")
+        return out
+    finally:
+        conn.close()
+
+    markets = {}
+    for r in rows:
+        title = r["title"] or ""
+        if not POLYMARKET_MARKET_RE.search(title):
+            continue
+        # A settled bet is not an expectation.
+        if _position_resolved(dict(r)):
+            continue
+        size, cur, avg = r["size"] or 0, r["cur_price"] or 0, r["avg_price"] or 0
+        if size <= 0:
+            continue
+
+        m = markets.setdefault(r["condition_id"], {
+            "title": title, "event_slug": r["event_slug"] or "",
+            "end_date": r["end_date"] or "", "positions": [], "usd": 0.0})
+        usd = size * (cur or avg)
+        m["usd"] += usd
+        m["positions"].append({
+            "label": labels.get(r["address"], r["address"][:6] + "…"),
+            "outcome": r["outcome"] or "?",
+            "size": size,
+            "avg_price": avg or None,
+            # _pm_num returns 0.0 for an absent field, so 0 cannot be told
+            # apart from "the API never sent this". Show nothing rather than
+            # a confident 0%.
+            "implied_pct": round(cur * 100, 1) if cur > 0 else None,
+            "usd": usd,
+            "verdict": whale_verdict(title, r["outcome"]),
+        })
+
+    for m in markets.values():
+        # The market-level reading is whichever side the whales have more
+        # money on; ties and unclassifiable questions get no verdict.
+        by_verdict = {}
+        for p in m["positions"]:
+            if p["verdict"]:
+                by_verdict[p["verdict"]] = by_verdict.get(p["verdict"], 0.0) + p["usd"]
+        m["verdict"] = max(by_verdict, key=by_verdict.get) if by_verdict else None
+        lead = max(m["positions"], key=lambda p: p["usd"])
+        m["implied_pct"] = lead["implied_pct"]
+        m["positions"].sort(key=lambda p: p["usd"], reverse=True)
+
+    out["markets"] = sorted(markets.values(), key=lambda m: m["usd"], reverse=True)
+    return out
+
 # ----------------- POLYMARKET DIGEST RENDERING -----------------
 
 TELEGRAM_TEXT_LIMIT = 4096
@@ -5344,6 +5530,14 @@ def data_freshness():
             pass
     return out
 
+@app.route('/api/polymarket')
+def get_polymarket():
+    try:
+        return jsonify(build_whale_expectations())
+    except Exception as e:
+        print(f"/api/polymarket error: {e}")
+        return jsonify({"enabled": False, "fetched_at": None, "markets": []})
+
 @app.route('/health')
 def health_check():
     """Liveness probe: fails when the poll loop has stopped ticking.
@@ -5972,6 +6166,10 @@ if __name__ == '__main__':
         pm_thread.start()
     else:
         print("Polymarket insider digest disabled (POLYMARKET_INSIDERS not set).")
+
+    if POLYMARKET_ENABLED:
+        pm_live_thread = threading.Thread(target=polymarket_live_loop, daemon=True)
+        pm_live_thread.start()
 
     # Run Polling Loop in main thread
     try:
