@@ -408,3 +408,112 @@ def test_the_health_report_is_not_a_hardcoded_list(capsys):
     bot._record_source('polymarket', True)
     bot.report_source_health(force=True)
     assert 'polymarket' in capsys.readouterr().out
+
+
+# ------------------------------------------------------- digest schedule
+#
+# MSTR files its purchase 8-K on a Monday morning, so the whale's position is
+# worth reporting on three days: Friday (the week's bets are in), Sunday (the
+# last look before the weekend ends) and Monday (the last look before the
+# announcement). Every other day was repeating what the hourly whale alert
+# had already said.
+#
+# Reference week: 2026-08-31 is a Monday.
+
+MON, TUE, WED, THU, FRI, SAT, SUN = (
+    datetime(2026, 8, 31) + timedelta(days=i) for i in range(7))
+DIGEST_H, DIGEST_M = divmod(14 * 60, 60)
+
+
+def at(day, hh, mm=0):
+    return day.replace(hour=hh, minute=mm, second=0)
+
+
+@pytest.mark.parametrize("day,name", [
+    (FRI, "Friday"), (SUN, "Sunday"), (MON, "Monday")])
+def test_the_digest_posts_on_friday_sunday_and_monday(day, name):
+    assert bot.digest_due(at(day, DIGEST_H, DIGEST_M)), name
+
+
+@pytest.mark.parametrize("day,name", [
+    (TUE, "Tuesday"), (WED, "Wednesday"), (THU, "Thursday"), (SAT, "Saturday")])
+def test_the_digest_stays_quiet_the_rest_of_the_week(day, name):
+    assert not bot.digest_due(at(day, DIGEST_H, DIGEST_M)), name
+
+
+def test_it_is_not_due_before_its_hour():
+    assert not bot.digest_due(at(FRI, DIGEST_H - 1, 59))
+
+
+def test_a_late_wake_still_posts_within_the_catchup_window():
+    """A restart or a slow tick must not skip the day entirely."""
+    assert bot.digest_due(at(FRI, DIGEST_H, DIGEST_M + 30))
+    assert not bot.digest_due(at(FRI, DIGEST_H + 3, DIGEST_M))
+
+
+@pytest.mark.parametrize("now,expect_day,expect_hour", [
+    # same day, before the hour
+    (at(FRI, 13, 0), "Friday", 14),
+    # after the hour rolls to the next allowed day
+    (at(FRI, 15, 0), "Sunday", 14),
+    (at(SUN, 15, 0), "Monday", 14),
+    # Monday is the last of the three: the next one is Friday
+    (at(MON, 15, 0), "Friday", 14),
+    # a skipped day jumps the whole gap
+    (at(TUE, 9, 0), "Friday", 14),
+    (at(WED, 9, 0), "Friday", 14),
+    (at(SAT, 9, 0), "Sunday", 14),
+])
+def test_the_sleep_lands_on_the_next_allowed_slot(now, expect_day, expect_hour):
+    landed = now + timedelta(seconds=bot.seconds_until_digest(now))
+    assert landed.strftime("%A") == expect_day
+    assert landed.hour == expect_hour
+
+
+def test_waking_from_the_sleep_always_finds_the_digest_due():
+    """The bug this guards: seconds_until_digest sleeps towards one day while
+    digest_due checks another. The loop wakes, says "not today", and the
+    digest silently never posts. One set feeds both."""
+    for day in (MON, TUE, WED, THU, FRI, SAT, SUN):
+        for hour in (0, 9, 13, 14, 15, 23):
+            now = at(day, hour)
+            landed = now + timedelta(seconds=bot.seconds_until_digest(now))
+            assert bot.digest_due(landed), f"{now} -> {landed}"
+
+
+def test_the_monday_digest_lands_before_the_filing_window():
+    """The owner's actual requirement: "pazartesi resmi açıklamadan önce".
+
+    MSTR's 8-K arrives in the 07:30-09:30 ET band. TRT is a fixed UTC+3 while
+    ET shifts with US DST, so this has to hold in both halves of the year —
+    a TRT-anchored time that clears the window in August can sit inside it in
+    January.
+    """
+    for label, day in [("summer", datetime(2026, 8, 31)),
+                       ("winter", datetime(2026, 1, 5))]:
+        assert day.strftime("%A") == "Monday", label
+        trt = day.replace(hour=DIGEST_H, minute=DIGEST_M, tzinfo=bot.TRT_TZ)
+        et = trt.astimezone(bot.ET_TZ)
+        assert et.hour * 60 + et.minute < bot.ULTRA_WINDOW_ET[0], (
+            f"{label}: digest at {et:%H:%M} ET is not before the filing band")
+
+
+def test_no_configured_days_means_no_digest(monkeypatch):
+    monkeypatch.setattr(bot, 'POLYMARKET_DIGEST_DAYS', frozenset())
+    for day in (MON, TUE, WED, THU, FRI, SAT, SUN):
+        assert not bot.digest_due(at(day, DIGEST_H, DIGEST_M))
+    # ...and the loop still sleeps rather than spinning.
+    assert bot.seconds_until_digest(at(MON, 9)) >= 60
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("fri,sun,mon", {4, 6, 0}),
+    ("4,6,0", {4, 6, 0}),
+    ("Friday, Sunday, Monday", {4, 6, 0}),
+    ("MON;FRI", {0, 4}),
+    ("", set()),
+    ("nope,fri", {4}),          # a typo drops that day, never the process
+    ("9,fri", {4}),             # out of range
+])
+def test_the_day_list_parses_names_and_numbers(raw, expected):
+    assert set(bot._digest_days(raw)) == expected

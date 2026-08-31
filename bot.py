@@ -297,6 +297,38 @@ def _hhmm(env, default_minute):
 # the exact minute the ultra window opens.
 POLYMARKET_DIGEST_MINUTE = _hhmm("POLYMARKET_DIGEST_AT_TRT", 14 * 60)
 
+_WEEKDAY_NAMES = {"mon": 0, "tue": 1, "wed": 2, "thu": 3,
+                  "fri": 4, "sat": 5, "sun": 6}
+
+def _digest_days(raw):
+    """Parse 'fri,sun,mon' (or '4,6,0') into a set of Python weekdays.
+
+    An unparseable entry is skipped rather than raising: this runs at import
+    on a background service, and a typo in the env must not take the process
+    down. An empty result disables the digest, which describe_polymarket_config
+    reports at startup.
+    """
+    days = set()
+    for token in (raw or "").replace(";", ",").split(","):
+        token = token.strip().lower()
+        if not token:
+            continue
+        if token[:3] in _WEEKDAY_NAMES:
+            days.add(_WEEKDAY_NAMES[token[:3]])
+        elif token.isdigit() and 0 <= int(token) <= 6:
+            days.add(int(token))
+        else:
+            print(f"POLYMARKET_DIGEST_DAYS: ignoring unknown day {token!r}")
+    return frozenset(days)
+
+# MSTR files its purchase 8-K on a MONDAY MORNING, so the whale's position is
+# worth reporting on exactly three days: Friday (the week's bets are in),
+# Sunday (the last look before the weekend ends) and Monday (the last look
+# before the announcement). Tue-Thu and Saturday are far from a filing and
+# were only ever repeating what the hourly whale alert already said.
+POLYMARKET_DIGEST_DAYS = _digest_days(
+    os.getenv("POLYMARKET_DIGEST_DAYS", "fri,sun,mon"))
+
 # The shared http_session carries an SEC-branded, email-identified User-Agent
 # that SEC fair-use policy requires. It means nothing to Polymarket's edge and
 # datacenter egress (Railway) is known to draw bot challenges there, so this
@@ -4978,20 +5010,37 @@ def run_polymarket_digest(force=False, dry_run=False):
     return {"status": status, "parts": result["parts"],
             "movements": result["movements"], "errors": result["errors"]}
 
+def digest_due(now):
+    """Is a digest due right now, in TRT?
+
+    The single source of truth for "which days". seconds_until_digest sleeps
+    towards a day and the loop then asks whether it has arrived; if the two
+    disagreed by even one day the loop would wake, decide "not today", and
+    the digest would silently never post.
+    """
+    minute = now.hour * 60 + now.minute
+    return (now.weekday() in POLYMARKET_DIGEST_DAYS
+            and POLYMARKET_DIGEST_MINUTE <= minute
+            < POLYMARKET_DIGEST_MINUTE + POLYMARKET_CATCHUP_MIN)
+
 def seconds_until_digest(now):
-    """Seconds until the next weekday digest slot, in TRT.
+    """Seconds until the next digest slot, in TRT.
 
     Recomputed from the clock every time rather than accumulated from a
     start time. cash_refresh_loop's flat sleep(12*3600) is anchored to
     process start, so a redeploy pins it to whatever wall clock it happened
     to boot at — its own docstring admits as much.
     """
+    if not POLYMARKET_DIGEST_DAYS:
+        return 3600          # digest disabled; wake hourly, do nothing
     minute = now.hour * 60 + now.minute
-    if now.weekday() < 5 and minute < POLYMARKET_DIGEST_MINUTE:
+    if now.weekday() in POLYMARKET_DIGEST_DAYS and minute < POLYMARKET_DIGEST_MINUTE:
         target_day = 0
     else:
+        # Scan forward for the next allowed day. Bounded at 7: the set is
+        # non-empty, so a match exists within a week.
         target_day = 1
-        while (now.weekday() + target_day) % 7 >= 5:
+        while target_day < 8 and (now.weekday() + target_day) % 7 not in POLYMARKET_DIGEST_DAYS:
             target_day += 1
     secs = (target_day * 24 * 60 + POLYMARKET_DIGEST_MINUTE - minute) * 60 - now.second
     return max(secs, 1)
@@ -5012,12 +5061,17 @@ def describe_polymarket_config():
     # becomes visible without a dedicated alert.
     who = ", ".join(f"{label} {a[:6]}…{a[-4:]} ({counts.get(a, '?')} stored)"
                     for a, label in INSIDER_WALLETS)
-    return (f"Polymarket digest: weekdays {hh:02d}:{mm:02d} TRT | "
+    if not POLYMARKET_DIGEST_DAYS:
+        return ("Polymarket digest: no days configured "
+                "(POLYMARKET_DIGEST_DAYS is empty) — it will never post.")
+    names = [n for n, i in sorted(_WEEKDAY_NAMES.items(), key=lambda kv: kv[1])
+             if i in POLYMARKET_DIGEST_DAYS]
+    return (f"Polymarket digest: {', '.join(names)} {hh:02d}:{mm:02d} TRT | "
             f"{len(INSIDER_WALLETS)} wallet(s): {who} | "
             f"min ${POLYMARKET_MIN_USD:.0f} / {POLYMARKET_MIN_DELTA_PCT:.0f}%")
 
 def polymarket_digest_loop():
-    """Post the insider digest on weekdays at POLYMARKET_DIGEST_AT_TRT."""
+    """Post the insider digest on POLYMARKET_DIGEST_DAYS at ..._AT_TRT."""
     print(describe_polymarket_config())
     while running:
         try:
@@ -5025,12 +5079,7 @@ def polymarket_digest_loop():
             # Sleep in slices so a clock step, an NTP correction or shutdown
             # is noticed within a minute.
             time.sleep(min(wait, 60))
-            now = now_trt()
-            minute = now.hour * 60 + now.minute
-            due = (now.weekday() < 5
-                   and POLYMARKET_DIGEST_MINUTE <= minute
-                   < POLYMARKET_DIGEST_MINUTE + POLYMARKET_CATCHUP_MIN)
-            if not due:
+            if not digest_due(now_trt()):
                 continue
             if POLYMARKET_ULTRA_GATE:
                 _wait_out_ultra_window("Polymarket insider digest")
