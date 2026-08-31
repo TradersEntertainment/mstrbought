@@ -608,3 +608,179 @@ def test_the_panel_after_the_cull_is_only_readable_markets(db):
     markets = bot.build_whale_expectations()["markets"]
     assert len(markets) == 2
     assert all(m["market_verdict"] for m in markets)
+
+
+# ------------------------------------------------------- the alert headline
+#
+# The owner's ask, verbatim: "MicroStrategy Insider balinası bu hafta bitcoin
+# alınmayacak beti alıyor ... ilk satırda her şeyi söyleyip sonra alta
+# detayları yazacak". An address and an English market title tell a reader
+# nothing at a glance.
+
+from datetime import timedelta
+
+
+def move(kind="opened", title="Will Microstrategy announce a Bitcoin purchase "
+                              "September 1-7?", outcome="No", usd=900.0,
+         end_date=None, days_out=5):
+    if end_date is None:
+        end_date = (bot.now_trt().date() + timedelta(days=days_out)).isoformat()
+    return {"kind": kind, "title": title, "outcome": outcome, "event_slug": "e",
+            "end_date": end_date, "usd": usd, "pct": 100.0, "price": 0.18,
+            "delta": 5000, "new_size": 5000, "prev_size": 0}
+
+
+def test_the_headline_is_the_sentence_the_owner_asked_for():
+    assert bot.whale_headline("Balina", [move()]) == (
+        "🐋 **MicroStrategy Insider balinası bu hafta "
+        "bitcoin alınmayacak beti alıyor**")
+
+
+def test_the_other_side_of_the_same_market():
+    assert "bitcoin alınacak beti alıyor" in bot.whale_headline(
+        "Balina", [move(outcome="Yes")])
+
+
+@pytest.mark.parametrize("kind,verb", [
+    ("opened", "beti alıyor"),
+    ("increased", "betini büyütüyor"),
+    ("decreased", "betini azaltıyor"),
+    ("closed", "betini kapatıyor"),
+])
+def test_every_kind_of_movement_reads_as_a_sentence(kind, verb):
+    assert verb in bot.whale_headline("Balina", [move(kind=kind)])
+
+
+@pytest.mark.parametrize("outcome,phrase", [
+    ("Yes", "bitcoin alınacak"),
+    ("No", "bitcoin alınmayacak"),
+])
+def test_a_buy_question_reads_from_bitcoins_side(outcome, phrase):
+    assert bot.whale_bet_phrase(
+        "Will Microstrategy announce a Bitcoin purchase September 1-7?",
+        outcome) == phrase
+
+
+@pytest.mark.parametrize("outcome,phrase", [
+    ("Yes", "bitcoin satılacak"),
+    ("No", "bitcoin satılmayacak"),
+])
+def test_a_sell_question_reads_from_bitcoins_side(outcome, phrase):
+    assert bot.whale_bet_phrase(
+        "Will Microstrategy announce selling any Bitcoin September 1-7?",
+        outcome) == phrase
+
+
+def test_a_threshold_question_reads_from_bitcoins_side():
+    assert bot.whale_bet_phrase(
+        "Will MicroStrategy announce holding 1M+ BTC by December 31, 2026?",
+        "Yes") == "bitcoin hedefi tutulacak"
+
+
+# ------------------------------------------------------- when
+
+@pytest.mark.parametrize("days,expected", [
+    (0, "bu hafta"),
+    (5, "bu hafta"),
+    (7, "bu hafta"),
+    (8, "bu ay"),
+    (31, "bu ay"),
+])
+def test_the_timeframe_comes_from_the_end_date_not_the_title(days, expected):
+    """"September 1-7" is text, and reading meaning out of Polymarket's title
+    text has broken this bot three times. end_date is a structured field."""
+    end = (bot.now_trt().date() + timedelta(days=days)).isoformat()
+    assert bot.bet_timeframe(end) == expected
+
+
+def test_a_distant_market_gets_a_real_date():
+    from datetime import date
+    assert bet_tf("2026-12-31", date(2026, 8, 31)) == "31 Aralık'a kadar"
+    assert bet_tf("2026-09-30", date(2026, 6, 1)) == "30 Eylül'e kadar"
+    assert bet_tf("2026-10-15", date(2026, 6, 1)) == "15 Ekim'e kadar"
+
+
+def bet_tf(end, today):
+    return bot.bet_timeframe(end, today=today)
+
+
+@pytest.mark.parametrize("end", ["", None, "not-a-date", "2026-13-45", "2026"])
+def test_an_unusable_end_date_claims_no_timeframe(end):
+    """Better a headline with no "bu hafta" than a wrong one."""
+    assert bot.bet_timeframe(end) == ""
+
+
+def test_a_market_that_already_ended_claims_no_timeframe():
+    past = (bot.now_trt().date() - timedelta(days=3)).isoformat()
+    assert bot.bet_timeframe(past) == ""
+
+
+def test_the_headline_drops_the_timeframe_rather_than_guessing():
+    head = bot.whale_headline("Balina", [move(end_date="")])
+    assert "bitcoin alınmayacak beti alıyor" in head
+    assert "bu hafta" not in head
+
+
+# ------------------------------------------------------- more than one move
+
+def test_several_movements_lead_with_the_biggest():
+    head = bot.whale_headline("Balina", [
+        move(usd=300.0, outcome="Yes"),
+        move(usd=5000.0, outcome="No", title="MicroStrategy announces >1000 "
+                                             "BTC purchase September 1-7?"),
+    ])
+    assert "bitcoin alınmayacak" in head.split("\n")[0]
+
+
+def test_movements_pointing_the_same_way_just_count_the_rest():
+    head = bot.whale_headline("Balina", [
+        move(usd=5000.0, outcome="No"),
+        move(usd=300.0, outcome="No", title="MicroStrategy announces >1000 "
+                                            "BTC purchase September 1-7?"),
+    ])
+    assert "+1 hareket daha" in head
+
+
+def test_movements_pointing_opposite_ways_say_so():
+    """Two bets in opposite directions must not be blended into one confident
+    verdict — the headline names the biggest and admits that is what it is."""
+    head = bot.whale_headline("Balina", [
+        move(usd=5000.0, outcome="No"),
+        move(usd=300.0, outcome="Yes", title="MicroStrategy announces >1000 "
+                                             "BTC purchase September 1-7?"),
+    ])
+    assert "en büyük hareket" in head
+
+
+# ------------------------------------------------------- honesty
+
+def test_an_unreadable_question_gets_no_invented_headline():
+    head = bot.whale_headline(
+        "Balina", [move(title="Will MicroStrategy be margin called in 2026?")])
+    assert "yeni pozisyon açıyor" in head
+    for invented in ("bitcoin alınacak", "bitcoin alınmayacak", "bu hafta"):
+        assert invented not in head
+
+
+def test_a_second_wallet_is_named_so_the_alerts_stay_apart():
+    one = bot.whale_headline("Balina", [move()], wallet_count=1)
+    many = bot.whale_headline("Balina", [move()], wallet_count=3)
+    assert "(Balina)" not in one
+    assert "(Balina)" in many
+
+
+def test_the_whole_alert_leads_with_the_sentence_then_the_detail(db, monkeypatch):
+    _stub_fetch(monkeypatch, [pos("c1", BUY_Q, "Yes", 1000)])
+    _stub_send(monkeypatch)
+    bot.refresh_polymarket_live()
+
+    _stub_fetch(monkeypatch, [pos("c1", BUY_Q, "Yes", 9000)])
+    sent = _stub_send(monkeypatch)
+    bot.refresh_polymarket_live()
+
+    text = "".join(sent[0])
+    first = text.split("\n")[0]
+    assert first.startswith("🐋 **MicroStrategy Insider balinası")
+    assert "betini büyütüyor**" in first
+    # ...and the numbers are below it, not in it.
+    assert "9.000" in text and "9.000" not in first

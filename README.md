@@ -78,6 +78,7 @@ Railway paneline gidip aşağıdaki çevre değişkenlerini ekleyin:
 | `POLYMARKET_INSIDERS` | *(boş)* — takip edilecek cüzdanlar; boşsa özellik kapalı |
 | `POLYMARKET_DIGEST_AT_TRT` | `14:00` *(TRT)* |
 | `POLYMARKET_DIGEST_DAYS` | `fri,sun,mon` *(boş = özet kapalı)* |
+| `POLYMARKET_WHALE_TITLE` | `MicroStrategy Insider balinası` *(bildirimin ilk satırındaki özne)* |
 | `POLYMARKET_MIN_USD` | `100` *(bu tutarın altındaki hareketler gösterilmez)* |
 | `POLYMARKET_MIN_DELTA_PCT` | `5` *(pozisyonun %5'inden küçük değişim gürültü sayılır)* |
 | `POLYMARKET_LIVE_INTERVAL_S` | `3600` *(sitedeki balina panelinin tazelenme aralığı)* |
@@ -246,6 +247,39 @@ Daha önce kaydedilmiş gürültü satırları için ayrı bir migration yok: ba
 her çekimden sonra filtreyi geçemeyen satırlar siliniyor, yani regex ileride
 daraltılırsa panel bir sonraki turda kendini temizliyor. Başarısız çekimde
 budama çalışmaz — boş cevap paneli silmemeli.
+
+### Bildirimin şekli
+
+İlk satır tek başına her şeyi söyler, detay altta:
+
+```
+🐋 MicroStrategy Insider balinası bu hafta bitcoin alınmayacak beti alıyor
+
+🟢 YENİ: Will Microstrategy announce a Bitcoin purchase September 1-7? — No
+   5.000 adet @ $0.18 → $900
+   → bitcoin alınmayacak beti
+
+0xa0c3…5b9a · Balina
+Bu bir bahis, şirket açıklaması değil.
+```
+
+Cümle üç parçadan kurulur: **ne zaman** + **bahis ne diyor** + **balina ne yaptı**.
+
+- *Ne zaman* market başlığından değil **`end_date` alanından** gelir. "September
+  1-7" metindir ve Polymarket'in başlık metninden anlam çıkarmak bu botu üç kez
+  kırdı. ≤7 gün "bu hafta", ≤31 gün "bu ay", ötesi "31 Aralık'a kadar". Tarih
+  yoksa ifade **düşer** — yanlış "bu hafta" yazmaktansa hiç yazmamak iyidir.
+- *Bahis ne diyor* `whale_verdict`'ten türer, yani sınıflandırıcı tek yerde
+  kalır; sadece özne MSTR yerine bitcoin olur ("almayacak" → "bitcoin
+  alınmayacak").
+- *Balina ne yaptı* açıyor / büyütüyor / azaltıyor / kapatıyor.
+
+Tek uyarıda birden fazla hareket olabilir. Başlık **en büyüğünü** (dolar
+bazında) anlatır; hepsi aynı yöndeyse `+N hareket daha`, zıt yönlerdeyse
+`en büyük hareket` notu düşer. Zıt bahisler tek bir kesin yargıya karıştırılmaz.
+
+Okunamayan bir market için yorum uydurulmaz: "bir Polymarket marketinde yeni
+pozisyon açıyor" denir ve market adı hemen altta durur.
 
 ### Telegram uyarıları
 

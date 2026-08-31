@@ -297,6 +297,12 @@ def _hhmm(env, default_minute):
 # the exact minute the ultra window opens.
 POLYMARKET_DIGEST_MINUTE = _hhmm("POLYMARKET_DIGEST_AT_TRT", 14 * 60)
 
+# How the whale is named in the first line of an alert. That line has to say
+# the whole thing on its own — an address and an English market title tell a
+# reader nothing at a glance.
+POLYMARKET_WHALE_TITLE = os.getenv(
+    "POLYMARKET_WHALE_TITLE", "MicroStrategy Insider balinası")
+
 _WEEKDAY_NAMES = {"mon": 0, "tue": 1, "wed": 2, "thu": 3,
                   "fri": 4, "sat": 5, "sun": 6}
 
@@ -3985,6 +3991,7 @@ def diff_positions(prev, cur, truncated=False):
                     ("increased" if delta > 0 else "decreased"),
             "title": new["title"], "outcome": new["outcome"],
             "event_slug": new.get("event_slug", ""),
+            "end_date": new.get("end_date", ""),
             "delta": delta, "new_size": new_size, "prev_size": prev_size,
             "usd": usd, "pct": pct, "price": price,
         })
@@ -4005,6 +4012,7 @@ def diff_positions(prev, cur, truncated=False):
             moves.append({
                 "kind": "closed", "title": old["title"], "outcome": old["outcome"],
                 "event_slug": old.get("event_slug", ""),
+                "end_date": old.get("end_date", ""),
                 "delta": -prev_size, "new_size": 0.0, "prev_size": prev_size,
                 "usd": usd, "pct": 100.0, "price": price,
             })
@@ -4506,20 +4514,124 @@ def whale_movements(prev, rows, truncated=False):
     return [m for m in diff_positions(baseline, cur, truncated=truncated)
             if POLYMARKET_MARKET_RE.search(m.get("title") or "")]
 
+# The headline says the whole thing in plain Turkish, because an address and
+# an English market title tell the reader nothing at a glance. Built from the
+# verdict the classifier already produces, so there is one place that decides
+# what a market means.
+_BET_PHRASE = {
+    "alacak":      "bitcoin alınacak",
+    "almayacak":   "bitcoin alınmayacak",
+    "satacak":     "bitcoin satılacak",
+    "satmayacak":  "bitcoin satılmayacak",
+    "tutacak":     "bitcoin hedefi tutulacak",
+    "tutmayacak":  "bitcoin hedefi tutulmayacak",
+}
+
+_BET_ACTION = {
+    "opened":    "beti alıyor",
+    "increased": "betini büyütüyor",
+    "decreased": "betini azaltıyor",
+    "closed":    "betini kapatıyor",
+}
+
+# Used when the question cannot be read. "beti alıyor" needs a bet in front of
+# it to make sense; with nothing to name, it has to be said plainly.
+_PLAIN_ACTION = {
+    "opened":    "yeni pozisyon açıyor",
+    "increased": "pozisyonunu büyütüyor",
+    "decreased": "pozisyonunu azaltıyor",
+    "closed":    "pozisyonunu kapatıyor",
+}
+
+# Name plus the suffix its last vowel takes. Turkish vowel harmony only
+# splits these two ways and only Eylül/Ekim take 'e, so the table is the
+# whole rule — deriving it would be more code and one more thing to get wrong.
+_TR_MONTHS = [("Ocak", "a"), ("Şubat", "a"), ("Mart", "a"), ("Nisan", "a"),
+              ("Mayıs", "a"), ("Haziran", "a"), ("Temmuz", "a"),
+              ("Ağustos", "a"), ("Eylül", "e"), ("Ekim", "e"),
+              ("Kasım", "a"), ("Aralık", "a")]
+
+def whale_bet_phrase(title, outcome):
+    """"bitcoin alınmayacak" — the bet, said the way a reader thinks about it.
+
+    whale_verdict phrases it from MSTR's side ("almayacak"); the headline
+    wants bitcoin as the subject. Same classifier, different surface.
+    """
+    return _BET_PHRASE.get(whale_verdict(title, outcome))
+
+def bet_timeframe(end_date, today=None):
+    """"bu hafta" / "bu ay" / "7 Eylül'e kadar", from the market's END DATE.
+
+    Deliberately not parsed out of the title. "September 1-7" is text, and
+    reading meaning out of Polymarket's title text has broken this bot three
+    times. end_date is a structured field that arrives with the position.
+    """
+    end = (end_date or "")[:10]
+    if len(end) != 10:
+        return ""
+    try:
+        day = datetime.strptime(end, "%Y-%m-%d").date()
+    except ValueError:
+        return ""
+    today = today or now_trt().date()
+    days = (day - today).days
+    if days < 0:
+        return ""
+    if days <= 7:
+        return "bu hafta"
+    if days <= 31:
+        return "bu ay"
+    name, suffix = _TR_MONTHS[day.month - 1]
+    return f"{day.day} {name}'{suffix} kadar"
+
+def whale_headline(label, moves, wallet_count=1):
+    """One line that says what happened, before any detail.
+
+    With several movements it describes the LARGEST by dollar value and says
+    so, rather than inventing a combined verdict out of bets that may point
+    in opposite directions.
+    """
+    subject = POLYMARKET_WHALE_TITLE
+    if wallet_count > 1 and label:
+        subject = f"{subject} ({_md_strip(label)})"
+
+    lead = max(moves, key=lambda m: m.get("usd") or 0)
+    phrase = whale_bet_phrase(lead["title"], lead["outcome"])
+    action = _BET_ACTION.get(lead["kind"], "pozisyonunu değiştirdi")
+
+    if not phrase:
+        # An unreadable question gets no invented reading — the market name is
+        # right below.
+        plain = _PLAIN_ACTION.get(lead["kind"], "pozisyonunu değiştiriyor")
+        return f"🐋 **{subject} bir Polymarket marketinde {plain}**"
+
+    when = bet_timeframe(lead.get("end_date"))
+    parts = [subject] + ([when] if when else []) + [phrase, action]
+    head = f"🐋 **{' '.join(parts)}**"
+
+    others = [m for m in moves if m is not lead]
+    if others:
+        same = {whale_bet_phrase(m["title"], m["outcome"]) for m in others}
+        note = ("en büyük hareket" if same - {phrase}
+                else f"+{len(others)} hareket daha")
+        head += f"\n_({note}, detaylar aşağıda)_"
+    return head
+
 def announce_whale_movements(address, label, moves):
     """Post the movements, then mark them alerted — in that order."""
     short = f"{address[:6]}…{address[-4:]}"
-    header = f"🐋 **Balina hareketi — {_md_strip(label)}** (`{short}`)"
+    header = whale_headline(label, moves, wallet_count=len(INSIDER_WALLETS))
     blocks = []
     for m in moves:
         line = format_movement(dict(m, title=clean_market_title(m["title"])))
-        verdict = whale_verdict(m["title"], m["outcome"])
-        if verdict:
-            line += f"\n   → balinaya göre **MSTR {verdict}**"
+        phrase = whale_bet_phrase(m["title"], m["outcome"])
+        if phrase:
+            line += f"\n   → **{phrase}** beti"
         blocks.append(line)
 
     parts = split_telegram_blocks(
         header, blocks,
+        f"`{short}` · {_md_strip(label)}\n"
         "Bu bir bahis, şirket açıklaması değil.")
     if not send_telegram_digest(parts):
         print(f"Whale movement alert for {label} failed to send; "
