@@ -76,7 +76,8 @@ Railway paneline gidip aşağıdaki çevre değişkenlerini ekleyin:
 | `FAST_WINDOW_ET` | `06:00-18:00` *(ET, opsiyonel)* |
 | `TELEGRAM_LINK_PREVIEW` | `false` *(önizleme açmak gecikme ekler)* |
 | `POLYMARKET_INSIDERS` | *(boş)* — takip edilecek cüzdanlar; boşsa özellik kapalı |
-| `POLYMARKET_DIGEST_AT_TRT` | `14:00` *(TRT, hafta içi)* |
+| `POLYMARKET_DIGEST_AT_TRT` | `14:00` *(TRT)* |
+| `POLYMARKET_DIGEST_DAYS` | `fri,sun,mon` *(boş = özet kapalı)* |
 | `POLYMARKET_MIN_USD` | `100` *(bu tutarın altındaki hareketler gösterilmez)* |
 | `POLYMARKET_MIN_DELTA_PCT` | `5` *(pozisyonun %5'inden küçük değişim gürültü sayılır)* |
 | `POLYMARKET_LIVE_INTERVAL_S` | `3600` *(sitedeki balina panelinin tazelenme aralığı)* |
@@ -106,7 +107,27 @@ Bot, dizinde yer alan `Dockerfile` sayesinde Railway tarafından otomatik olarak
 
 ## Polymarket İçeriden Takip
 
-Belirlediğiniz Polymarket cüzdanlarının **yeni** bahis hareketlerini hafta içi
+### Özet hangi günler gider
+
+**Cuma, Pazar, Pazartesi** — `POLYMARKET_DIGEST_DAYS`.
+
+MSTR alım 8-K'sını **Pazartesi sabahı** yayınlıyor (07:55-08:25 ET bandı), yani
+balinanın pozisyonu üç anda değerli: Cuma haftanın bahisleri girilmişken, Pazar
+açıklamadan bir gün önce, Pazartesi açıklamadan hemen önce. Salı-Perşembe ve
+Cumartesi düştü — dosyalamaya uzaklar ve saatlik balina uyarısının zaten
+söylediğini tekrarlıyorlardı.
+
+Pazartesi özeti dosyalamadan **önce** düşmek zorunda ve düşüyor: 14:00 TRT yazın
+07:00 ET, kışın 06:00 ET, yani bandın 30-90 dakika öncesi. TRT sabit UTC+3 ama ET
+yaz saatiyle kayıyor, o yüzden bu iki mevsim için ayrı ayrı test ediliyor.
+
+`seconds_until_digest` ile `digest_due` **aynı gün kümesini** okur. Ayrı
+kalsalardı döngü bir güne doğru uyur, uyanınca "bugün değil" der ve özet sessizce
+hiç çıkmazdı; bir test her gün ve saat için uyanılan anın due olduğunu doğruluyor.
+
+---
+
+Belirlediğiniz Polymarket cüzdanlarının **yeni** bahis hareketlerini seçili
 her gün 14:00 TRT'de kanala gönderir: açılan, kapanan ve büyütülen/küçültülen
 pozisyonlar. Tam pozisyon dökümü değil, sadece son özetten bu yana değişenler.
 
