@@ -82,7 +82,8 @@ Railway paneline gidip aşağıdaki çevre değişkenlerini ekleyin:
 | `POLYMARKET_LIVE_INTERVAL_S` | `3600` *(sitedeki balina panelinin tazelenme aralığı)* |
 | `POLYMARKET_MARKETS` | `true` *(market kataloğu; cüzdan listesinden bağımsız)* |
 | `POLYMARKET_SEARCH_TERMS` | `microstrategy,mstr,strategy bitcoin` *(Gamma araması; pozisyonsuz marketleri bulur)* |
-| `POLYMARKET_ODDS_ALERT_PCT` | `20` *(oran bu kadar puan oynarsa Telegram)* |
+| `POLYMARKET_TOPIC_RE` | `\b(bitcoin\|btc\|treasury\|holdings\|stack)\b` *(panele hangi marketler girsin)* |
+| `POLYMARKET_ODDS_ALERT_PCT` | `0` = kapalı *(pozitif değer oran uyarısını açar)* |
 | `RECONCILE_MAX` | `30` *(açılışta kurtarılacak azami eksik hafta)* |
 
 > ⚠️ Bu tablonun eski hali `POLL_INTERVAL_CRITICAL=2` diyordu; kodun varsayılanı ise
@@ -197,13 +198,45 @@ döndüğünü kanala göndermeden size listeler. Uç nokta bu kodun yazıldığ
 ortamdan erişilemediği için ilk cevabın şekli ayrıca bir kez loglanır
 (`GAMMA /public-search first-response shape`).
 
+### Konu filtresi: hangi marketler panele girer
+
+"MSTR marketi" ile "MSTR'ın **bitcoin** marketi" aynı soru değil. Katalog ilk
+açıldığında 55 market geldi ve ~50'si gürültüydü:
+
+```
+Will MicroStrategy (MSTR) hit (LOW) $110 in September?   %50 evet   yorum yok
+Will MicroStrategy be margin called in 2026?             %4  evet   yorum yok
+Michael Saylor federally charged by December 31, 2026?   %7  evet   yorum yok
+```
+
+Polymarket MSTR üzerinde bir **fiyat merdiveni** işletiyor — onlarca likit
+olmayan market tam %50'de duruyor. Bunlar `POLYMARKET_TOPIC_RE` ile eleniyor;
+elle kara liste yok, konu testi 55'i 5'e indiriyor.
+
+Aynı regex sınıflandırıcının konu koruması olarak da kullanılıyor: "okuyabilir
+miyiz" ile "panele girmeli mi" aynı soru, iki ayrı regex zamanla birbirinden
+kopardı.
+
+**Balina satırları bu filtreden muaftır.** Takip edilen cüzdanın parası bir
+markette duruyorsa, okunamasa bile panelde kalır — para bilgidir. Filtre
+yalnızca pozisyonsuz katalog marketlerine uygulanır.
+
+Daha önce kaydedilmiş gürültü satırları için ayrı bir migration yok: başarılı
+her çekimden sonra filtreyi geçemeyen satırlar siliniyor, yani regex ileride
+daraltılırsa panel bir sonraki turda kendini temizliyor. Başarısız çekimde
+budama çalışmaz — boş cevap paneli silmemeli.
+
 ### Telegram uyarıları
 
-Saatlik döngü iki şeyi bildirir, ikisi de yalnızca MSTR marketlerinde:
+Saatlik döngü **balina hareketini** bildirir: açılan, kapanan veya büyütülen
+pozisyon, yalnızca MSTR marketlerinde.
 
-- **Balina hareketi** — açılan, kapanan veya büyütülen pozisyon.
-- **Oran hareketi** — marketin ima ettiği olasılık `POLYMARKET_ODDS_ALERT_PCT`
-  puandan fazla oynarsa.
+**Oran hareketi uyarısı varsayılan olarak kapalıdır** (`POLYMARKET_ODDS_ALERT_PCT=0`).
+Kanal takip edilen balinanın hareketleri için; oranlar sitede görünür ama
+Telegram'a düşmez. Pozitif bir puan değeri uyarıyı açar.
+
+Kanala giden her şey, tam liste: **balina hareketi**, **14:00 günlük özet**
+(o da yalnızca balina pozisyonları) ve **SEC dosyalama alarmları**.
 
 İkisi de **son uyarılan** değere göre ölçülür, son görülene göre değil: saatte
 5 puanlık bir kayma aksi halde hiçbir zaman eşiği geçmezdi. Ve bu değerler
