@@ -59,6 +59,7 @@ async function fetchStatus() {
 
         // Update last check subtext
         document.getElementById('lastCheckSubtext').textContent = 'Son sorgu: ' + (data.last_checked || 'Yapılmadı');
+        renderDataAge(data);
 
     } catch (error) {
         console.error('Status fetch error:', error);
@@ -66,6 +67,33 @@ async function fetchStatus() {
 }
 
 // Fetch historical filings & purchases from API
+// "Son sorgu" reports the poller, which ticks every second regardless of
+// whether the data behind it moved. That is how seven weeks of missing
+// filings stayed invisible. This reports the DATA.
+function renderDataAge(data) {
+    const el = document.getElementById('dataAgeSubtext');
+    if (!el) return;
+
+    const date = data.latest_filing_date;
+    if (!date) {
+        el.textContent = 'Veri: yok';
+        el.className = 'last-check data-age very-stale';
+        return;
+    }
+
+    const days = data.data_age_days;
+    let suffix = '';
+    if (days === 0) suffix = ' (bugün)';
+    else if (days === 1) suffix = ' (dün)';
+    else if (days !== null && days !== undefined) suffix = ` (${days} gün önce)`;
+
+    el.textContent = `Veri: ${date}${suffix}`;
+    // MSTR files weekly, so a gap past ~10 days is a real problem rather
+    // than a quiet week.
+    el.className = 'last-check data-age' +
+        (days >= 10 ? ' very-stale' : (days >= 4 ? ' stale' : ''));
+}
+
 async function fetchHistory() {
     try {
         const response = await fetch('/api/history');

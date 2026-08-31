@@ -556,6 +556,27 @@ def mark_current_filings_processed(conn):
 
         # EDGAR filing dates are US Eastern; the container clock is UTC.
         cutoff = (now_et().date() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+        # And never mark a filing NEWER than the history we actually hold.
+        # This function exists to stop a fresh DB backfill-spamming the
+        # channel, but it was marking every 8-K in the index — including the
+        # weeks the seed does not cover. Those were then skipped forever as
+        # "not new", and no backfill could recover them because both backfills
+        # iterate purchase_history, which never got the row. Production froze
+        # at the seed's newest date, 2026-07-13, while the page kept showing a
+        # ticking "Son sorgu" above it.
+        try:
+            newest_row = cursor.execute(
+                "SELECT MAX(filing_date) FROM purchase_history").fetchone()[0]
+        except Exception:
+            # Marking must not depend on another table existing; the worst
+            # case is the old, wider cutoff.
+            newest_row = None
+        if newest_row and newest_row < cutoff:
+            cutoff = newest_row
+            print(f"Marking only filings up to {cutoff} — the newest row we hold. "
+                  f"Anything after it is left for the poller to parse.")
+
         count_marked = 0
         skipped_recent = []
         for idx in range(usable):
@@ -653,7 +674,13 @@ def _migrate_drop_false_sale_rows(conn):
 
     for row_id, date, holdings in removed:
         cursor.execute("DELETE FROM purchase_history WHERE id = ?", (row_id,))
-        print(f"Removed false-sale row id={row_id} ({date}, holdings={holdings}).")
+        # Also un-process the filing. Deleting only the history row left the
+        # accession in processed_filings, so the poller skipped it forever and
+        # the week became unrecoverable — a migration must not open a hole it
+        # cannot close.
+        cursor.execute("DELETE FROM processed_filings WHERE filing_date = ?", (date,))
+        print(f"Removed false-sale row id={row_id} ({date}, holdings={holdings}); "
+              f"the filing is unmarked so it can be re-parsed.")
     if not removed:
         print("No false-sale rows found.")
 
@@ -2220,6 +2247,85 @@ def refresh_dividends():
     print("Dividends: no usable XBRL tag returned data")
     return 0
 
+# The weekly 8-K carries the BTC and ATM tables and nothing about debt — I
+# checked every fixture for debt/notes/convertible/indebtedness and found
+# none. So the figure came from nowhere: "$6.7B" was seeded, then carried
+# forward filing after filing (the Groq prompt even instructs the model to
+# keep the previous value), which made the debt chart a flat wall by
+# construction. Take it from the same XBRL source the cash series uses.
+DEBT_TAG_CANDIDATES = [
+    "DebtLongtermAndShorttermCombinedAmount",
+    "LongTermDebtNoncurrent",
+    "LongTermDebt",
+    "ConvertibleNotesPayable",
+    "ConvertibleLongTermNotesPayable",
+]
+
+def _instant_series(entries):
+    """Latest value per period end for an instant-type XBRL concept.
+
+    Balance-sheet concepts are instants, not durations, so
+    _quarterly_duration_series (which keys on start+end) does not apply. A
+    period end appears in several filings as it is restated; the most
+    recently FILED wins.
+    """
+    by_end = {}
+    for e in entries:
+        end = e.get("end")
+        val = e.get("val")
+        if not end or val is None:
+            continue
+        prev = by_end.get(end)
+        if prev is None or (e.get("filed") or "") >= (prev.get("filed") or ""):
+            by_end[end] = e
+    return [{"end": k, "val": float(v["val"]), "form": v.get("form", ""),
+             "filed": v.get("filed", "")}
+            for k, v in sorted(by_end.items())]
+
+def refresh_total_debt():
+    """Upsert the quarterly total-debt series from SEC XBRL."""
+    for tag in DEBT_TAG_CANDIDATES:
+        data = fetch_xbrl_concept(tag)
+        entries = ((data or {}).get("units") or {}).get("USD") or []
+        series = _instant_series(entries)
+        if not series:
+            continue
+        try:
+            conn = get_db_connection()
+            for s in series:
+                conn.execute(
+                    """INSERT OR REPLACE INTO financial_metrics (metric, period_end, value, form, filed)
+                       VALUES ('total_debt', ?, ?, ?, ?)""",
+                    (s["end"], s["val"], s["form"], tag))
+            conn.commit()
+            conn.close()
+            print(f"Total debt: {len(series)} quarter(s) stored from {tag} "
+                  f"(latest: {series[-1]['end']} = ${series[-1]['val']:,.0f})")
+            return len(series)
+        except Exception as e:
+            print(f"Total debt DB update failed: {e}")
+            return 0
+    print("Total debt: no usable XBRL tag returned data")
+    return 0
+
+def latest_total_debt():
+    """(value_usd, period_end) from XBRL, or (None, None).
+
+    Callers must label the period_end: this is a QUARTERLY balance-sheet
+    figure sitting on a page of weekly numbers, and an unlabelled stale
+    figure is exactly how "$6.7B" went unquestioned for months.
+    """
+    try:
+        conn = get_db_connection()
+        row = conn.execute(
+            "SELECT value, period_end FROM financial_metrics "
+            "WHERE metric = 'total_debt' ORDER BY period_end DESC LIMIT 1").fetchone()
+        conn.close()
+        return (row["value"], row["period_end"]) if row else (None, None)
+    except Exception as e:
+        print(f"latest_total_debt error: {e}")
+        return (None, None)
+
 # ----------------- PREFERRED BASELINES (SEC 10-Q) -----------------
 
 # strategy.com's "Annual Dividends" (~$1,763M) is the FORWARD obligation:
@@ -2404,6 +2510,7 @@ def cash_refresh_loop():
         try:
             refresh_cash_reserves()
             refresh_dividends()
+            refresh_total_debt()
             refresh_preferred_baselines()
             sync_official_figures_from_env()
             invalidate_derived_cache()
@@ -3006,6 +3113,61 @@ def _next_quarter_end(period_end):
 
 ATM_SENTINEL_NO_TABLE = {"fmt": 4, "sold_any": False, "securities": [], "note": "no_atm_table"}
 ATM_SENTINEL_NO_DOC = {"fmt": 4, "sold_any": False, "securities": [], "note": "no_fetchable_doc"}
+
+RECONCILE_MAX = int(os.getenv("RECONCILE_MAX", "30"))
+
+def reconcile_missing_history(sleep_seconds=1.5):
+    """Re-parse filings that were marked processed but never recorded.
+
+    A fresh database used to mark every 8-K in the EDGAR index as processed
+    without parsing any of it, so the poller then skipped them forever as
+    "not new" — and neither existing backfill could recover them, because
+    both iterate purchase_history and the row was never created. Production
+    froze at the seed's newest date while the page kept showing a ticking
+    "Son sorgu" above it.
+
+    mark_current_filings_processed no longer opens that hole, but this
+    repairs the databases that already have it. Alerts are never sent: these
+    weeks are long past, and _record_without_alert exists for exactly this.
+    """
+    conn = get_db_connection()
+    try:
+        # Only weeks after the seed's own history: the seed rows are already
+        # recorded, and re-fetching them would be pointless traffic.
+        floor = conn.execute(
+            "SELECT MAX(filing_date) FROM purchase_history").fetchone()[0] or ""
+        seed_floor = max((row[0] for row in SEED_HISTORY), default="")
+        floor = min(floor, seed_floor) if floor and seed_floor else (floor or seed_floor)
+
+        missing = conn.execute(
+            "SELECT p.accession_number, p.filing_date, p.form, p.url "
+            "FROM processed_filings p "
+            "LEFT JOIN purchase_history h ON h.filing_date = p.filing_date "
+            "WHERE h.id IS NULL AND p.filing_date > ? AND p.url <> '' "
+            "ORDER BY p.filing_date",
+            (floor,)).fetchall()
+    finally:
+        conn.close()
+
+    if not missing:
+        return 0
+
+    print(f"Reconciling {len(missing)} filing(s) marked processed but absent "
+          f"from the history: {', '.join(r['filing_date'] for r in missing[:8])}"
+          f"{' …' if len(missing) > 8 else ''}")
+
+    repaired = 0
+    for row in missing[:RECONCILE_MAX]:
+        try:
+            _record_without_alert(row["accession_number"], row["filing_date"],
+                                  row["form"] or "8-K", row["url"])
+            repaired += 1
+        except Exception as e:
+            print(f"Reconcile of {row['filing_date']} failed: {e}")
+        time.sleep(sleep_seconds)
+
+    print(f"Reconcile complete: {repaired}/{len(missing)} week(s) recovered.")
+    return repaired
 
 def backfill_atm_history(sleep_seconds=1.5):
     """Re-read historical filings and fill missing per-security ATM data.
@@ -5137,9 +5299,50 @@ def get_bot_status():
         "last_checked": last_checked_time,
         "seconds_since_last_poll": (round(time.time() - _last_tick_time, 1)
                                     if _last_tick_time else None),
+        # "Son sorgu" tracks the POLLER, not the data. It ticked every second
+        # while the history sat frozen on 2026-07-13 for seven weeks — the one
+        # indicator on the page actively hid the problem. These describe the
+        # DATA.
+        **data_freshness(),
         "sources": source_health_snapshot(),
         "db_path": DB_PATH
     })
+
+def data_freshness():
+    """How old the numbers on the page actually are."""
+    out = {"latest_filing_date": None, "data_age_days": None,
+           "total_debt_asof": None, "polymarket_asof": None}
+    try:
+        conn = get_db_connection()
+    except Exception as e:
+        print(f"data_freshness error: {e}")
+        return out
+
+    # Each lookup is guarded on its own: one missing table must not blank the
+    # whole report. The point of this endpoint is to make staleness visible,
+    # so it failing quietly would defeat itself.
+    def one(sql, key):
+        try:
+            row = conn.execute(sql).fetchone()
+            out[key] = row[0] if row else None
+        except Exception:
+            pass
+
+    try:
+        one("SELECT MAX(filing_date) FROM purchase_history", "latest_filing_date")
+        one("SELECT MAX(period_end) FROM financial_metrics WHERE metric = 'total_debt'",
+            "total_debt_asof")
+        one("SELECT MAX(fetched_at) FROM polymarket_live", "polymarket_asof")
+    finally:
+        conn.close()
+
+    if out["latest_filing_date"]:
+        try:
+            latest = datetime.strptime(out["latest_filing_date"][:10], "%Y-%m-%d").date()
+            out["data_age_days"] = (now_et().date() - latest).days
+        except ValueError:
+            pass
+    return out
 
 @app.route('/health')
 def health_check():
@@ -5747,7 +5950,10 @@ if __name__ == '__main__':
         # fast window, and each half guarded so a failure in the first can no
         # longer silently skip the second.
         _wait_out_ultra_window("historical backfill")
-        for name, fn in (("ATM history", backfill_atm_history),
+        # Reconcile FIRST: both backfills below iterate purchase_history, so
+        # they cannot enrich a week whose row does not exist yet.
+        for name, fn in (("missing history", reconcile_missing_history),
+                         ("ATM history", backfill_atm_history),
                          ("USD reserves", backfill_usd_reserves)):
             try:
                 fn()
