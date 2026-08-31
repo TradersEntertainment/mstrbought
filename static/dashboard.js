@@ -827,45 +827,69 @@ async function fetchWhales() {
             .replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
         if (!d.enabled) {
-            tbody.innerHTML = '<tr><td colspan="3" class="loading-cell">Balina takibi kapalı (POLYMARKET_INSIDERS ayarlanmamış).</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="3" class="loading-cell">Polymarket takibi kapalı.</td></tr>';
             if (sum) sum.innerHTML = '';
             return;
         }
         if (!d.markets || !d.markets.length) {
-            tbody.innerHTML = '<tr><td colspan="3" class="loading-cell">Takip edilen cüzdanların açık MSTR pozisyonu yok.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="3" class="loading-cell">Açık MSTR marketi bulunamadı.</td></tr>';
             if (sum) sum.innerHTML = d.fetched_at ? `Son kontrol: ${d.fetched_at}` : '';
             return;
         }
 
-        const badge = (v) => {
+        const badge = (v, prefix) => {
             if (!v) return '<span class="badge-whale-none">yorum yok</span>';
-            const cls = (v === 'alacak' || v === 'satmayacak')
+            const cls = (v === 'alacak' || v === 'satmayacak' || v === 'tutacak')
                 ? 'badge-whale-buy' : 'badge-whale-sell';
-            return `<span class="${cls}">MSTR ${esc(v)}</span>`;
+            return `<span class="${cls}">${prefix || ''}MSTR ${esc(v)}</span>`;
         };
 
+        const pct = (v) => (v === null || v === undefined) ? null : `%${v.toFixed(0)}`;
+
+        let withPos = 0;
         tbody.innerHTML = d.markets.map(m => {
-            const who = m.positions.map(p =>
-                `<span class="atm-ticker">${esc(p.label)}</span> ${esc(p.outcome)} · ` +
-                `${p.size.toLocaleString('tr-TR', { maximumFractionDigits: 0 })} adet · ` +
-                formatUsd(p.usd)).join('<br>');
-            // implied_pct is null when the API did not send a price — show
-            // nothing rather than a confident 0%.
-            const odds = (m.implied_pct === null || m.implied_pct === undefined)
-                ? '-' : `%${m.implied_pct.toFixed(0)}`;
+            const positions = m.positions || [];
+            if (positions.length) withPos++;
+
+            const title = m.event_slug
+                ? `<a href="https://polymarket.com/event/${encodeURIComponent(m.event_slug)}"` +
+                  ` target="_blank" rel="noopener noreferrer">${esc(m.title)}</a>`
+                : esc(m.title);
+
+            // A market with no tracked position is still shown: the weekly
+            // "will MSTR announce a purchase" market often has none, and its
+            // odds are the signal there. Whale row when there is one, the
+            // market's own price when there is not.
+            let sub, odds, verdict;
+            if (positions.length) {
+                sub = positions.map(p =>
+                    `<span class="atm-ticker">${esc(p.label)}</span> ${esc(p.outcome)} · ` +
+                    `${p.size.toLocaleString('tr-TR', { maximumFractionDigits: 0 })} adet · ` +
+                    formatUsd(p.usd)).join('<br>');
+                // implied_pct is null when the API did not send a price — show
+                // nothing rather than a confident 0%.
+                odds = pct(m.implied_pct) || pct(m.market_pct) || '-';
+                verdict = badge(m.verdict);
+            } else {
+                sub = 'balina pozisyonu yok · sadece piyasa oranı';
+                const p = pct(m.market_pct);
+                odds = p ? `${p} evet` : '-';
+                verdict = badge(m.market_verdict, 'piyasa: ');
+            }
             return `
             <tr>
-                <td>${esc(m.title)}<span class="whale-sub">${who}</span></td>
+                <td>${title}<span class="whale-sub">${sub}</span></td>
                 <td>${odds}</td>
-                <td>${badge(m.verdict)}</td>
+                <td>${verdict}</td>
             </tr>`;
         }).join('');
 
         if (sum) {
-            sum.innerHTML = `${d.markets.length} market · son kontrol: ${esc(d.fetched_at || '-')}` +
-                '<br>Not: "Piyasa" sütunu balinanın tuttuğu tarafın o anki fiyatı, yani piyasanın ' +
-                'ima ettiği olasılık. Beklenti sütunu balinanın bahsinden çıkarılır — MSTR\'ın ' +
-                'kendi açıklaması değildir.';
+            sum.innerHTML = `${d.markets.length} market (${withPos} tanesinde balina pozisyonu var) · ` +
+                `son kontrol: ${esc(d.fetched_at || '-')}` +
+                '<br>Not: Balina pozisyonu olan satırlarda "Piyasa" sütunu balinanın tuttuğu ' +
+                'tarafın o anki fiyatı; pozisyonsuz satırlarda marketin "evet" oranıdır. ' +
+                'Beklenti sütunu bahisten/orandan çıkarılır — MSTR\'ın kendi açıklaması değildir.';
         }
     } catch (e) {
         console.error('Whale fetch error:', e);

@@ -248,6 +248,19 @@ POLYMARKET_PART_DELAY_S = float(os.getenv("POLYMARKET_PART_DELAY_S", "1.0"))
 POLYMARKET_REPORT_RESOLVED = _envbool("POLYMARKET_REPORT_RESOLVED")
 POLYMARKET_ULTRA_GATE = _envbool("POLYMARKET_ULTRA_GATE")
 POLYMARKET_LIVE_INTERVAL_S = float(os.getenv("POLYMARKET_LIVE_INTERVAL_S", "3600"))
+POLYMARKET_GAMMA_API = os.getenv("POLYMARKET_GAMMA_API", "https://gamma-api.polymarket.com").rstrip("/")
+# Search terms sent to Gamma's /public-search. The API matches these against
+# the question text; POLYMARKET_MARKET_RE below still decides what is kept, so
+# a term being too broad costs a request, never a wrong market.
+POLYMARKET_SEARCH_TERMS = [t.strip() for t in os.getenv(
+    "POLYMARKET_SEARCH_TERMS", "microstrategy,mstr,strategy bitcoin").split(",")
+    if t.strip()]
+POLYMARKET_SEARCH_LIMIT = int(os.getenv("POLYMARKET_SEARCH_LIMIT", "50"))
+POLYMARKET_MARKET_PAGES = int(os.getenv("POLYMARKET_MARKET_PAGES", "12"))
+POLYMARKET_MARKET_PAGE_SIZE = int(os.getenv("POLYMARKET_MARKET_PAGE_SIZE", "100"))
+# A market's implied probability moving this many points is news on its own,
+# even with no whale in it.
+POLYMARKET_ODDS_ALERT_PCT = float(os.getenv("POLYMARKET_ODDS_ALERT_PCT", "20"))
 # The company renamed MicroStrategy -> Strategy, so a market title may use
 # either. Two separate outages today came from matching a literal string, so
 # this starts wide and can be narrowed from the env once the real titles are
@@ -451,9 +464,62 @@ def init_db():
         redeemable    INTEGER NOT NULL DEFAULT 0,
         end_date      TEXT,
         fetched_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        -- size advances every hour so the website stays fresh; alerted_size
+        -- advances only after a movement has actually reached Telegram. One
+        -- table, two clocks: a failed send costs a repeated alert next hour,
+        -- never a lost one.
+        alerted_size  REAL,
         PRIMARY KEY (address, condition_id, asset)
     )
     """)
+    try:
+        cursor.execute("ALTER TABLE polymarket_live ADD COLUMN alerted_size REAL")
+    except sqlite3.OperationalError:
+        pass
+
+    # MSTR markets themselves, whether or not a tracked wallet is in them.
+    # The owner's example renews weekly (…-september-1-7-2026 becomes
+    # …-september-8-14-2026), so nothing here keys on a fixed slug.
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS polymarket_markets (
+        condition_id TEXT PRIMARY KEY,
+        slug         TEXT,
+        event_slug   TEXT,
+        question     TEXT,
+        outcomes     TEXT,
+        prices       TEXT,
+        end_date     TEXT,
+        closed       INTEGER NOT NULL DEFAULT 0,
+        volume       REAL,
+        yes_price    REAL,
+        alerted_price REAL,
+        fetched_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    try:
+        cursor.execute("ALTER TABLE polymarket_markets ADD COLUMN event_slug TEXT")
+    except sqlite3.OperationalError:
+        pass
+
+    # Which wallets have been synced at least once. A wallet's FIRST sync is
+    # not news: every bet it already held would otherwise be announced as a
+    # fresh movement the moment the address is added to the config. An empty
+    # snapshot cannot stand in for this — a whale who closes everything also
+    # has an empty snapshot, and their next bet IS news.
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS polymarket_seen (
+        address    TEXT PRIMARY KEY,
+        first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    # Wallets already carrying a snapshot have plainly been synced before;
+    # marking them keeps the upgrade from swallowing one cycle of movements.
+    try:
+        cursor.execute("INSERT OR IGNORE INTO polymarket_seen (address) "
+                       "SELECT DISTINCT address FROM polymarket_live")
+    except sqlite3.OperationalError:
+        pass
 
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS polymarket_digests (
@@ -896,7 +962,8 @@ def _sec_clear_backoff(source):
 # periodically, so "the atom feed is flaky" becomes a number and it is
 # visible whether submissions is quietly carrying detection on its own.
 SOURCE_REPORT_INTERVAL = float(os.getenv("SOURCE_REPORT_INTERVAL", "300"))
-_SOURCE_REPORT_ORDER = ("submissions", "atom", "efts", "polymarket")
+_SOURCE_REPORT_ORDER = ("submissions", "atom", "efts", "polymarket",
+                        "polymarket_markets")
 _source_stats = {}
 _source_stats_lock = threading.Lock()
 _source_report_time = 0.0
@@ -3667,6 +3734,10 @@ def parse_insider_addresses(raw):
 
 INSIDER_WALLETS = parse_insider_addresses(POLYMARKET_INSIDERS_RAW)
 POLYMARKET_ENABLED = bool(INSIDER_WALLETS)
+# The market catalogue needs no wallet at all — the whole point of it is the
+# market NOBODY tracked is holding. Tying it to POLYMARKET_INSIDERS would have
+# left the owner's weekly market invisible on a deployment with no wallet list.
+POLYMARKET_MARKETS_ENABLED = _envbool("POLYMARKET_MARKETS", "true")
 
 def _pm_num(row, *names, default=0.0):
     """First present key as a float, tolerating numeric strings."""
@@ -3914,27 +3985,49 @@ def store_position_snapshot(conn, address, rows):
 # Refreshed on its own hourly loop into its own table, so the daily digest's
 # send-then-commit invariant is never touched.
 
-_BUY_RE = re.compile(r'\b(buy|buys|purchase|purchases|acquire|acquires|'
-                     r'add|adds|accumulate)\b', re.I)
-_SELL_RE = re.compile(r'\b(sell|sells|sold|dispose|disposes|liquidate|'
-                      r'liquidates|offload)\b', re.I)
+# Stems, not exact words. The first version listed sell/sells/sold and
+# missed "selling" — which is precisely how Polymarket words these ("Will
+# Microstrategy announce SELLING any Bitcoin August 25-31?"), so the live
+# panel read a plain sell question as unclassifiable.
+_BUY_RE = re.compile(r'\b(buy|buys|buying|bought|purchas(?:e|es|ed|ing)|'
+                     r'acquir(?:e|es|ed|ing)|add(?:s|ed|ing)?|'
+                     r'accumulat(?:e|es|ed|ing))\b', re.I)
+_SELL_RE = re.compile(r'\b(sell|sells|selling|sold|dispos(?:e|es|ed|ing)|'
+                      r'liquidat(?:e|es|ed|ing)|offload(?:s|ed|ing)?|'
+                      r'divest(?:s|ed|ing)?)\b', re.I)
+# Threshold questions — "announce HOLDING 1M+ BTC by December 31". Neither a
+# buy nor a sell, but leaving them blank throws away the plainest reading
+# there is: will they be holding that much, or not.
+_HOLD_RE = re.compile(r'\b(hold|holds|holding|reach(?:es|ed|ing)?|'
+                      r'hit(?:s|ting)?|surpass(?:es|ed|ing)?|'
+                      r'exceed(?:s|ed|ing)?)\b', re.I)
+# The verb alone is not enough. "Will MicroStrategy be ADDED to the S&P
+# 500?" matched the buy pattern and read as "MSTR alacak" — the same
+# invented-reading failure as this morning's false sale. Only questions that
+# are actually about bitcoin get interpreted at all.
+# "liquidate part of its TREASURY" is a bitcoin question in this context even
+# though it never says bitcoin — the market list is already MSTR-only, and
+# MSTR's treasury is what this is all about. The S&P 500 question still has
+# none of these words, which is the case this guard exists for.
+_BTC_RE = re.compile(r'\b(bitcoin|btc|treasury|holdings|stack)\b', re.I)
 
 def classify_mstr_market(title):
-    """Is this market asking whether MSTR will buy, or sell? Or neither.
+    """Is this market asking whether MSTR will buy, sell, or hold a level?
 
-    Returns 'buy', 'sell' or None. None matters: "Will MicroStrategy be
-    added to the S&P 500?" is neither, and after today's false sale we do
-    not invent a reading we cannot derive — such a market is shown with its
-    odds and no verdict.
+    Returns 'buy', 'sell', 'hold' or None. None is a real answer: a question
+    we cannot classify is shown with its odds and no verdict rather than
+    given one we cannot derive.
     """
-    if not title:
+    if not title or not _BTC_RE.search(title):
         return None
     buy, sell = bool(_BUY_RE.search(title)), bool(_SELL_RE.search(title))
     if buy and not sell:
         return "buy"
     if sell and not buy:
         return "sell"
-    return None
+    if buy and sell:
+        return None          # "buy or sell this month?" — genuinely ambiguous
+    return "hold" if _HOLD_RE.search(title) else None
 
 _YES_RE = re.compile(r'^(yes|evet)$', re.I)
 
@@ -3952,45 +4045,440 @@ def whale_verdict(title, outcome):
     yes = bool(_YES_RE.match((outcome or "").strip()))
     if kind == "buy":
         return "alacak" if yes else "almayacak"
+    if kind == "hold":
+        return "tutacak" if yes else "tutmayacak"
     return "satacak" if yes else "satmayacak"
 
-def store_live_positions(conn, address, rows):
+# Polymarket appends a short disambiguator to duplicated market titles:
+# "...by December 31, 2026?-bV81". It is noise on the page and in the alert.
+_TITLE_SUFFIX_RE = re.compile(r'\?-[A-Za-z0-9]{2,8}\s*$')
+
+def clean_market_title(title):
+    return _TITLE_SUFFIX_RE.sub('?', (title or '').strip())
+
+def _gamma_get(path, params, deadline):
+    if time.time() >= deadline:
+        return None
+    try:
+        return polymarket_session.get(
+            f"{POLYMARKET_GAMMA_API}{path}", params=params,
+            timeout=(POLYMARKET_CONNECT_TIMEOUT, POLYMARKET_READ_TIMEOUT))
+    except Exception:
+        return None
+
+def _gamma_prices(market):
+    """outcomes / outcomePrices, which Gamma sends as JSON-encoded STRINGS.
+
+    Polymarket's own client json.loads() them (agents/polymarket/gamma.py);
+    treating them as lists gives an empty price silently. Both shapes are
+    accepted here because a string is what the API documents today and a
+    plain list is what it would take to break this.
+    """
+    def _list(v):
+        if isinstance(v, list):
+            return v
+        if isinstance(v, str):
+            try:
+                out = json.loads(v)
+                return out if isinstance(out, list) else []
+            except Exception:
+                return []
+        return []
+    outcomes = [str(o) for o in _list(market.get("outcomes"))]
+    prices = []
+    for p in _list(market.get("outcomePrices")):
+        try:
+            prices.append(float(p))
+        except (TypeError, ValueError):
+            prices.append(None)
+    return outcomes, prices
+
+def _yes_price(outcomes, prices):
+    """The Yes leg's price, i.e. the market's implied probability."""
+    for name, price in zip(outcomes, prices):
+        if _YES_RE.match((name or "").strip()):
+            return price
+    return prices[0] if prices else None
+
+def _gamma_market_row(m, fallback_title="", event_slug=""):
+    """One Gamma market dict → the row shape this bot stores, or None."""
+    question = clean_market_title(_pm_str(m, "question", "title", "groupItemTitle")
+                                  or fallback_title)
+    condition_id = _pm_str(m, "conditionId", "condition_id")
+    if not question or not condition_id:
+        return None
+    if not POLYMARKET_MARKET_RE.search(question):
+        return None
+    outcomes, prices = _gamma_prices(m)
+    slug = _pm_str(m, "slug")
+    return {
+        "condition_id": condition_id,
+        "slug": slug,
+        # The public URL is /event/<eventSlug>; a market slug there 404s. Fall
+        # back to the market slug only because for a binary market the two are
+        # usually the same, and a wrong link beats no link on the panel.
+        "event_slug": _pm_str(m, "eventSlug", "event_slug") or event_slug or slug,
+        "question": question,
+        "outcomes": outcomes,
+        "prices": prices,
+        "yes_price": _yes_price(outcomes, prices),
+        "end_date": _pm_str(m, "endDate", "endDateIso", "end_date"),
+        "closed": 1 if m.get("closed") else 0,
+        "volume": _pm_num(m, "volume", "volumeNum", default=0.0),
+    }
+
+def _gamma_events_markets(payload):
+    """(market, event_title, event_slug) triples from a /public-search response.
+
+    Search answers with events, not markets, and an event carries its markets
+    inline, so one call yields title, slug and prices together. Three envelope
+    shapes exist across these resources (bare array, {data: [...]},
+    {events: [...]}), so unwrap rather than assume.
+    """
+    events = []
+    if isinstance(payload, dict):
+        for key in ("events", "data", "results"):
+            inner = payload.get(key)
+            if isinstance(inner, list):
+                events = [e for e in inner if isinstance(e, dict)]
+                break
+    elif isinstance(payload, list):
+        events = [e for e in payload if isinstance(e, dict)]
+
+    out = []
+    for ev in events:
+        title = str(ev.get("title") or ev.get("question") or "")
+        slug = str(ev.get("slug") or "")
+        markets = ev.get("markets")
+        if isinstance(markets, list) and markets:
+            out.extend((m, title, slug) for m in markets if isinstance(m, dict))
+        elif ev.get("conditionId") or ev.get("condition_id"):
+            out.append((ev, title, slug))   # already market-shaped
+    return out
+
+_gamma_shapes_logged = set()
+
+def _log_gamma_shape(path, sample):
+    """Log the first response body per endpoint, once.
+
+    polymarket.com is unreachable from the development environment, so the
+    response shape is only ever confirmed in production. This is that
+    confirmation.
+    """
+    if path in _gamma_shapes_logged or not sample:
+        return
+    _gamma_shapes_logged.add(path)
+    try:
+        body = json.dumps(sample)[:600]
+    except Exception:
+        body = repr(sample)[:600]
+    print(f"GAMMA {path} first-response shape (one-time log): {body}")
+
+def _search_mstr_markets(deadline):
+    """Discovery through Gamma's search endpoint — cheap and rename-proof.
+
+    Nothing here keys on a slug. The owner's market renews weekly
+    (…-september-1-7 → …-september-8-14), the question template has already
+    changed once ("purchase-bitcoin" → "announce-a-bitcoin-purchase"), and
+    markets carry a pastSlugs field, meaning Polymarket also rewrites slugs
+    in place. The API matches the query against the question text; the title
+    regex still decides what is kept.
+    """
+    found = {}
+    for term in POLYMARKET_SEARCH_TERMS:
+        resp = _gamma_get("/public-search", {
+            "q": term,
+            "events_status": "active",
+            "limit_per_type": POLYMARKET_SEARCH_LIMIT,
+        }, deadline)
+        if resp is None or resp.status_code != 200:
+            _record_source('polymarket_markets', False,
+                           f"HTTP {resp.status_code}" if resp else "connection")
+            continue
+        try:
+            payload = resp.json()
+        except Exception as e:
+            _record_source('polymarket_markets', False, e)
+            continue
+        _record_source('polymarket_markets', True)
+        _log_gamma_shape("/public-search", payload)
+        for market, event_title, event_slug in _gamma_events_markets(payload):
+            row = _gamma_market_row(market, event_title, event_slug)
+            if row:
+                found[row["condition_id"]] = row
+    return list(found.values())
+
+def _page_mstr_markets(deadline):
+    """Fallback discovery: page the open markets and filter on the title.
+
+    Slower and incomplete by construction — Polymarket has far more open
+    markets than POLYMARKET_MARKET_PAGES covers — but it uses the one
+    endpoint Polymarket's own client uses, so it holds if search moves.
+    """
+    found, scanned = {}, 0
+    for page in range(max(1, POLYMARKET_MARKET_PAGES)):
+        resp = _gamma_get("/markets", {
+            "active": "true", "closed": "false", "archived": "false",
+            "limit": POLYMARKET_MARKET_PAGE_SIZE,
+            "offset": page * POLYMARKET_MARKET_PAGE_SIZE,
+        }, deadline)
+        if resp is None or resp.status_code != 200:
+            _record_source('polymarket_markets', False,
+                           f"HTTP {resp.status_code}" if resp else "connection")
+            break
+        try:
+            batch = _as_rows(resp.json())
+        except Exception as e:
+            _record_source('polymarket_markets', False, e)
+            break
+        _record_source('polymarket_markets', True)
+        if batch:
+            _log_gamma_shape("/markets", batch[0])
+
+        scanned += len(batch)
+        for m in batch:
+            row = _gamma_market_row(m)
+            if row:
+                found[row["condition_id"]] = row
+        if len(batch) < POLYMARKET_MARKET_PAGE_SIZE:
+            break
+    if scanned:
+        print(f"Gamma: paged {scanned} open market(s), "
+              f"{len(found)} matched MSTR.")
+    return list(found.values())
+
+def fetch_mstr_markets():
+    """Every open MSTR market on Polymarket, whoever is or isn't betting.
+
+    This is what lets the bot see a market the whales have no position in —
+    the wallet endpoint only ever reports markets someone already holds.
+    """
+    deadline = time.time() + POLYMARKET_BUDGET_S
+    found = _search_mstr_markets(deadline)
+    if found:
+        print(f"Gamma: {len(found)} MSTR market(s) via search.")
+        return found
+    # An empty search result is not proof there is no market: it is an
+    # endpoint that could not be verified from the development environment.
+    # Fall through rather than silently reporting nothing.
+    return _page_mstr_markets(deadline)
+
+def refresh_mstr_markets():
+    """Store the MSTR market list and alert on a big odds move."""
+    markets = fetch_mstr_markets()
+    if not markets:
+        return 0
+
+    conn = get_db_connection()
+    moved = []
+    try:
+        prev = {r["condition_id"]: dict(r) for r in conn.execute(
+            "SELECT condition_id, question, yes_price, alerted_price "
+            "FROM polymarket_markets").fetchall()}
+        for m in markets:
+            old = prev.get(m["condition_id"])
+            # Measured against the last ALERTED price, not the last seen one,
+            # so a drift of 5 points an hour still reports once it adds up.
+            base = (old or {}).get("alerted_price")
+            if base is None:
+                base = (old or {}).get("yes_price")
+            if (base is not None and m["yes_price"] is not None
+                    and abs(m["yes_price"] - base) * 100 >= POLYMARKET_ODDS_ALERT_PCT):
+                moved.append((m, base))
+            conn.execute(
+                "INSERT INTO polymarket_markets (condition_id, slug, event_slug, "
+                " question, outcomes, prices, end_date, closed, volume, "
+                " yes_price, alerted_price, fetched_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) "
+                "ON CONFLICT(condition_id) DO UPDATE SET "
+                " slug=excluded.slug, event_slug=excluded.event_slug, "
+                " question=excluded.question, "
+                " outcomes=excluded.outcomes, prices=excluded.prices, "
+                " end_date=excluded.end_date, closed=excluded.closed, "
+                " volume=excluded.volume, yes_price=excluded.yes_price, "
+                " fetched_at=CURRENT_TIMESTAMP",
+                (m["condition_id"], m["slug"], m["event_slug"], m["question"],
+                 json.dumps(m["outcomes"]), json.dumps(m["prices"]),
+                 m["end_date"], m["closed"], m["volume"], m["yes_price"],
+                 m["yes_price"] if not old else None))
+        conn.commit()
+    finally:
+        conn.close()
+
+    if moved:
+        announce_odds_moves(moved)
+    return len(markets)
+
+def announce_odds_moves(moved):
+    blocks = []
+    for m, base in moved:
+        direction = "🔼" if m["yes_price"] > base else "🔽"
+        line = (f"{direction} **{_md_strip(m['question'])}**\n"
+                f"   %{base*100:.0f} → **%{m['yes_price']*100:.0f}**")
+        verdict = whale_verdict(m["question"], "Yes")
+        if verdict:
+            line += f"\n   piyasa **MSTR {verdict}** tarafına kaydı"
+        blocks.append(line)
+
+    parts = split_telegram_blocks("📈 **Polymarket oran hareketi**", blocks,
+                                  "Piyasanın ima ettiği olasılık, kesinlik değil.")
+    if not send_telegram_digest(parts):
+        print("Odds-move alert failed to send; it will be retried next refresh.")
+        return
+    conn = get_db_connection()
+    try:
+        for m, _base in moved:
+            conn.execute("UPDATE polymarket_markets SET alerted_price = ? "
+                         "WHERE condition_id = ?",
+                         (m["yes_price"], m["condition_id"]))
+        conn.commit()
+    finally:
+        conn.close()
+
+def load_live_snapshot(conn, address):
+    """{(condition_id, asset): row} from polymarket_live."""
+    cur = conn.execute(
+        "SELECT condition_id, asset, outcome, title, event_slug, size, "
+        "avg_price, cur_price, redeemable, end_date, alerted_size "
+        "FROM polymarket_live WHERE address = ?", (address,))
+    return {(r["condition_id"], r["asset"]): dict(r) for r in cur.fetchall()}
+
+def store_live_positions(conn, address, rows, prev=None):
+    """Replace one wallet's live snapshot, carrying alerted_size forward.
+
+    alerted_size is what movements are measured against, so it must survive
+    the hourly overwrite. A position seen for the first time is seeded at its
+    current size: a wallet appearing in the config for the first time should
+    not produce an alert for every open bet it already had.
+    """
+    prev = prev or {}
     conn.execute("DELETE FROM polymarket_live WHERE address = ?", (address,))
     conn.executemany(
         "INSERT OR REPLACE INTO polymarket_live "
         "(address, condition_id, asset, outcome, title, event_slug, size, "
-        " avg_price, cur_price, redeemable, end_date) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        " avg_price, cur_price, redeemable, end_date, alerted_size) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         [(address, r["condition_id"], r["asset"], r["outcome"], r["title"],
           r["event_slug"], r["size"], r["avg_price"], r["cur_price"],
-          r["redeemable"], r["end_date"]) for r in rows])
+          r["redeemable"], r["end_date"],
+          (prev.get((r["condition_id"], r["asset"])) or {}).get("alerted_size",
+                                                               r["size"]))
+         for r in rows])
 
 def refresh_polymarket_live():
-    """Refresh the website's whale snapshot. Posts nothing, and never writes
-    polymarket_positions."""
+    """Refresh the website's whale snapshot and alert on MSTR movements.
+
+    Never writes polymarket_positions — that is the daily digest's diff
+    baseline and may only be written after a successful digest send.
+    """
     if not POLYMARKET_ENABLED:
         return 0
     deadline = time.time() + POLYMARKET_BUDGET_S
     stored = 0
-    for address, _label in INSIDER_WALLETS:
-        rows, _truncated = fetch_polymarket_positions(address, deadline)
+    for address, label in INSIDER_WALLETS:
+        moves = []
+        rows, truncated = fetch_polymarket_positions(address, deadline)
         if rows is None:
             continue
+
         conn = get_db_connection()
         try:
-            store_live_positions(conn, address, rows)
+            prev = load_live_snapshot(conn, address)
+
+            # HTTP 200 with an empty list is what a well-formed but WRONG
+            # address returns, and what an edge failure can return. Storing it
+            # wiped the whole panel and — now that movements are alerted —
+            # would fire a "closed" notice for every open position. The digest
+            # path has always guarded this; the live path did not.
+            if prev and not rows:
+                print(f"Polymarket live: empty response for {label}, keeping "
+                      f"the previous snapshot.")
+                continue
+
+            # store_live_positions seeds alerted_size for a position it has
+            # not seen, but the diff runs BEFORE the store — on a first sync
+            # prev is empty and every open bet reads as new. The marker, not
+            # the emptiness of prev, is what says "first sync".
+            first_sync = not conn.execute(
+                "SELECT 1 FROM polymarket_seen WHERE address = ?",
+                (address,)).fetchone()
+            moves = ([] if first_sync
+                     else whale_movements(prev, rows, truncated=truncated))
+            store_live_positions(conn, address, rows, prev=prev)
+            conn.execute("INSERT OR IGNORE INTO polymarket_seen (address) "
+                         "VALUES (?)", (address,))
             conn.commit()
+            if first_sync:
+                print(f"Polymarket live: first sync for {label}, "
+                      f"{len(rows)} position(s) seeded without alerts.")
             stored += 1
         except Exception as e:
             print(f"Polymarket live store failed for {address}: {e}")
+            continue
         finally:
             conn.close()
+
+        if moves:
+            announce_whale_movements(address, label, moves)
     return stored
+
+def whale_movements(prev, rows, truncated=False):
+    """MSTR-market movements measured against what we last ALERTED on.
+
+    Not against the previous hour: a movement whose alert failed to send must
+    still be reported next time. diff_positions is reused verbatim — it is a
+    pure function over two snapshot dicts — with the baseline swapped for the
+    alerted sizes.
+    """
+    baseline = {}
+    for key, row in prev.items():
+        alerted = row.get("alerted_size")
+        baseline[key] = dict(row, size=(row["size"] if alerted is None else alerted))
+    cur = {(r["condition_id"], r["asset"]): r for r in rows}
+    return [m for m in diff_positions(baseline, cur, truncated=truncated)
+            if POLYMARKET_MARKET_RE.search(m.get("title") or "")]
+
+def announce_whale_movements(address, label, moves):
+    """Post the movements, then mark them alerted — in that order."""
+    short = f"{address[:6]}…{address[-4:]}"
+    header = f"🐋 **Balina hareketi — {_md_strip(label)}** (`{short}`)"
+    blocks = []
+    for m in moves:
+        line = format_movement(dict(m, title=clean_market_title(m["title"])))
+        verdict = whale_verdict(m["title"], m["outcome"])
+        if verdict:
+            line += f"\n   → balinaya göre **MSTR {verdict}**"
+        blocks.append(line)
+
+    parts = split_telegram_blocks(
+        header, blocks,
+        "Bu bir bahis, şirket açıklaması değil.")
+    if not send_telegram_digest(parts):
+        print(f"Whale movement alert for {label} failed to send; "
+              f"it will be retried next refresh.")
+        return
+
+    conn = get_db_connection()
+    try:
+        conn.execute("UPDATE polymarket_live SET alerted_size = size "
+                     "WHERE address = ?", (address,))
+        conn.commit()
+    finally:
+        conn.close()
 
 def polymarket_live_loop():
     while running:
         try:
-            _wait_out_ultra_window("Polymarket live refresh")
+            # No ultra-window gate. _wait_out_ultra_window exists for loops
+            # that parse multi-MB documents with BeautifulSoup and hold the
+            # GIL; this one fetches one small JSON per wallet on its own
+            # connection pool. Gating it silenced the whale signal during
+            # exactly the two hours before a filing, when it is worth most.
+            if POLYMARKET_MARKETS_ENABLED:
+                try:
+                    refresh_mstr_markets()
+                except Exception as e:
+                    print(f"MSTR market refresh failed: {e}")
             n = refresh_polymarket_live()
             if n:
                 print(f"Polymarket live snapshot refreshed for {n} wallet(s).")
@@ -3998,26 +4486,81 @@ def polymarket_live_loop():
             print(f"Polymarket live loop error: {e}")
         time.sleep(POLYMARKET_LIVE_INTERVAL_S)
 
-def build_whale_expectations():
-    """Group the live snapshot into MSTR markets with a reading each."""
-    labels = dict(INSIDER_WALLETS)
-    out = {"enabled": POLYMARKET_ENABLED, "fetched_at": None, "markets": []}
-    if not POLYMARKET_ENABLED:
-        return out
+def load_market_catalogue():
+    """Open MSTR markets from the Gamma catalogue, position or not.
 
-    conn = get_db_connection()
+    Guarded separately from the live snapshot: the catalogue is the newer of
+    the two tables, and a failure here must degrade the panel to whale-only
+    rather than empty it.
+    """
+    try:
+        conn = get_db_connection()
+    except Exception as e:
+        print(f"load_market_catalogue error: {e}")
+        return []
     try:
         rows = conn.execute(
-            "SELECT address, condition_id, outcome, title, event_slug, size, "
-            "avg_price, cur_price, redeemable, end_date, fetched_at "
-            "FROM polymarket_live").fetchall()
-        stamp = conn.execute("SELECT MAX(fetched_at) FROM polymarket_live").fetchone()
-        out["fetched_at"] = stamp[0] if stamp else None
+            "SELECT condition_id, slug, event_slug, question, end_date, "
+            "closed, volume, yes_price FROM polymarket_markets "
+            "WHERE closed = 0").fetchall()
     except Exception as e:
-        print(f"build_whale_expectations error: {e}")
-        return out
+        print(f"load_market_catalogue error: {e}")
+        return []
     finally:
         conn.close()
+    return [dict(r) for r in rows
+            if POLYMARKET_MARKET_RE.search(r["question"] or "")]
+
+def _market_catalogue_stamp():
+    """When the market list was last refreshed.
+
+    Stands in for the whale timestamp on a deployment with no wallet list, so
+    "son kontrol" on the panel is never blank while the page has live data.
+    """
+    try:
+        conn = get_db_connection()
+    except Exception:
+        return None
+    try:
+        row = conn.execute("SELECT MAX(fetched_at) FROM polymarket_markets").fetchone()
+        return row[0] if row else None
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+def build_whale_expectations():
+    """MSTR markets with a reading each: whale positions plus the catalogue.
+
+    The two halves are independent. Whale rows need POLYMARKET_INSIDERS; the
+    market list does not, because its whole purpose is the market nobody in
+    that list is holding.
+    """
+    labels = dict(INSIDER_WALLETS)
+    out = {"enabled": POLYMARKET_ENABLED or POLYMARKET_MARKETS_ENABLED,
+           "fetched_at": None, "markets": []}
+    if not out["enabled"]:
+        return out
+
+    rows = []
+    if POLYMARKET_ENABLED:
+        conn = get_db_connection()
+        try:
+            rows = conn.execute(
+                "SELECT address, condition_id, outcome, title, event_slug, size, "
+                "avg_price, cur_price, redeemable, end_date, fetched_at "
+                "FROM polymarket_live").fetchall()
+            stamp = conn.execute(
+                "SELECT MAX(fetched_at) FROM polymarket_live").fetchone()
+            out["fetched_at"] = stamp[0] if stamp else None
+        except Exception as e:
+            print(f"build_whale_expectations error: {e}")
+        finally:
+            conn.close()
+
+    catalogue = load_market_catalogue() if POLYMARKET_MARKETS_ENABLED else []
+    if not out["fetched_at"] and catalogue:
+        out["fetched_at"] = _market_catalogue_stamp()
 
     markets = {}
     for r in rows:
@@ -4061,7 +4604,35 @@ def build_whale_expectations():
         m["implied_pct"] = lead["implied_pct"]
         m["positions"].sort(key=lambda p: p["usd"], reverse=True)
 
-    out["markets"] = sorted(markets.values(), key=lambda m: m["usd"], reverse=True)
+    # A market nobody in the wallet list holds is still worth watching — the
+    # owner's weekly "will MSTR announce a purchase" market had no position in
+    # it at all. The wallet endpoint can never surface those, so they come
+    # from the market catalogue and are merged in on condition_id.
+    for cat in catalogue:
+        m = markets.get(cat["condition_id"])
+        if m is None:
+            m = markets.setdefault(cat["condition_id"], {
+                "title": cat["question"], "event_slug": cat["event_slug"] or "",
+                "end_date": cat["end_date"] or "", "positions": [], "usd": 0.0,
+                "verdict": None, "implied_pct": None})
+        m["market_pct"] = (round(cat["yes_price"] * 100, 1)
+                           if cat["yes_price"] is not None else None)
+        m["volume"] = cat["volume"] or 0.0
+        if not m.get("event_slug"):
+            m["event_slug"] = cat["event_slug"] or ""
+        if not m.get("end_date"):
+            m["end_date"] = cat["end_date"] or ""
+        # What the ODDS say, read the same literal way a whale position is:
+        # above 50 the market is betting Yes, below it No. Exactly 50 is a
+        # coin flip and gets no reading.
+        m["market_verdict"] = None
+        if m["market_pct"] is not None and m["market_pct"] != 50:
+            side = "Yes" if m["market_pct"] > 50 else "No"
+            m["market_verdict"] = whale_verdict(m["title"], side)
+
+    out["markets"] = sorted(
+        markets.values(),
+        key=lambda m: (m["usd"], m.get("volume") or 0.0), reverse=True)
     return out
 
 # ----------------- POLYMARKET DIGEST RENDERING -----------------
@@ -5964,6 +6535,7 @@ if bot:
             "/check - Hemen şimdi zorla SEC EDGAR kontrolü yapar.\n"
             "/insider - Polymarket içeriden takip özetini şimdi kanala gönderir.\n"
             "/insider_test - Özeti kanala göndermeden sadece size gösterir.\n"
+            "/markets_test - Polymarket'te bulunan MSTR marketlerini listeler.\n"
             "/test_integration - Son BTC alım raporunu (22 Haziran) okuyup analiz testi yapar.\n"
             "/status - Botun çalışma durumunu ve anlık modunu gösterir.",
             parse_mode="Markdown"
@@ -6028,6 +6600,45 @@ if bot:
                 bot.reply_to(message,
                              f"Yeni hareket yok. Durum: {res['status']}. "
                              f"{'; '.join(res.get('errors') or []) or '-'}")
+        threading.Thread(target=_run, daemon=True).start()
+
+    @bot.message_handler(commands=['markets_test'])
+    def markets_dry_run_telegram(message):
+        """Report what the Gamma catalogue actually returns, right now.
+
+        gamma-api.polymarket.com could not be reached from the machine this
+        was written on, so the response shape is only ever confirmed in
+        production. This is that check, without waiting for the hourly loop.
+        """
+        if not POLYMARKET_MARKETS_ENABLED:
+            bot.reply_to(message, "Market takibi kapalı (POLYMARKET_MARKETS=false).")
+            return
+
+        def _run():
+            try:
+                markets = fetch_mstr_markets()
+            except Exception as e:
+                bot.reply_to(message, f"Gamma sorgusu hata verdi: {e}")
+                return
+            if not markets:
+                bot.reply_to(message,
+                             "Gamma'dan MSTR marketi dönmedi. Railway logunda "
+                             "\"GAMMA ... first-response shape\" satırına ve "
+                             "kaynak sağlığındaki polymarket_markets sayacına "
+                             "bakın.")
+                return
+            lines = []
+            for m in markets[:20]:
+                pct = ("%.0f%%" % (m["yes_price"] * 100)
+                       if m["yes_price"] is not None else "?")
+                verdict = whale_verdict(m["question"], "Yes") or "-"
+                lines.append(f"• {_md_strip(m['question'])}\n"
+                             f"   evet {pct} · okuma: {verdict}")
+            parts = split_telegram_blocks(
+                f"🔎 **Gamma: {len(markets)} MSTR marketi**", lines,
+                "Kuru çalıştırma — kanala gönderilmedi.")
+            for part in parts:
+                bot.reply_to(message, part, parse_mode="Markdown")
         threading.Thread(target=_run, daemon=True).start()
 
     @bot.message_handler(commands=['test_integration'])
@@ -6167,9 +6778,11 @@ if __name__ == '__main__':
     else:
         print("Polymarket insider digest disabled (POLYMARKET_INSIDERS not set).")
 
-    if POLYMARKET_ENABLED:
+    if POLYMARKET_ENABLED or POLYMARKET_MARKETS_ENABLED:
         pm_live_thread = threading.Thread(target=polymarket_live_loop, daemon=True)
         pm_live_thread.start()
+    else:
+        print("Polymarket panel disabled (no wallets and POLYMARKET_MARKETS=false).")
 
     # Run Polling Loop in main thread
     try:
