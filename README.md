@@ -14,6 +14,8 @@ Bu Telegram botu, MicroStrategy (Strategy Inc., CIK `0001050446`) şirketinin SE
 - 💾 **Kalıcı SQLite Veritabanı**: Bildirim geçmişini ve alım verilerini kaydeder (Railway Volumes ile uyumludur).
 - 💬 **Telegram Bot Komutları**:
   - `/data` veya `/history` - En son portföy özetini ve son 6 alımın geçmişini gösterir.
+  - `/insider` - Polymarket içeriden takip özetini şimdi kanala gönderir.
+  - `/insider_test` - Özeti kanala göndermeden sadece size gösterir (canlı doğrulama için).
   - `/status` - Botun aktif durumunu, anlık çalışma modunu (Normal/High-Speed) ve zaman damgalarını gösterir.
 
 ---
@@ -72,6 +74,10 @@ Railway paneline gidip aşağıdaki çevre değişkenlerini ekleyin:
 | `ULTRA_WINDOW_ET` | `07:30-09:30` *(ET, opsiyonel)* |
 | `FAST_WINDOW_ET` | `06:00-18:00` *(ET, opsiyonel)* |
 | `TELEGRAM_LINK_PREVIEW` | `false` *(önizleme açmak gecikme ekler)* |
+| `POLYMARKET_INSIDERS` | *(boş)* — takip edilecek cüzdanlar; boşsa özellik kapalı |
+| `POLYMARKET_DIGEST_AT_TRT` | `14:00` *(TRT, hafta içi)* |
+| `POLYMARKET_MIN_USD` | `100` *(bu tutarın altındaki hareketler gösterilmez)* |
+| `POLYMARKET_MIN_DELTA_PCT` | `5` *(pozisyonun %5'inden küçük değişim gürültü sayılır)* |
 
 > ⚠️ Bu tablonun eski hali `POLL_INTERVAL_CRITICAL=2` diyordu; kodun varsayılanı ise
 > `0.25` idi. README'yi izleyerek kurulan bir Railway servisi kritik pencerede
@@ -88,3 +94,37 @@ bir konteynerde polling döngüsü tamamen durur.
 
 ### 4. Dağıtım (Deploy)
 Bot, dizinde yer alan `Dockerfile` sayesinde Railway tarafından otomatik olarak Docker imajı olarak oluşturulup çalıştırılacaktır. Projeyi Railway'e bağlamanız yeterlidir.
+
+---
+
+## Polymarket İçeriden Takip
+
+Belirlediğiniz Polymarket cüzdanlarının **yeni** bahis hareketlerini hafta içi
+her gün 14:00 TRT'de kanala gönderir: açılan, kapanan ve büyütülen/küçültülen
+pozisyonlar. Tam pozisyon dökümü değil, sadece son özetten bu yana değişenler.
+
+Cüzdanları `POLYMARKET_INSIDERS` ile verirsiniz; profil linkini olduğu gibi
+yapıştırabilirsiniz:
+
+```
+POLYMARKET_INSIDERS=Balina=https://polymarket.com/profile/0xa0c3...?via=betmoar
+```
+
+### Bilinmesi gerekenler
+
+- **Uç noktalar canlıda doğrulanmadı.** `data-api.polymarket.com` bu kodun
+  yazıldığı ortamdan erişilemiyordu. Alan adları belgelerden alındı, kod her
+  ihtimale karşı savunmacı yazıldı ve ilk cevabın şeklini bir kez loglar.
+  Deploy sonrası **`/insider_test`** ile doğrulayın — bu komut özeti kanala
+  göndermeden sadece size gösterir.
+- **403 görmek olağan.** Polymarket'in önünde bot koruması var ve Railway bir
+  veri merkezi IP'si. O gün özet atlanır, saklanan pozisyon anlık görüntüsü
+  korunur, ertesi gün iki günlük hareket olarak raporlanır — veri kaybolmaz.
+- **Önce gönderilir, sonra kaydedilir.** Anlık görüntü ancak mesaj kanala
+  ulaştıktan sonra güncellenir. Tersi olsaydı, arada bir çökme o günün
+  hareketlerini kalıcı olarak silerdi.
+- **İlk gün sadece "takibe alındı" der.** Yeni bir cüzdanın tüm pozisyonları
+  "yeni açıldı" gibi görünürdü; onun yerine tek satır yazılır.
+- **Saat neden 14:00.** Yazın 07:00 ET, kışın 06:00 ET — SEC ultra
+  penceresinin (07:30-09:30 ET) dışında. 14:30 TRT yazın tam 07:30 ET'ye,
+  yani pencerenin açıldığı dakikaya denk gelirdi.
