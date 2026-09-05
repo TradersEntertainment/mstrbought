@@ -517,3 +517,139 @@ def test_no_configured_days_means_no_digest(monkeypatch):
 ])
 def test_the_day_list_parses_names_and_numbers(raw, expected):
     assert set(bot._digest_days(raw)) == expected
+
+
+# ------------------------------------------------------- the weekly summary
+#
+# The digest used to be a pure diff. On a day the whale did not trade it said
+# "📌 Takibe alındı: 28 açık pozisyon / 📊 0 hareket · 1 cüzdan" and nothing
+# else — while the website sat there knowing every market and every price.
+# The odds ARE the news; the whale's trades are the second story.
+#
+# Every market below is real, copied from the owner's live panel on 2026-09-04.
+
+SUMMARY_TODAY = datetime(2026, 9, 5).date()
+BUY_Q  = "Will Microstrategy announce a Bitcoin purchase September 1-7?"
+BIG_Q  = "MicroStrategy announces >1000 BTC purchase September 1-7?"
+SELL_Q = "Will Microstrategy announce selling any Bitcoin September 1-7?"
+OLD_Q  = "Will Microstrategy announce selling any Bitcoin August 25-31?"
+HOLD_Q = "Will MicroStrategy announce holding 1M+ BTC by December 31, 2026?"
+
+
+def mkt(title, pct, end="2026-09-07", positions=None):
+    return {"title": title, "market_pct": pct, "end_date": end,
+            "positions": positions or []}
+
+
+THE_REAL_PANEL = [
+    mkt(HOLD_Q, 9,  "2026-12-31"),
+    mkt(SELL_Q, 5),
+    mkt(BUY_Q,  9),
+    mkt(OLD_Q,  0,  "2026-08-31"),
+    mkt(BIG_Q,  19),
+]
+
+
+def summarise(markets):
+    return bot.summarise_week(markets, today=SUMMARY_TODAY)
+
+
+def test_the_owners_real_panel_reads_as_no_move_expected():
+    """The exact sentence asked for: "bu hafta alması/satması beklenmiyor"."""
+    s = summarise(THE_REAL_PANEL)
+    assert s["headline"] == "Bu hafta MSTR'dan ne alım ne satım bekleniyor"
+    assert s["buy_pct"] == 19 and s["sell_pct"] == 5
+
+
+@pytest.mark.parametrize("markets,expected", [
+    ([mkt(BUY_Q, 72)],  "Bu hafta MSTR'ın bitcoin alması bekleniyor (%72)"),
+    ([mkt(SELL_Q, 80)], "Bu hafta MSTR'ın bitcoin satması bekleniyor (%80)"),
+    ([mkt(BUY_Q, 50)],  "Bu hafta belirsiz — alım %50"),
+    ([mkt(BUY_Q, 9)],   "Bu hafta MSTR'ın bitcoin alması beklenmiyor (%9)"),
+])
+def test_the_headline_follows_the_odds(markets, expected):
+    assert summarise(markets)["headline"] == expected
+
+
+def test_a_sale_leads_even_when_both_look_likely():
+    """MSTR selling is the bigger news by far; if the odds somehow say both,
+    the sale is what the reader must see first."""
+    s = summarise([mkt(BUY_Q, 80), mkt(SELL_Q, 70)])
+    assert "satması bekleniyor" in s["headline"]
+
+
+def test_a_finished_market_drops_out_of_the_week():
+    """August 25-31 sat on the panel at %0 long after it ended. The filter is
+    the end_date, so it falls out on its own — no title parsing."""
+    rows = summarise(THE_REAL_PANEL)["rows"]
+    assert all("August 25-31" not in r["title"] for r in rows)
+
+
+def test_a_distant_market_is_not_this_week():
+    """The 31 December threshold market is real and open, but it says nothing
+    about THIS week."""
+    rows = summarise(THE_REAL_PANEL)["rows"]
+    assert all("December 31" not in r["title"] for r in rows)
+    assert len(rows) == 3
+
+
+def test_a_market_with_no_price_is_left_out_rather_than_guessed():
+    assert summarise([mkt(BUY_Q, None)])["rows"] == []
+
+
+def test_no_open_market_says_so_instead_of_going_blank():
+    assert summarise([])["headline"] == "Bu hafta için açık MSTR marketi yok"
+
+
+def test_rows_are_ordered_by_probability():
+    pcts = [r["pct"] for r in summarise(THE_REAL_PANEL)["rows"]]
+    assert pcts == sorted(pcts, reverse=True)
+
+
+@pytest.mark.parametrize("pct,expected", [
+    (95, "bekleniyor"), (60, "bekleniyor"),
+    (59, "belirsiz"), (50, "belirsiz"), (41, "belirsiz"),
+    (40, "beklenmiyor"), (5, "beklenmiyor"),
+])
+def test_the_expectation_bands_are_symmetric(pct, expected):
+    assert bot._expected(pct) == expected
+
+
+# ------------------------------------------------------- the rendered digest
+
+def test_a_quiet_day_still_carries_the_odds():
+    """The whole point of the change. No movement, but the message says what
+    Polymarket expects this week."""
+    result = {"wallets": [], "movements": 0, "addresses_ok": 1, "errors": [],
+              "summary": summarise(THE_REAL_PANEL), "holdings": []}
+    text = "".join(bot.format_polymarket_digest(result))
+
+    assert "ne alım ne satım bekleniyor" in text.split("\n")[0]
+    assert "%19" in text and "%5" in text
+    assert "hareket yok" in text
+    # ...and never the old empty-handed line.
+    assert "0 hareket" not in text
+
+
+def test_the_headline_is_never_nested_bold():
+    """parse_mode=Markdown: one unbalanced asterisk makes Telegram reject the
+    ENTIRE message, so ** must not appear inside **."""
+    for markets in ([mkt(BUY_Q, 72)], [mkt(SELL_Q, 80)], [mkt(BUY_Q, 50)],
+                    THE_REAL_PANEL, []):
+        assert "*" not in summarise(markets)["headline"]
+
+
+def test_the_whale_bets_are_a_state_not_a_diff():
+    """"insider olduğundan şüphelendiğimiz adam şu beti aldı" — present
+    whether or not anything moved today."""
+    markets = [mkt(SELL_Q, 5, positions=[
+        {"label": "Balina", "outcome": "No", "size": 60, "usd": 57.0,
+         "avg_price": 0.95, "implied_pct": 95.0, "verdict": "satmayacak"}])]
+    blocks = bot.format_whale_holdings(markets)
+    assert len(blocks) == 1
+    assert "bitcoin satılmayacak" in blocks[0]
+    assert "60 adet" in blocks[0] and "$57" in blocks[0]
+
+
+def test_a_market_with_no_whale_produces_no_holding_block():
+    assert bot.format_whale_holdings([mkt(BUY_Q, 9)]) == []

@@ -79,6 +79,7 @@ Railway paneline gidip aşağıdaki çevre değişkenlerini ekleyin:
 | `POLYMARKET_DIGEST_AT_TRT` | `14:00` *(TRT)* |
 | `POLYMARKET_DIGEST_DAYS` | `fri,sun,mon` *(boş = özet kapalı)* |
 | `POLYMARKET_WHALE_TITLE` | `MicroStrategy Insider balinası` *(bildirimin ilk satırındaki özne)* |
+| `POLYMARKET_EXPECT_PCT` | `60` *(özetin "bekleniyor" eşiği; aynası "beklenmiyor")* |
 | `POLYMARKET_MIN_USD` | `100` *(bu tutarın altındaki hareketler gösterilmez)* |
 | `POLYMARKET_MIN_DELTA_PCT` | `5` *(pozisyonun %5'inden küçük değişim gürültü sayılır)* |
 | `POLYMARKET_LIVE_INTERVAL_S` | `3600` *(sitedeki balina panelinin tazelenme aralığı)* |
@@ -107,6 +108,52 @@ Bot, dizinde yer alan `Dockerfile` sayesinde Railway tarafından otomatik olarak
 ---
 
 ## Polymarket İçeriden Takip
+
+### Özet ne söyler
+
+Özet bir **fark** raporu değil, **durum** raporudur. Eskiden yalnızca
+`diff_positions` çıktısını gönderiyordu; balina her gün hareket etmediği için
+normal hâli şuydu:
+
+```
+🐋 Balina (0xa0c3…5b9a)
+📌 Takibe alındı: 28 açık pozisyon
+📊 0 hareket · 1 cüzdan
+```
+
+Oysa asıl haber oranların kendisi. Yeni hâli:
+
+```
+🎯 Bu hafta MSTR'dan ne alım ne satım bekleniyor
+📅 05.09.2026 · Polymarket oranları
+
+📊 Piyasa beklentisi — bu hafta
+   Bitcoin alımı: %19 · beklenmiyor
+   Bitcoin alımı: %9 · beklenmiyor
+   Bitcoin satışı: %5 · beklenmiyor
+
+🐋 Balina — açık MSTR betleri
+   • bitcoin hedefi tutulacak (31 Aralık'a kadar)
+     1.600 adet · $144
+   • bitcoin satılmayacak (bu hafta)
+     60 adet · $57
+
+🔄 Son özetten bu yana hareket yok
+```
+
+Üç bölüm: **piyasa ne bekliyor**, **şüpheli cüzdan nereye para koymuş**,
+**son özetten beri ne değişti**. İlk ikisi durum olduğu için mesaj artık boş
+çıkmıyor.
+
+Hangi marketler "bu hafta" sayılır: `end_date` alanı 7 gün içindeyse. Başlık
+metni ayrıştırılmıyor — bitmiş marketler (panelde %0'da duran "August 25-31"
+gibi) kendiliğinden düşüyor.
+
+Özetin verisi panelin `/api/polymarket` verisiyle **aynı fonksiyondan**
+(`build_whale_expectations`) gelir, yani site ile Telegram aynı sayıyı söylemek
+zorundadır. İki ayrı hesap yolu zamanla birbirinden kopardı.
+
+Kapsam **sadece MSTR**: balinanın diğer bahisleri (seçim, spor) mesaja girmez.
 
 ### Özet hangi günler gider
 
