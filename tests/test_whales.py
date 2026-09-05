@@ -847,3 +847,32 @@ def test_a_real_sell_alert_leads_with_the_sentence(db, monkeypatch):
     assert first == ("🐋 **MicroStrategy Insider balinası "
                      "bitcoin satılacak betini büyütüyor**")
     assert "bitcoin satılacak" in text.split("\n", 1)[1]   # and in the detail
+
+
+def test_the_digest_never_shows_the_whales_non_mstr_bets(db, monkeypatch):
+    """The wallet had 28 open positions, 2 of them MSTR. This is an MSTR bot,
+    and the owner chose to keep the message that way."""
+    add("c1", "Will Microstrategy announce a Bitcoin purchase September 1-7?",
+        "Yes", size=5000)
+    add("c2", "Will the Fed cut rates in December?", "Yes", size=90000)
+    add("c3", "Will the Lakers win the 2027 NBA title?", "No", size=40000)
+
+    markets = bot.build_whale_expectations()["markets"]
+    blocks = bot.format_whale_holdings(markets)
+    text = "".join(blocks)
+
+    # The MSTR bet is there, rendered as the phrase rather than the English
+    # title — that is the point of the redesign.
+    assert "bitcoin alınacak" in text
+    assert "Fed" not in text
+    assert "Lakers" not in text
+    # ...and the non-MSTR stakes are far larger, so this is not luck.
+    assert "90.000" not in text and "40.000" not in text
+
+
+def test_a_new_wallet_is_not_announced_with_a_position_count(db, monkeypatch):
+    """"📌 Takibe alındı: 28 açık pozisyon" next to an MSTR-only message
+    invites "which 28?" — the number counts bets the message never shows."""
+    block = bot.format_wallet_block("Balina", ADDR, [], seeded=28)
+    assert "28" not in block
+    assert "Takibe yeni alındı" in block

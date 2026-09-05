@@ -302,6 +302,10 @@ POLYMARKET_DIGEST_MINUTE = _hhmm("POLYMARKET_DIGEST_AT_TRT", 14 * 60)
 # reader nothing at a glance.
 POLYMARKET_WHALE_TITLE = os.getenv(
     "POLYMARKET_WHALE_TITLE", "MicroStrategy Insider balinası")
+# Above this probability the digest says "bekleniyor", below its mirror
+# (100 - it) "beklenmiyor", in between "belirsiz". One symmetric knob rather
+# than two that can be set to contradict each other.
+POLYMARKET_EXPECT_PCT = float(os.getenv("POLYMARKET_EXPECT_PCT", "60"))
 
 _WEEKDAY_NAMES = {"mon": 0, "tue": 1, "wed": 2, "thu": 3,
                   "fri": 4, "sat": 5, "sun": 6}
@@ -4885,7 +4889,12 @@ def format_wallet_block(label, address, moves, seeded=None):
     # twice on one line reads like a mistake.
     head = f"🐋 **{clean}**" if clean == short else f"🐋 **{clean}** (`{short}`)"
     if seeded is not None:
-        return f"{head}\n📌 Takibe alındı: {seeded} açık pozisyon"
+        # Deliberately no count. The wallet's raw position total is mostly
+        # non-MSTR (28 open, 2 of them MSTR on the day this was written), and
+        # printing it next to an MSTR-only message invites "which 28?". The
+        # open MSTR bets are listed above this block anyway.
+        return (f"{head}\n📌 Takibe yeni alındı — hareketler bir sonraki "
+                f"özetten itibaren bildirilir")
     shown = moves[:POLYMARKET_MAX_MOVES_PER_ADDR]
     body = "\n".join(format_movement(m) for m in shown)
     if len(moves) > len(shown):
@@ -4927,21 +4936,145 @@ def split_telegram_blocks(header, blocks, footer, limit=None):
         parts.append(text)
     return parts
 
+def summarise_week(markets, today=None):
+    """What Polymarket expects of MSTR THIS WEEK, from the panel's own data.
+
+    The digest used to be a pure diff, so on a day the whale did not trade it
+    said "0 hareket" and nothing else — while the website sat there knowing
+    every market and every price. The odds ARE the news; the whale's trades
+    are the second story, not the only one.
+
+    Which markets count as "this week" comes from bet_timeframe, i.e. from the
+    end_date field — never from the title text. "September 1-7" is text, and
+    reading meaning out of Polymarket's titles has broken this bot three
+    times. A market that already ended simply drops out.
+    """
+    rows, buy, sell = [], None, None
+    for m in markets:
+        pct = m.get("market_pct")
+        kind = classify_mstr_market(m.get("title") or "")
+        # No price means we do not know; a market we cannot price is left out
+        # rather than guessed at.
+        if pct is None or kind is None:
+            continue
+        if bet_timeframe(m.get("end_date"), today=today) != "bu hafta":
+            continue
+        rows.append({"title": m["title"], "kind": kind, "pct": pct})
+        if kind == "buy":
+            buy = pct if buy is None else max(buy, pct)
+        elif kind == "sell":
+            sell = pct if sell is None else max(sell, pct)
+
+    rows.sort(key=lambda r: r["pct"], reverse=True)
+    return {"rows": rows, "buy_pct": buy, "sell_pct": sell,
+            "headline": _week_headline(buy, sell)}
+
+def _expected(pct):
+    """"bekleniyor" / "beklenmiyor" / "belirsiz" for one probability."""
+    if pct is None:
+        return None
+    if pct >= POLYMARKET_EXPECT_PCT:
+        return "bekleniyor"
+    if pct <= 100 - POLYMARKET_EXPECT_PCT:
+        return "beklenmiyor"
+    return "belirsiz"
+
+def _week_headline(buy, sell):
+    """The one line the owner asked for: is a purchase or a sale expected?
+
+    Returns PLAIN text. The caller wraps it in bold; emphasising a word here
+    too would nest ** inside **, and one unbalanced asterisk makes Telegram
+    reject the entire message under parse_mode=Markdown.
+    """
+    b, s = _expected(buy), _expected(sell)
+    if b is None and s is None:
+        return "Bu hafta için açık MSTR marketi yok"
+    if s == "bekleniyor":
+        # A sale is the bigger news; if the market somehow expects both, the
+        # sale leads.
+        return f"Bu hafta MSTR'ın bitcoin satması bekleniyor (%{sell:.0f})"
+    if b == "bekleniyor":
+        return f"Bu hafta MSTR'ın bitcoin alması bekleniyor (%{buy:.0f})"
+    if b == "belirsiz" or s == "belirsiz":
+        bits = []
+        if buy is not None:
+            bits.append(f"alım %{buy:.0f}")
+        if sell is not None:
+            bits.append(f"satış %{sell:.0f}")
+        return f"Bu hafta belirsiz — {' · '.join(bits)}"
+    if b and s:
+        return "Bu hafta MSTR'dan ne alım ne satım bekleniyor"
+    if b:
+        return f"Bu hafta MSTR'ın bitcoin alması beklenmiyor (%{buy:.0f})"
+    return f"Bu hafta MSTR'ın bitcoin satması beklenmiyor (%{sell:.0f})"
+
+_KIND_LABEL = {"buy": "Bitcoin alımı", "sell": "Bitcoin satışı",
+               "hold": "Bitcoin hedefi"}
+
 def format_polymarket_digest(result):
-    """Render the digest parts from a build_polymarket_digest() result."""
-    header = (f"🎯 **İçeriden Takip — Polymarket**\n"
-              f"📅 {now_trt().strftime('%d.%m.%Y')} · son özetten bu yana")
+    """Render the digest: what is expected, who is betting, what moved.
+
+    In that order deliberately. The old version led with a wallet address and
+    a movement count, which on a quiet day said "0 hareket" and nothing else.
+    """
+    summary = result.get("summary") or {"rows": [], "headline": None}
+    header = (f"🎯 **{summary['headline'] or 'Polymarket — MSTR'}**\n"
+              f"📅 {now_trt().strftime('%d.%m.%Y')} · Polymarket oranları")
+
     blocks = []
+    if summary["rows"]:
+        lines = ["📊 **Piyasa beklentisi — bu hafta**"]
+        for r in summary["rows"]:
+            label = _KIND_LABEL.get(r["kind"], "Bitcoin")
+            lines.append(f"   {label}: **%{r['pct']:.0f}** · "
+                         f"{_expected(r['pct'])}")
+            lines.append(f"   _{_short_title(r['title'])}_")
+        blocks.append("\n".join(lines))
+
+    for entry in result.get("holdings") or []:
+        blocks.append(entry)
+
     for entry in result["wallets"]:
         blocks.append(format_wallet_block(
             entry["label"], entry["address"], entry["moves"],
             seeded=entry.get("seeded")))
+    if not result["wallets"]:
+        blocks.append("🔄 Son özetten bu yana hareket yok")
 
-    bits = [f"📊 {result['movements']} hareket · {result['addresses_ok']} cüzdan"]
+    bits = []
     for err in result["errors"]:
         bits.append(f"⚠️ {err}")
-    footer = "\n".join(bits)
-    return split_telegram_blocks(header, blocks, footer)
+    bits.append("Bunlar bahis, şirket açıklaması değil.")
+    return split_telegram_blocks(header, blocks, "\n".join(bits))
+
+def format_whale_holdings(markets):
+    """The suspected insider's standing MSTR bets, as blocks.
+
+    This is the "şu beti aldı" half of the message and it is a STATE, not a
+    diff: it is there whether or not anything moved today.
+    """
+    by_wallet = {}
+    for m in markets:
+        for p in m.get("positions") or []:
+            by_wallet.setdefault(p["label"], []).append((m, p))
+
+    blocks = []
+    for label, items in by_wallet.items():
+        items.sort(key=lambda ip: ip[1]["usd"], reverse=True)
+        lines = [f"🐋 **{_md_strip(label)}** — açık MSTR betleri"]
+        for m, p in items[:POLYMARKET_MAX_MOVES_PER_ADDR]:
+            phrase = whale_bet_phrase(m["title"], p["outcome"])
+            when = bet_timeframe(m.get("end_date"))
+            head = f"**{phrase}**" if phrase else _short_title(m["title"])
+            if when:
+                head += f" ({when})"
+            lines.append(f"   • {head}")
+            lines.append(f"     {_tr_num(p['size'])} adet · {_usd(p['usd'])}")
+        if len(items) > POLYMARKET_MAX_MOVES_PER_ADDR:
+            lines.append(f"   ↳ +{len(items) - POLYMARKET_MAX_MOVES_PER_ADDR} "
+                         f"bet daha")
+        blocks.append("\n".join(lines))
+    return blocks
 
 def send_telegram_digest(parts):
     """Send the parts in order, threading them under the first.
@@ -5008,10 +5141,25 @@ def build_polymarket_digest():
     finally:
         conn.close()
 
+    # The state half. Same source as the website's panel, so the two can
+    # never quote different numbers for the same market — two separate
+    # computations of "what does Polymarket expect" would drift apart.
+    try:
+        panel = build_whale_expectations()
+        markets = panel.get("markets") or []
+    except Exception as e:
+        print(f"Digest summary failed: {e}")
+        markets = []
+
     result = {"wallets": wallets, "movements": movements,
               "addresses_ok": addresses_ok, "errors": errors,
-              "pending": pending}
-    result["parts"] = format_polymarket_digest(result) if wallets else []
+              "pending": pending,
+              "summary": summarise_week(markets),
+              "holdings": format_whale_holdings(markets)}
+    # Always rendered. The digest reports a STATE now: the odds are the news
+    # even on a day nobody traded, and "0 hareket · 1 cüzdan" was the whole
+    # message on exactly those days.
+    result["parts"] = format_polymarket_digest(result)
     return result
 
 def _digest_status(conn, day):
