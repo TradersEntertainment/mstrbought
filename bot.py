@@ -97,6 +97,35 @@ def describe_poll_config():
             f"@{POLL_INTERVAL_FAST}s | normal @{POLL_INTERVAL_NORMAL}s | "
             f"now {now_et():%Y-%m-%d %H:%M:%S %Z}{warn}")
 
+# Manual turbo. MSTR usually files Monday morning, but a US holiday pushes it
+# to Tuesday and an early filing lands while the loop is still in Fast Mode at
+# 2s. This is the override: same speed as the ultra window, on demand.
+TURBO_DEFAULT_MIN = float(os.getenv("TURBO_DEFAULT_MIN", "90"))
+TURBO_MAX_MIN = float(os.getenv("TURBO_MAX_MIN", "240"))
+
+_turbo_until = 0.0
+
+def set_turbo(minutes=None):
+    """Turn on turbo for N minutes. Returns the seconds it will run.
+
+    Always bounded. A turbo left on is 0.25s/tick against SEC forever, so
+    there is deliberately no "until I say stop" option — the caller can
+    always call again.
+    """
+    global _turbo_until
+    mins = TURBO_DEFAULT_MIN if minutes is None else float(minutes)
+    mins = max(0.0, min(mins, TURBO_MAX_MIN))
+    _turbo_until = time.time() + mins * 60 if mins else 0.0
+    return max(0.0, _turbo_until - time.time())
+
+def clear_turbo():
+    global _turbo_until
+    _turbo_until = 0.0
+
+def turbo_left():
+    """Seconds of turbo remaining; 0 when off. Expiry needs no timer."""
+    return max(0.0, _turbo_until - time.time())
+
 def poll_schedule(now):
     """Pick the poll cadence for a US-Eastern datetime.
 
@@ -109,6 +138,15 @@ def poll_schedule(now):
     Sleeping no longer than the distance to the next boundary makes the
     window open on time, whatever cadence preceded it.
     """
+    left = turbo_left()
+    if left > 0:
+        # Capped by the turbo's own expiry as well as the window edges: this
+        # function's contract is "sleep no longer than until this bucket can
+        # change", and turbo running out changes it. Without the cap the loop
+        # would sleep straight through the end of turbo — the exact bug this
+        # third return value was added to prevent.
+        return "Turbo Mode (elle)", POLL_INTERVAL_CRITICAL, max(min(left, 60.0), 1)
+
     minute = now.hour * 60 + now.minute
     if now.weekday() >= 5:
         # EDGAR does not disseminate at weekends. Next boundary is Monday.
@@ -6402,6 +6440,8 @@ def get_bot_status():
                            f"-{ULTRA_WINDOW_ET[1]//60:02d}:{ULTRA_WINDOW_ET[1]%60:02d}",
         "fast_window_et": f"{FAST_WINDOW_ET[0]//60:02d}:{FAST_WINDOW_ET[0]%60:02d}"
                           f"-{FAST_WINDOW_ET[1]//60:02d}:{FAST_WINDOW_ET[1]%60:02d}",
+        "turbo_active": turbo_left() > 0,
+        "turbo_seconds_left": round(turbo_left()),
         "last_checked": last_checked_time,
         "seconds_since_last_poll": (round(time.time() - _last_tick_time, 1)
                                     if _last_tick_time else None),
@@ -6742,6 +6782,31 @@ def get_dividends():
         print(f"/api/dividends error: {e}")
         return jsonify({"series": [], "model_monthly_total_m": 0})
 
+@app.route('/api/turbo', methods=['POST'])
+def set_turbo_endpoint():
+    """Switch the poller to critical cadence by hand.
+
+    Same fail-closed auth as /api/trigger: without ADMIN_PASSWORD this would
+    let anyone put the bot into a 0.25s SEC loop.
+    """
+    if not ADMIN_PASSWORD:
+        return jsonify({"status": "error",
+                        "message": "ADMIN_PASSWORD ayarlanmadan bu uç nokta kullanılamaz."}), 403
+    req_pass = request.args.get("password") or request.headers.get("X-Admin-Password")
+    if req_pass != ADMIN_PASSWORD:
+        return jsonify({"status": "error", "message": "Yetkisiz işlem: Şifre hatalı."}), 401
+
+    raw = request.args.get("minutes")
+    try:
+        minutes = None if raw is None else float(raw)
+    except ValueError:
+        return jsonify({"status": "error", "message": "minutes sayı olmalı."}), 400
+
+    left = set_turbo(minutes)
+    print(f"Turbo {'ON' if left else 'OFF'} via API ({left/60:.0f} dk).")
+    return jsonify({"status": "success", "turbo_active": left > 0,
+                    "turbo_seconds_left": round(left)})
+
 @app.route('/api/trigger', methods=['POST'])
 def force_trigger():
     # Fail closed. With ADMIN_PASSWORD unset this endpoint was open to
@@ -6883,6 +6948,7 @@ if bot:
             "/data veya /history - Son BTC alım geçmişini ve toplam portföy durumunu gösterir.\n"
             "/check - Hemen şimdi zorla SEC EDGAR kontrolü yapar.\n"
             "/insider - Polymarket içeriden takip özetini şimdi kanala gönderir.\n"
+            "/turbo - Poll'u elle en yüksek hıza alır (/turbo 45, /turbo off).\n"
             "/insider_test - Özeti kanala göndermeden sadece size gösterir.\n"
             "/markets_test - Polymarket'te bulunan MSTR marketlerini listeler.\n"
             "/test_integration - Son BTC alım raporunu (22 Haziran) okuyup analiz testi yapar.\n"
@@ -6907,6 +6973,39 @@ if bot:
             f"📁 **Veritabanı Yolu**: `{DB_PATH}`",
             parse_mode="Markdown"
         )
+
+    @bot.message_handler(commands=['turbo'])
+    def turbo_telegram(message):
+        """/turbo [dakika] | /turbo off — critical cadence on demand."""
+        parts = (message.text or "").split()
+        arg = parts[1].strip().lower() if len(parts) > 1 else ""
+
+        if arg in ("off", "kapat", "0", "dur", "stop"):
+            clear_turbo()
+            bot.reply_to(message, "🐢 Turbo kapatıldı. Normal takvime dönüldü.")
+            return
+
+        minutes = None
+        if arg:
+            try:
+                minutes = float(arg)
+            except ValueError:
+                bot.reply_to(message, "Kullanım: /turbo · /turbo 45 · /turbo off")
+                return
+
+        left = set_turbo(minutes)
+        if not left:
+            clear_turbo()
+            bot.reply_to(message, "🐢 Turbo kapatıldı.")
+            return
+        et = now_et()
+        until = et + timedelta(seconds=left)
+        bot.reply_to(
+            message,
+            f"🚀 **Turbo açık** — {POLL_INTERVAL_CRITICAL:g} sn/tur\n"
+            f"Süre: {left/60:.0f} dakika ({until.strftime('%H:%M')} ET'ye kadar)\n"
+            f"Kapatmak için /turbo off",
+            parse_mode="Markdown")
 
     @bot.message_handler(commands=['check'])
     def force_check_telegram(message):

@@ -202,3 +202,89 @@ def test_background_work_waits_inside_the_ultra_window_and_its_lead_in(monkeypat
         monkeypatch.setattr(bot, 'now_et', lambda hh=hh, mm=mm: et(2026, 8, 31, hh, mm))
         bot._wait_out_ultra_window("test")
         assert calls["n"] >= 1, f"{hh:02d}:{mm:02d} ET should have waited"
+
+
+# ------------------------------------------------------- manual turbo
+#
+# MSTR files Monday morning, but a US holiday pushes it to Tuesday and an
+# early filing lands while the loop is still in Fast Mode at 2s. This is the
+# override, and it is the same cadence the ultra window already uses.
+
+import time as _time
+
+NIGHT = datetime(2026, 9, 8, 3, 0)      # a Normal Mode hour, Tuesday
+NOON = datetime(2026, 9, 8, 12, 0)      # a Fast Mode hour
+SATURDAY = datetime(2026, 9, 12, 3, 0)
+
+
+@pytest.fixture(autouse=True)
+def _turbo_off():
+    bot.clear_turbo()
+    yield
+    bot.clear_turbo()
+
+
+@pytest.mark.parametrize("when", [NIGHT, NOON, SATURDAY])
+def test_turbo_beats_every_window(when):
+    bot.set_turbo(30)
+    mode, interval, _ = bot.poll_schedule(when)
+    assert mode == "Turbo Mode (elle)"
+    assert interval == bot.POLL_INTERVAL_CRITICAL
+
+
+def test_turbo_is_as_fast_as_the_ultra_window():
+    """Not a new load profile — the same 0.25s the ultra window already runs,
+    so no new SEC rate risk."""
+    ultra = bot.poll_schedule(datetime(2026, 9, 8, 8, 0))[1]
+    bot.set_turbo(30)
+    assert bot.poll_schedule(NIGHT)[1] == ultra
+
+
+def test_the_loop_cannot_sleep_past_the_end_of_turbo():
+    """poll_schedule's third value exists so the loop never sleeps through a
+    boundary. Turbo running out is a boundary."""
+    bot.set_turbo(30)
+    _, _, to_boundary = bot.poll_schedule(NIGHT)
+    assert 0 < to_boundary <= 60
+
+
+def test_turbo_expires_on_its_own(monkeypatch):
+    """No timer, no thread: the deadline is checked on every tick."""
+    bot.set_turbo(1)
+    assert bot.poll_schedule(NIGHT)[0] == "Turbo Mode (elle)"
+    monkeypatch.setattr(bot, '_turbo_until', _time.time() - 1)
+    assert bot.poll_schedule(NIGHT)[0] == "Normal Mode"
+
+
+def test_turbo_off_takes_effect_immediately():
+    bot.set_turbo(90)
+    bot.clear_turbo()
+    assert bot.poll_schedule(NIGHT)[0] == "Normal Mode"
+    assert bot.turbo_left() == 0
+
+
+def test_turbo_is_always_bounded():
+    """A turbo left on is 0.25s/tick against SEC forever."""
+    bot.set_turbo(99999)
+    assert bot.turbo_left() <= bot.TURBO_MAX_MIN * 60 + 1
+
+
+def test_zero_minutes_means_off():
+    bot.set_turbo(90)
+    assert bot.set_turbo(0) == 0
+    assert bot.poll_schedule(NIGHT)[0] == "Normal Mode"
+
+
+def test_the_default_is_used_when_no_duration_is_given():
+    left = bot.set_turbo()
+    assert abs(left - bot.TURBO_DEFAULT_MIN * 60) < 2
+
+
+@pytest.mark.parametrize("when,expected", [
+    (datetime(2026, 9, 8, 8, 0), "Ultra High-Speed Mode"),
+    (datetime(2026, 9, 8, 12, 0), "Fast Mode"),
+    (datetime(2026, 9, 8, 3, 0), "Normal Mode"),
+    (datetime(2026, 9, 12, 8, 0), "Normal Mode"),      # Saturday
+])
+def test_with_turbo_off_nothing_about_the_schedule_changed(when, expected):
+    assert bot.poll_schedule(when)[0] == expected
