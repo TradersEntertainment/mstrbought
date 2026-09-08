@@ -107,6 +107,31 @@ Bot, dizinde yer alan `Dockerfile` sayesinde Railway tarafından otomatik olarak
 
 ---
 
+## Turbo modu (elle)
+
+Poller'ı beklemeden en yüksek hıza (`POLL_INTERVAL_CRITICAL`, 0.25 sn) alır.
+Ultra pencere hafta içi her gün **07:30-09:30 ET** otomatik açılır; turbo o
+pencereyi beklemeden aynı hızı verir — resmi tatil yüzünden dosyalama başka
+güne kaydığında ya da erken bir dosyalama beklendiğinde.
+
+```
+/turbo         → 90 dakika
+/turbo 45      → 45 dakika
+/turbo off     → kapat
+```
+
+Web tarafı: `POST /api/turbo?password=...&minutes=45` (`minutes=0` iptal).
+`ADMIN_PASSWORD` ayarlı değilse uç nokta 403 döner — şifresiz açık bırakmak
+botu herkesin 0.25 sn'lik SEC döngüsüne sokabilmesi demekti.
+
+**Her zaman süreli.** Açık unutulan turbo SEC'e sürekli yük demek, o yüzden
+"ben kapatana kadar" seçeneği yok; tavan `TURBO_MAX_MIN` (240 dk). Süre dolunca
+kendiliğinden normale döner, ayrı bir zamanlayıcı yok — her turda kontrol
+edilir. Durum `/status` ve `/api/status` içinde (`turbo_active`,
+`turbo_seconds_left`).
+
+---
+
 ## Polymarket İçeriden Takip
 
 ### Özet ne söyler
