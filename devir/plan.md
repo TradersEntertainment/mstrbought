@@ -1,3 +1,15 @@
+# MOLA (17 Kasım 12:10 UTC → Pazar 22 Kasım): kaldığım yer
+- 0.99.123 YAYINDA (CI 44052061020 success). **0.99.124 GÖNDERİLDİ**: main = 6c2fda8a (6be2847d üstüne tek kayıt; ağaç =
+  birleşik 1 kayıt üstü a38ad405 + VERSION/QA − docs/_*), wip/0.99.124 aynı, site 9b2b9d4. Tam paket 456/456, denetim 0,
+  menüye dönüş 2/2. CI Release koşusu main 6c2fda8a için başladı → sonucu bak, sahibine "indirilebilir" de.
+- `wip/ist2-birlesik` = 0.99.124 kaydı (gönderildi); `wip/ist2-taban19` = a38ad405 (Pazar oturumlarının tabanı).
+- 8y GEÇİCİ eski sette (`SurHub.yeni8y`, `--yenisur=8y`); Pazar TAŞIMA 12'nin 0. maddesi.
+- PAZAR: `/home/user/mstrbought/devir/PAZAR_LISTESI.md` (sahibine gönderildi) + görev yazıları `devir/gorev/prompt_C12_fon.txt`,
+  `prompt_A14.txt` (Fable düzeltmeleri ekli, taban a38ad405). İki Opus oturumu aynı anda aç; teslimde rapor + tam boy kare,
+  birleştir, doğrula (`devir/gorev/birlesik17.sh` kalıbı), 0.99.125 (tam paket `tam124.sh` kalıbı, `surum124.py` kalıbı).
+- Sahibinden karar bekleyen: 10h gediği (A/B; önerim B), kapı kanatları açık/kapalı, ek hesap, ElevenLabs anahtarı.
+- Sahibi kota azaldığı için mola istedi: Pazar'a kadar yeni oturum AÇMA, nöbetçi kurma.
+
 # GÜNCEL (17 Kasım ≈10:40 UTC)
 - TAŞIMA 10 (79044a17) ve TAŞIMA 11 (a5b7d2ec) BİTTİ, raporlar okundu, kareler tam boy (Haliç iyi; 8y Romanos iç kapı kemeri
   iri turuncu bloklar, 10h moloz soluk beyaz kayalar). Yerelde `wip/ist2-birlesik` = 6e9a3205 (4bcbed87 + T11 + T10, temiz
