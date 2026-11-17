@@ -64,3 +64,16 @@ Birleştirme + kendi doğrulamam (≈1 saat), tam test paketi (≈1,5 saat), Git
 4. Deneme dilimi: Tolga'nın birinci şahıs kolları/elleri (oyuncu hep görüyor) + Bizans askeri + 1 ana karakter, tek
    sahnede (12b sur yolu ya da Bölüm 20 gedik); aynı insanlara gösterilir.
 5. Sahibinden: sanatçı bütçesi var mı (varsa önce ana kadro).
+
+## H. Sahibinin hedefi (17 Kasım): "grafikleri gören oyunu oynamak istesin, o kadar abartalım"
+Program (İstanbul bitince, karakter dilimiyle başlar; çok haftalık):
+1. Güçlü, kendine has sanat yönü (önerim: sıcak, resimsi, stilize; komedi tonuna uyar, az varlıkla çok iyi görünür).
+2. Görüntüleme kipini yükseltmek (gl_compatibility → Forward+: ortam gölgesi, dolaylı ışık, sis, iyi gölge, renk
+   düzenleme) — tek başına en büyük sıçrama; bedeli en düşük donanım şartı ve test hattının (yazılımsal Vulkan) uyarlanması.
+3. Karakterler (iskeletli, yüz ifadeli; ana kadro için sanatçı), birinci şahıs eller.
+4. Dokular ve malzemeler (CC0 fotoğraf tabanlı + üsluba göre boyama), ağaçlar ve bitki örtüsü.
+5. Sahne sahne ışık ve atmosfer (gün batımı, duman, ateş ışığı, toz), ara sahnelerde kamera ve alan derinliği.
+6. Arayüz (yazı tipi, menüler, altyazı kutusu) aynı üsluba.
+7. Ölçü: önce|sonra 3 kareyi 5–10 kişiye göster, "oynamak ister misin" sorusu.
+İlk dilim: 12b sur yolu gün batımında (renderer + ışık + 3 karakter + dokular), fragman kalitesinde.
+Sahibinden: üslup tercihi, sanatçı bütçesi, en düşük donanım (Vulkan destekli ekran kartı) kabulü.
