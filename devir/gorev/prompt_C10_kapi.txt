@@ -1,0 +1,45 @@
+**BU GÖREV ONAYLIDIR. Onay ya da soru beklemeden HEMEN başla, sonuna kadar kendi başına çalış, bitince rapor ver. Kimseye soru sorma; takılırsan bulduğunu rapora yaz ve en iyi kararla devam et. Dal oluşturmak, her adımda kaydetmek ve yalnız kendi dalına (`wip/ist2-tasima10`) göndermek önceden onaylıdır.**
+
+# İstanbul v2 — TAŞIMA 10 (Opus): KAPI VE ŞEHİR İÇİ SUR — Bölüm 12b, 8y, 10h, 6b (+ 7b fon) yeni surda
+
+Depo: `TradersEntertainment/nothistorygame` (yerelde klonla). Taban: `wip/ist2-taban17` = **f962b002** (0.99.122 + eşya fiziği + 26/26o + TUR 13 + hareket hissi + Blakherna 30/30o). Kendi dalın: `wip/ist2-tasima10` (tabandan aç, yalnız buraya gönder).
+
+## Neden
+Oyunun sahibi son sürümü indirip oynadı ve eski surları gördü ("eski surlardı hâlâ?"). Yeni sur Mesoteikhion'da (11 bölüm), 26/26o ve Blakherna'da hazır; şehir içinden sura bakan bölümler hâlâ eski setlerde: `ByzCity` hub'ı (6b, 10h, 12b; 7b fon) ve `World1453` kapı bölgesi (8y). Hedef: bu bölümler yeni surun Romanos kapısı kesiminde, aynı ressamın elinden; oynanış aynı.
+
+## ORTAK KURALLAR (kesin)
+Türkçe çalış, Türkçe yaz. Godot 4.4.1, gl_compatibility, prosedürel GDScript, birinci şahıs komedi oyunu "Gerçek Tarih Bu Değil" (1453 kuşatması).
+- KUTU YASAĞI; HAVADA DURAN HİÇBİR ŞEY OLMAZ; ayaklar yere basar. TEK GÖRSEL DİL (`docs/ISTANBUL_GORSEL_DIL.md`, `docs/_ajan/gorev/ist2_kalite_notlari.md` 30–33). YAKIN KAMERA (0,5–3 m) "oyuncak gibi" durmasın.
+- Sur ölçüleri DONDU; her kayıttan önce aynı: `tests/_ist/sur_sozlesme.tscn` → `SURSOZLESME PASS kalem=13 kesim=8`; `tests/_ist/sur_oyun_denetim.tscn` → `SUROYUN nokta=519 havada=0 gomuk=0 katida=0`; `tests/_ist/sur_oyun_yuru.tscn` → `WALKTHRU OZET yol=7 tamam=7 takilma=0 dusme=0`; `tests/_ist/esya_fizik.tscn` → `ESYATEST PASS`.
+- Var olan replik metni, ses, denge, gizli süre (12b'nin süreli "Yaptığın şey yetecek mi?" dahil), sayaç DEĞİŞMEZ. Yeni sesli replik yazma; uyumsuz yön replikleri "replik uyumsuzluğu" başlığına.
+- Sahibinin taşıma kararları (`docs/SUR_BOLUM_TASIMA.md` §6, öneriler kabul): 4-A tek oyun gediği; 7-A hendek geçişi köprü/dolgu (8y'de **yürünür hendek köprüsü** şart); 9-A kule geçidiyle yürüyüş; 11-A kapı = Romanos; 13 `--eskisur` geri dönüş.
+- Testler `--max-fps 20`, tam süzgeç: `grep -E 'AUTOTEST (PASS|FAIL)|SCRIPT ERROR|VISAUDIT|WALKTHRU|HELDAUDIT|ARMAUDIT|WARN_FX|WARN_FLY|WARN_VOID|^ESYAAUDIT (dusme|havada|gomuk|tikama|sinir)|^HAREKETAUDIT'`. KÖK NEDEN; susturma YOK. Her çeşit BİTMELİ (4 süreç aynı anda koşarken de; zaman aşımı = hata).
+
+**Kanıt:** her iddia karede, 1280×720 jpg 85, TAM BOY; her YENİ karesi için tek cümle (kutu, havada, zemin, aynı ressam, eskisinden sönük mü). Kareler DALA KAYDEDİLİR (kanıt dalda yoksa iş yok sayılır). Bütçe ESKİ|YENİ (≤ +%5).
+
+## Önce OKU
+`docs/SUR_BOLUM_TASIMA.md` §1 (6b, 7b, 8y, 10h, 12b satırları), §4.4 ("10h/12b/6b/7b: hub'ın iç suru (3 m, 16 m kule aralığı) ↔ v2 iç sur (5 m, 53–61 m); 12b'nin iki kule arası sur yolu v2 yolunda daha doğal; 10h'nin gediği v2 gediği olur; **şimdiden v2'de** (`baglama.gd:53-56`): iş = yamayı kaldırıp bölümü doğrudan v2'ye yerleştirmek"; 8y: 148 m koridor, Romanos 5,0×4,6, dış sur kapısı kanatları/sürgü bölümün işi, hendek köprüsü v2'de yıkık → yürünür köprü), `docs/_kanit_ist2_tasima8/rapor.md` (Romanos kapısı: `{"romanos_kanat": true, "romanos_kopru": true, "kapi_kopru": "saglam"|"yikik"}` → `parca["yan_kapi_kanat"]`, `SurSetSahne.open_inner_gate()`, `SurSet.romanos()`, `SurSet.sehir_ofs(x)`; Romanos koridoru peribolostan KAPALI), `tasima4..9` raporlarının "Sonraki taşıyana" bölümleri, `scripts/world/ist/sur_set*.gd`, `scripts/world/ist/baglama.gd`, `scripts/level/byz_city.gd`, `scripts/world/world1453.gd` (8y: `World1453.build`, `LAND_GATES`).
+
+## Yapılacaklar (sırayla; KESME SIRASI — süre yetmezse buradan dur; yarım kalan bölüm ESKİ sete sabitlenir, raporda YAPILMADI)
+1. **ÖLÇ VE DÖK** (`docs/_kanit_ist2_tasima10/dokum.md`): beş bölümün bütün bağları (sabit koordinatlar, `ByzCity.*`, `World1453.*`, `IstBaglama` yamaları), süreli evreler, bot yolları; ByzCity hub'ının sur dışındaki parçaları (meydan, pazar, saray, evler) neyse KORUNUR — yalnız sur/kapı/kule/sur yolu yeni sete geçer.
+2. **12b** (İmparator'la sur yolunda yürüyüş, iki kule arası, kuleye açılan kapı, süreli soru): yeni iç surun sur yolunda (kule geçidiyle). Süre aynı; yürüyüş mesafesi ESKİ|YENİ tablosu.
+3. **8y** (iç sur kapısı → peribolos → dış sur kapısı → hendek köprüsü → ölü bölge → Osmanlı siperi): Romanos kapı kesimi (`SurOyun.arayuz("romanos")`), iç ve dış kapı kanatları (`KapiKanat`), **yürünür** hendek köprüsü (`KapiKopru` "saglam"), ova. Yürüyüş ≈148 m kalsın (± 20 m), süre yok.
+4. **10h** (gediği barikat/koli bandıyla kapat, kapıdan beyaz bayrakla çık): gedik = v2 oyun gediği (`SurSet` gedik), çıkış = Romanos iç kapısı.
+5. **6b** (meydan–pazar–sur yolu martı kovalamacası, Misafir İzni, kapıdan çıkış): sur yolu kısmı yeni iç sura; meydan/pazar aynı.
+6. **7b fon**: sur yalnız arkada; yeni sette ×1 PASS ve 2 kare.
+Her bölüm: `SurSet`/bağdaştırıcı + `--eskisur` geri dönüş; bütün çeşitler yeni ×2 + eski ×1 (4 süreç aynı anda; hepsi biter); `=yuru` (gerçek bot ana yolu yürür) takılma 0; 4–6 ESKİ|YENİ kare çifti (biri yakın sur 0,5–3 m); süre/mesafe tablosu; bütçe.
+Çeşitler: 6 (`""`, b, byz, byzclimb, byzfail, byzgive, byzmistake, c, letter, next, y), 7 (`""`, byz, byzcell, byzniko, fez, form, lost, next, tea, wall, wallkeep), 8y (`""`, dep, hikmet, honest, next, opened, sinerji, warn), 10h (`""`, honest, next, open, pass, save, save1, shame), 12b (`""`, d2, d3, lie, next, year).
+
+## Dosya sahipliği
+- **SEN:** `scripts/chapter6.gd`, `chapter7.gd`, `chapter8y.gd`, `chapter10h.gd`, `chapter12b.gd`; `scripts/level/byz_city.gd` ve 8y'nin kapı kurucusu (yalnız sur/kapı/kule kısmı + `--eskisur` dalı; meydan/pazar/ev dokunulmaz); `scripts/world/ist/baglama.gd` (yalnız bu bölümlerin yamaları); `sur_set*.gd`, `sur_oyun.gd`/`sur_oyun_ag.gd` (yalnız EKLEME); `sur_oyun_parca.gd` içinde `KapiKanat`/`KapiKopru` oynanışı (görünüş aynı); yeni `tests/_ist/tasima10_*`.
+- **Başka oturum (aynı anda çalışıyor, DOKUNMA):** `scripts/chapter26.gd`, `chapter26o.gd`, `scripts/level/esya_fizik*.gd`, `garrison.gd`, `wall_fight.gd`, `siege_chaos.gd`, `assault.gd` (Bölüm 26 düzeltmesi). Gerekirse yalnız EKLEME yap ve raporda yaz.
+- **Kimsenin değiştirmediği:** sur görünüş dosyaları (`surlar*.gd`, `sur_kule.gd`, `sur_oturtma*.gd`, `kumas.gd`, `blak_set.gd`, `blachernae.gd`), `sehir*.gd`, `scripts/player/`, `scripts/npc/`, `scripts/combat/`, `sur_sozlesme*`, `tests/run_tests.sh`, `project.godot`. Görünüş kusuru bulursan "görünüşe istek" başlığına (düğüm yolu + kare).
+
+## Doğrulama (son kayıtta)
+Ayrıştırma `res://tests/parse_check.tscn` PASS; sözleşme üçlüsü + `ESYATEST PASS`; beş bölümün bütün çeşitleri yeni ×2 + eski ×1; dokunduğun ortak dosyaları kullanan bölümler ×1 (`ByzCity`, `World1453`, `baglama.gd`, `sur_set*.gd` kullananlar: `grep -l` ile bul; en az 0, 20, 26, 28o, 30, 37o, 43o, 44b, 10, 11, 12) — hepsi PASS, BİTER, denetim 0.
+
+## Kanıt → `docs/_kanit_ist2_tasima10/`
+`rapor.md`: bölüm bölüm TAMAM / KISMEN / YAPILMADI; bağ tablosu eski → yeni; süre/mesafe tablosu; ESKİ|YENİ kareler ve cümleleri; çeşit tablosu; bütçe; "sonraki taşıyana"; "hâlâ kötü olanlar"; "görünüşe istek"; "replik uyumsuzluğu"; "run_tests.sh isteği".
+
+## Dayanıklılık ve yasaklar
+Her adımın sonunda ve en geç 20 dakikada bir kaydet + gönder (yarım da olsa; kareler dahil); `docs/_kanit_ist2_tasima10/durum.md` her kayıtta güncel. Arka plan işleri ≤ 10 dakika; aynı anda en çok 4 süreç; bitti bildirimi gelmezse çıktı dosyasını kendin oku. İlk 40 dakikada ara kayıt. Kayıt iletisine model adı yazma. Kurulum: Godot 4.4.1 linux x86_64 resmi sürümü `~/is/godot/godot` (indir); `timeout 900 ~/is/godot/godot --headless --path . --import`; pencereli kare `xvfb-run -a -s "-screen 0 1280x720x24" ~/is/godot/godot --path . --rendering-driver opengl3 --resolution 1280x720 …` (xvfb yoksa `sudo apt-get install -y xvfb`; sudo YALNIZ apt-get için). Oturum/tetikleyici/zamanlama/bildirim/ajan başlatma araçlarını KULLANMA. PR açma. Yalnız kendi dalına gönder; geçmişi yeniden yazma, zorla gönderme yok; main'e dokunma. `pkill`/`killall` yok (yalnız `kill <pid>`). Ses üretme. İzin kutusu çıkarabilecek komut yok: `rm -rf`/`rm -r`/`mv`/`cp -r` hedefinde kabuk değişkeni kullanma (tam yolu elle yaz); silmeyi heredoc zincirine gömme; `bash -c '…'` ya da `until/while … sleep` bekleme döngüsü yazma; geçici dosyalar yalnız `~/is/` altında; `.git/` içine ve `.gitignore`'a yazma, `git config` ve `git clean` kullanma; Godot'nun ürettiği `.import`, `.translation`, `.uid` yan dosyalarını kayda ekleme. Bu dalda duran öteki `docs/_*` klasörlerine dokunma. Disk payı sınırlı: ham kare yığınlarını ve videoları iş bitince sil.
