@@ -54,3 +54,13 @@ Birleştirme + kendi doğrulamam (≈1 saat), tam test paketi (≈1,5 saat), Git
    (kuyuya düşüş efekti 0.99.123'te yapıldı).
 3. **Metin taraması**: dönem karakterleri kendine "Bizanslı" dememeli (Romalı / Rum).
 4. Tolga'nın hareketinde nefes sesi yok (kitaplıkta uygun ses yok).
+
+## G. İstanbul'dan sonra ilk iş: KARAKTER DİLİMİ ("grafikler AI slop" eleştirisi; sahibi: en çok karakterler)
+1. Sanat yönü: tek karakter (Bizans askeri) 3–4 üslupta örnek kare → sahibi seçer; karakterlerle dünya aynı dili konuşur.
+2. Teknik yol: kodla kurulan parça parça gövde yerine iskeletli, tek parça (deriye bağlı) model; bugünkü sistemler
+   (ayak IK, yığılma, tırmanma, el hareketleri, kumaş) bu iskeleti sürer. Uzak kalabalık için bugünkü hafif model kalır.
+3. Kaynak: deneme için ücretsiz ve ticari kullanıma açık (CC0) taban insan modelleri + Blender'da dönem giysileri
+   (para yok, hızlı); eleştiri sürerse ana kadro (Tolga, Niko, Hikmet, İmparator, Giustiniani) için 3B sanatçı.
+4. Deneme dilimi: Tolga'nın birinci şahıs kolları/elleri (oyuncu hep görüyor) + Bizans askeri + 1 ana karakter, tek
+   sahnede (12b sur yolu ya da Bölüm 20 gedik); aynı insanlara gösterilir.
+5. Sahibinden: sanatçı bütçesi var mı (varsa önce ana kadro).
