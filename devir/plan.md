@@ -1,7 +1,7 @@
 # MOLA (17 Kasım 12:10 UTC → Pazar 22 Kasım): kaldığım yer
 - 0.99.123 YAYINDA (CI 44052061020 success). **0.99.124 GÖNDERİLDİ**: main = 6c2fda8a (6be2847d üstüne tek kayıt; ağaç =
   birleşik 1 kayıt üstü a38ad405 + VERSION/QA − docs/_*), wip/0.99.124 aynı, site 9b2b9d4. Tam paket 456/456, denetim 0,
-  menüye dönüş 2/2. CI Release koşusu main 6c2fda8a için başladı → sonucu bak, sahibine "indirilebilir" de.
+  menüye dönüş 2/2. CI Release 44079393641 = success (13:07) → 0.99.124 İNDİRİLEBİLİR (sahibine söylendi).
 - `wip/ist2-birlesik` = 0.99.124 kaydı (gönderildi); `wip/ist2-taban19` = a38ad405 (Pazar oturumlarının tabanı).
 - 8y GEÇİCİ eski sette (`SurHub.yeni8y`, `--yenisur=8y`); Pazar TAŞIMA 12'nin 0. maddesi.
 - PAZAR: `/home/user/mstrbought/devir/PAZAR_LISTESI.md` (sahibine gönderildi) + görev yazıları `devir/gorev/prompt_C12_fon.txt`,
