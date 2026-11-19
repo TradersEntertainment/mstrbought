@@ -77,3 +77,19 @@ Program (İstanbul bitince, karakter dilimiyle başlar; çok haftalık):
 7. Ölçü: önce|sonra 3 kareyi 5–10 kişiye göster, "oynamak ister misin" sorusu.
 İlk dilim: 12b sur yolu gün batımında (renderer + ışık + 3 karakter + dokular), fragman kalitesinde.
 Sahibinden: üslup tercihi, sanatçı bütçesi, en düşük donanım (Vulkan destekli ekran kartı) kabulü.
+
+## I. Sahibinin girdileri (19 Kasım, mola sırasında)
+1. **Bütçe: 500–1000 $** ("blender'da show yapabiliriz"). Önerilen bölüşüm: %15–20 üslup çizimi (12b sur yolu, gün batımı,
+   İmparator ve Tolga), %60–70 modüler karakter seti (1 stilize erkek beden + 5–6 baş: Tolga, Niko, Hikmet, İmparator,
+   Giustiniani, sıradan yüz; değiştirilebilir giysi parçaları: Bizans zırhı, Osmanlı kaftanı, sarık, miğfer, sakallar,
+   Tolga'nın takımı; birinci şahıs kollar/eller; konuşma, göz kırpma, gülme, kızma yüz ifadeleri), %10–20 düzeltme turları.
+   Şartlar: ücretli tek karakterlik deneme, aşamalı ödeme, tam ticari kullanım hakkı + .blend kaynak dosyaları,
+   "yapay zekâyla üretilmiş model yok". İlan metni (TR + EN) ve teknik şartnameyi (iskelet/kemik adları, üçgen sınırı,
+   doku boyutu, glTF) ben yazarım: sahibi istediğinde ya da Pazar.
+2. **MotionBricks** (NVIDIA, https://github.com/NVlabs/motionbricks): 350 000+ hareket klibiyle eğitilmiş, hedef pozlardan
+   gerçek zamanlı karakter hareketi üretiyor; açık kaynak (önceden eğitilmiş modeller, yazım araçları, Newton ile örnek
+   uygulama). Sahibi: "grafik geliştirdikten sonra kullanacağız". Ne zaman: karakterler iskeletli modele geçtikten SONRA.
+   Nasıl: bugünkü poz sistemine (ayak IK, yığılma, tırmanma) hedef poz üreticisi ya da çevrimdışı animasyon klibi üretici.
+   Kullanmadan önce kontrol: (a) lisans ticari bir Steam oyununa izin veriyor mu (NVIDIA araştırma lisansları bazen ticari
+   kullanımı yasaklar); (b) çalışma zamanı (Python/GPU → Godot'da doğrudan mı, ONNX ile mi, yoksa yalnız çevrimdışı mı);
+   (c) iskelet uyumu (eğitim iskeleti ↔ sanatçının iskeleti: sanatçı şartnamesine yazılacak).
