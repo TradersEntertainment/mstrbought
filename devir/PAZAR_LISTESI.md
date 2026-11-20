@@ -93,3 +93,17 @@ Sahibinden: üslup tercihi, sanatçı bütçesi, en düşük donanım (Vulkan de
    Kullanmadan önce kontrol: (a) lisans ticari bir Steam oyununa izin veriyor mu (NVIDIA araştırma lisansları bazen ticari
    kullanımı yasaklar); (b) çalışma zamanı (Python/GPU → Godot'da doğrudan mı, ONNX ile mi, yoksa yalnız çevrimdışı mı);
    (c) iskelet uyumu (eğitim iskeleti ↔ sanatçının iskeleti: sanatçı şartnamesine yazılacak).
+
+## J. Sahibinin sorusu (20 Kasım): "Horizon Zero Dawn gibi geniş alanda özgür koşulan İstanbul ne kadar sürer, 3 Claude Max yeter mi?"
+Gösterdiği seviye (4K, AAA) kod hızıyla değil sanat varlığıyla gelir: binlerce elde yapılmış model, doku, bitki, hareket
+yakalama ve büyük bir ekip. Hesap sayısı bu darboğazı çözmez. Ulaşılabilir hedef: bugünkü v2 dünyasının (`dunya.gd`: arazi
+parçaları yakında 6 m'den uzakta 48 m'ye, oyuncu çevresinde çarpışma, şehir kurucusu) üstünde serbest dolaşılan bir İstanbul
+ve stilize ama çekici bir görünüş.
+- Aşama 1 (Pazar): İstanbul taşıması biter (0.99.125).
+- Aşama 2 (≈1–2 hafta): görsel dilim (12b): Forward+, ışık ve atmosfer, 3 yeni karakter; aynı insanlara gösterilir.
+- Aşama 3 (≈2–4 hafta): tek mahalle (Ayasofya–Yerebatan–Hipodrom) serbest dolaşım: akış yüklemesi, kalabalık, bitki örtüsü,
+  keşif buluşları, çatılar; orta sınıf ekran kartında 60 kare/sn hedefi.
+- Aşama 4 (aylar): bütün şehir + surlar + ordugâh; çevre sanatı için ek sanatçı/varlık bütçesi.
+- Hesap: 1 ek hesap (toplam 2) yerinde; 3 hesap ancak sanat hattı kurulduktan sonra anlamlı (darboğaz: sanat, benim
+  birleştirme/doğrulama hızım, test makinesi). Çoklu hesap kuralları claude.ai'de kontrol edilecek.
+Süreler tahmindir, ölçüm değil.
