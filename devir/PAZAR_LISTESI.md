@@ -1,5 +1,10 @@
 # Pazar günü yapılacaklar (İstanbul uyarlamasının sonu)
 
+> **DURUM 23 Kasım 11:40 UTC:** A, B ve C yapıldı. **0.99.125 yayında** (main 88ed3d3c, site 0578246; CI Release #339
+> koşuyor). Birleşik dal `wip/ist2-birlesik` = f1f007c5. Tam paket 456/456 PASS, menüye dönüş 2/2; tek denetim satırı
+> (17'de Müfide'nin yolu) düzeltildi, hedefli 13 koşuda temiz. Henüz eski surda: 31o (yeni surun ardında şehir yok; E
+> maddesi) ve 17o'nun uzak surları; 21o yeraltında. Sıradaki iş: görsel program (G, H, I) ve E'deki "surun ardı boş".
+
 Hazırlandığı an: 17 Kasım. Durum: 0.99.123 yayında (yeni surda 15 bölüm); 0.99.124 tam testte (yeni surda 27 bölüm).
 Görev yazıları hazır ve danışman (Fable) incelemesinden geçti: `devir/gorev/prompt_C12_fon.txt`, `devir/gorev/prompt_A14.txt`.
 Taban dal: `wip/ist2-taban19` = a38ad405.
