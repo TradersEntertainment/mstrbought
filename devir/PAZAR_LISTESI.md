@@ -4,6 +4,9 @@
 > başarılı, indirmeler yüklendi). Birleşik dal `wip/ist2-birlesik` = f1f007c5. Tam paket 456/456 PASS, menüye dönüş 2/2; tek denetim satırı
 > (17'de Müfide'nin yolu) düzeltildi, hedefli 13 koşuda temiz. Henüz eski surda: 31o (yeni surun ardında şehir yok; E
 > maddesi) ve 17o'nun uzak surları; 21o yeraltında. Sıradaki iş: görsel program (G, H, I) ve E'deki "surun ardı boş".
+> **23 Kasım 18:22 UTC:** sahibi "31o ve 17o'yu hallet" dedi. İki yardımcı açıldı: TAŞIMA 13 (31o surun ardı, 8y
+> kalıbı; `wip/ist2-tasima13`, yazı `gorev/prompt_T13_31o.txt`) ve TUR 15 (17o uzak surlar; `wip/ist2-tur15`, yazı
+> `gorev/prompt_T15_17o.txt`). Teslimden sonra birleştir, tam paket, 0.99.126.
 
 Hazırlandığı an: 17 Kasım. Durum: 0.99.123 yayında (yeni surda 15 bölüm); 0.99.124 tam testte (yeni surda 27 bölüm).
 Görev yazıları hazır ve danışman (Fable) incelemesinden geçti: `devir/gorev/prompt_C12_fon.txt`, `devir/gorev/prompt_A14.txt`.
