@@ -47,6 +47,11 @@ Birleştirme + kendi doğrulamam (≈1 saat), tam test paketi (≈1,5 saat), Git
 - 30o'da düşmanın dış kenardan atılması yeni sette daha sık (17 koşuda 5, eskide 12'de 1).
 - 17 eski sette Büro sahnesinde bir kez yürüme denetimi satırı (kök neden bulunamadı).
 - 12b'de bölümün kendi ordugâhı ile yeni dünyanın ordugâhı üst üste görünebilir.
+- **Yeni sette surun ardı boş (23 Kasım, 0.99.125 tam paketi):** `SurSetSahne` ova alanını `world = false` kurar; eski setin
+  surun ardına kurduğu yürünür şehir (WorldWalk) ve yaşayan kalabalık (CityLife) yeni sette yok. 31o'da CITYCHECK yakaladı
+  (tepeden karede yanık caddenin ötesi boş kum) → 31o bu sürümde varsayılan eski sette (`SurSet.ESKI_VARSAYILAN`,
+  `--yenisur=31o`). Aynı eksik daha önce taşınan sur bölümlerinde de olabilir (26/26o vb.; oyuncu oralarda surun dibinde
+  kalıyor): görsel programda yeni setin ardına şehir (v2 şehri ya da CityLife) bağlanmalı, sonra 31o yeniye geçer.
 
 ## F. İstanbul bittikten sonra (senin önceki isteklerin; sırası sende)
 1. **Keşif denemesi**: çatılarda hareket, nöbetçiler, sızma görevi, serbest zaman (Ayasofya–Yerebatan mahallesi).
