@@ -107,3 +107,19 @@ ve stilize ama çekici bir görünüş.
 - Hesap: 1 ek hesap (toplam 2) yerinde; 3 hesap ancak sanat hattı kurulduktan sonra anlamlı (darboğaz: sanat, benim
   birleştirme/doğrulama hızım, test makinesi). Çoklu hesap kuralları claude.ai'de kontrol edilecek.
 Süreler tahmindir, ölçüm değil.
+
+## K. Fable ikinci göz (23 Kasım, TUR 14 + TAŞIMA 12 kareleri): görsel programın ilk üç turu
+Özet: sur taşı artık inandırıcı; "AI slop" hissi surun yanındaki her şeyden geliyor (karakter, ev, zemin, sis, ufuk, ışık).
+- **A. Atmosfer ve ışık:** mesafeye bağlı sıcak pus (yakında sıfır; bugün 20 m'deki kule siliniyor, 42b süt beyazı), ton
+  eşleme/pozlama, bulutlu gök + uzak arazi/şehir silueti, temas gölgesi/köşe kararması, gece için ayrı ışık kurgusu (soğuk ay +
+  sıcak meşale; bugün gece = gündüzün mavi-gri karartılmışı, kapı kanadı gece kararmıyor).
+- **B. Tek ressam: karakter + ev:** karakterler düz renk + kalın siyah çizgi + iri kafa, sur yarı gerçekçi doku → iki ayrı
+  oyun gibi; tek dil seç (görüntüleme kipi kararıyla birlikte). Evler: dokusuz pastel düzlem, siyah kutu saçak/pencere, levha
+  kepenk, çizgi film alevi, boya turuncusu çatı, tuğla şeridi surunkinden iri → evleri sur gölgelendiricisine (sıva, ahşap,
+  kiremit), çatı doygunluğu yarıya.
+- **C. Zemin ve birleşim:** kapı önünde halka desenli gri zemin, yeşil/turuncu altıgen parke, çime cetvelle kesilmiş meydan
+  (42b), sur dibi bıçak gibi toprağa giriyor, kaide suyun üstünde (ıslak hat/köpük yok) → geçiş etekleri, tek zemin paleti;
+  sura büyük ölçekli kir/yağmur izi/gülle hasarı; düz yüzeylerde ince moiré (dane frekansı mesafeyle sönsün).
+- Küçükler: harpuşta yan yüzü yakında hâlâ koyu zeytin bant; kapı kanadı fazla temiz/açık (kir, çürüme, is); 23 ve 31o
+  karelerini güncel dalda yeniden çek (eski kemer o dallarda kalmıştı).
+- Sonra bir "afiş karesi" (kapı + muhafız + alçak güneş) hedef ölçütü olarak çekilir.
