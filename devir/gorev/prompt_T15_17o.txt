@@ -1,0 +1,57 @@
+**BU GÖREV ONAYLIDIR. Onay ya da soru beklemeden HEMEN başla, sonuna kadar kendi başına çalış, bitince rapor ver. Kimseye soru sorma; takılırsan bulduğunu rapora yaz ve en iyi kararla devam et. Dal oluşturmak, her adımda kaydetmek ve yalnız kendi dalına (`wip/ist2-tur15`) göndermek önceden onaylıdır.**
+
+# İstanbul v2 — TUR 15 (Opus): 17o'da Haliç'in karşı kıyısındaki uzak surlar yeni deniz suru kalemiyle
+
+Depo: `TradersEntertainment/nothistorygame` (yerelde klonla). Taban: `wip/ist2-birlesik` = **f1f007c5** (0.99.125 yayınının kaynağı). Kendi dalın: `wip/ist2-tur15` (tabandan aç, yalnız buraya gönder).
+
+## Durum (okuyarak doğrula)
+- 17o: 28 Nisan 1453 gecesi, Haliç'in kuzey kıyısı (Pınarlar Vadisi), kıyı topları; Galata'da ışık; kova zinciri. Çeşitler `--autotest`, `=slow`, `=kadri`, `=alone`.
+- Varsayılan `in_world = true`: Haliç, karşı şehir ve Galata eski World1453 "springs" bölgesinden (`scripts/chapter17o.gd:142 World1453.build(self, "springs", …)`); Haliç kıyı surları `HornWorld` (`scripts/world/horn_world.gd`, `SiegeField` üzerinden). `in_world = false` yolunda `_far_galata()` (`chapter17o.gd:241`) eski `Scenery.city_walls(self, 180, 260, 1.0, 1453)` kutularını kurar.
+- HornWorld kıyı surlarını yeni deniz suru kalemiyle (`scripts/world/ist/deniz_set.gd` `uzak_parca`/`uzak_kule`, tek ağ `sur_kule.gd` `Ag`, malzeme `sur_doku.gd`; Taşıma 11) YALNIZ bölümün `keep` alanına ≤ 250 m olan kısımda kurar (`horn_world.gd:556-590` `_deniz_yakin`, `_deniz_kur`, `DENIZSET hornworld … ucgen=…` satırı). 17o'nun keep'i VAR (`chapter17o.gd:142`): karşı surun ortası (≈540 m) zaten yeni kalemde (`DENIZSET hornworld DenizSurUzak_740 bolge=springs ucgen=3852`), iki ucu ve buruna dönen koşu eski kutu (ayrıntı DÜZELTMELER). Taşıma 12 karesi: `docs/_kanit_ist2_tasima12/kare/17o/eski/01_karsi_kiyi_sur.jpg`.
+
+## Hedef
+17o'da oyuncunun gördüğü bütün surlar (karşı kıyıda Haliç surları ve kuleleri; görüş alanındaysa kara surlarının Haliç ucu, Galata surları — DÜZELTMELER 5) **yeni kalemle**: uzak katman `deniz_set.uzak_parca/uzak_kule` (gerekirse yakına düşen kısımda `govde/korkuluk/disler/kule`), malzeme ve ton deniz bölümleriyle (17, 18b, 4b) aynı. Eski kutu surlar 17o yeni kipte kurulmaz ya da gizlenir (`deniz_set.gizle` kalıbı). `--eskisur=17o` (`SurSet.eski_istendi("17o")`) eskiyi aynen kurar.
+Kurallar:
+1. **Seçmeli:** HornWorld değişikliği yalnız 17o'da (ör. 17o'nun görüş alanını kapsayan bir `keep`/"deniz bölgesi" ya da bölümün açtığı bir bayrak). HornWorld'ü kullanan ÖTEKİ bölümler bit bit aynı: tabanda ve sonda `DENIZSET` satırları (ad, bölge, üçgen) ve görünüş aynı — en az 4b, 17, 18b, 19, 19o, 29, 29o, 38o ve SiegeField `world` kuran kara bölümlerinden ikisi (ör. 8, 26) için ÖNCE|SONRA satır karşılaştırması.
+2. **Çarpışma:** karşı kıyı oyuncunun yürüyemeyeceği uzaklıkta; uzak katmanın çarpışması olmaz (`no_walk`), yakın kalemin çarpışması kalemin kendi kuralıyla. Haliç dilimi sondası `HALICSONDA` aynı.
+3. **Uyum:** sur dibi kıyıya/suya oturur (havada, suya gömük, araziye yarım gömük değil); kuleler ve dişler gece siluetinde seçilir; World1453 karşı şehir evleri ve Galata ile çakışma/z-fight yok; deniz kalemi Haliç'in gerçek hattını izler (HornWorld'ün kıyı çizgisi).
+4. **Bütçe:** 17o oyuncu karelerinde ÖNCE|SONRA ≤ +%5 (kare süresi, çizim çağrısı, üçgen); aşarsa uzak katman LOD/görünürlük mesafesi (`visibility_range_end`) ile.
+5. Gece ışığı, Galata ışığı, sis, gökyüzü DEĞİŞMEZ.
+
+## Kurallar (kesin)
+Türkçe çalış, Türkçe yaz. Godot 4.4.1, gl_compatibility, prosedürel GDScript, birinci şahıs komedi oyunu "Gerçek Tarih Bu Değil" (1453 kuşatması).
+- **Oyun sahibinin kuralları:** KUTU YASAĞI; HAVADA DURAN HİÇBİR ŞEY OLMAZ; TEK GÖRSEL DİL (`docs/ISTANBUL_GORSEL_DIL.md`).
+- Sur ölçüleri ve ÇARPIŞMA DONDU. Her kayıttan önce aynı: `tests/_ist/sur_sozlesme.tscn` → `SURSOZLESME PASS kalem=13 kesim=8`; `tests/_ist/sur_oyun_denetim.tscn` → `SUROYUN nokta=519 havada=0 gomuk=0 katida=0`; `tests/_ist/sur_oyun_yuru.tscn` → `WALKTHRU OZET yol=7 tamam=7 takilma=0 dusme=0`; `tests/_ist/esya_fizik.tscn` → `ESYATEST PASS`; `tests/_ist/tasima11_halic_sonda.tscn` → `HALICSONDA OZET carp=661 karma=3854034809`; `tests/_ist/tur14_marmara_sonda.tscn` → `MARMARASONDA OZET carp=1837 karma=2250736444`.
+- Var olan replik metni, ses, denge, gizli süre, sayaç DEĞİŞMEZ. Yeni sesli replik yazma.
+- Testler `--max-fps 20`, tam süzgeç: `grep -E 'AUTOTEST (PASS|FAIL)|SCRIPT ERROR|VISAUDIT|WALKTHRU|HELDAUDIT|ARMAUDIT|WARN_FX|WARN_FLY|WARN_VOID|^ESYAAUDIT (dusme|havada|gomuk|tikama|sinir)|^HAREKETAUDIT|^ZFIGHT'`. KÖK NEDEN; susturma YOK. Her çeşit BİTMELİ.
+
+## Doğrulama (son kayıtta; çıktılar `docs/_kanit_ist2_tur15/testler/`)
+- Ayrıştırma `res://tests/parse_check.tscn` PASS; sözleşme altılısı aynı.
+- 17o: `""`, `=slow`, `=kadri`, `=alone` ×2 (yeni) ve `--eskisur=17o` ile `""` ×1 → PASS, BİTER, denetim 0.
+- ZFIGHT: `--headless -s tests/zfight_check.gd -- res://scenes/chapter17o.tscn` → 0 satır.
+- Madde 1'in bölümleri ×1 → PASS, denetim 0, `DENIZSET` satırları tabanla birebir (fark dosyası `testler/denizset_fark.txt` boş).
+- `tests/run_tests.sh` içindeki 17o kalemleri (:146 çeşitleri) PASS.
+
+## Kanıt → `docs/_kanit_ist2_tur15/`
+`rapor.md`: TAMAM / KISMEN / YAPILMADI; kök neden; seçilen yol; ÖNCE|SONRA kareler ve cümleleri; bütçe tablosu; "hâlâ kötü olanlar" (dürüst).
+Kareler: ÖNCE|SONRA aynı kameradan, 1280×720 jpg 85, TAM BOY: oyuncunun gerçek konumlarından (başlangıç, top başı, kova zinciri, kıyı ucu) karşı kıyıya bakış; bir de dar açılı (yakınlaştırılmış, 20–30° görüş) karşı kıyı karesi; gece (bölüm gecedir). Her SONRA karesi için tek cümle (kutu, havada, suya oturma, aynı ressam; kötüyse "kötü" yaz). Kare aracı: `tests/_ist/tasima11_halic_kare.tscn` / `tasima12_kare.tscn` kalıbından yeni `tests/_ist/tur15_kare.*`. Sahibine en iyi 3 kare `kare/sahip_*.jpg`. Kareler DALA KAYDEDİLİR.
+
+## Dosya sahipliği
+- **SEN:** `scripts/chapter17o.gd`; `scripts/world/horn_world.gd` (YALNIZ seçmeli yol; varsayılan davranış bit bit aynı); `scripts/world/ist/deniz_set.gd` (YALNIZ yeni yardımcı eklemek; var olan işlevlerin çıktısı aynı); yeni `tests/_ist/tur15_*`.
+- **Başka oturum (aynı anda çalışıyor, DOKUNMA):** TAŞIMA 13 — `scripts/chapter31o.gd`, `sur_set.gd`, `sur_set_sahne.gd`, `baglama.gd`, `sur_set_hub.gd`, `fallen_city.gd`, `hayat*.gd`, `tests/city_check.gd`.
+- **Kimsenin değiştirmediği:** `scripts/level/siege_field.gd`, `scripts/world/world1453*.gd`, `scenery.gd` (`Scenery.city_walls` ortak: değiştirme, 17o'da çağırma), `sur_kule.gd`, `sur_doku.gd`, öteki bölüm dosyaları, `scripts/player/`, `scripts/npc/`, `sur_sozlesme*`, `tests/run_tests.sh`, `project.godot`.
+
+## KESME SIRASI
+1 karşı kıyı Haliç surları yeni kalemle + eski kutular yok + öteki bölümler aynı → 2 17o çeşitleri/ZFIGHT/sondalar → 3 kareler + rapor → 4 `in_world = false` yolu (`_far_galata`) da yeni kalemle → 5 bütçe iyileştirmesi. Hedef 2–3 saat.
+
+## Dayanıklılık ve yasaklar
+Her adımın sonunda ve en geç 20 dakikada bir kaydet + gönder (yarım da olsa; kareler dahil); `docs/_kanit_ist2_tur15/durum.md` her kayıtta güncel. İlk 40 dakikada ara kayıt. Arka plan işleri ≤ 10 dakika; aynı anda en çok 4 süreç; bitti bildirimi gelmezse çıktı dosyasını kendin oku. Testleri çalışma ağacının bir eşinden koş (`~/is/kopya`). Kayıt iletisine model adı yazma. Kurulum: Godot 4.4.1 linux x86_64 resmi sürümü `~/is/godot/godot` (indir); `timeout 900 ~/is/godot/godot --headless --path . --import`; pencereli kare `xvfb-run -a -s "-screen 0 1280x720x24" ~/is/godot/godot --path . --rendering-driver opengl3 --resolution 1280x720 …` (xvfb yoksa `sudo apt-get install -y xvfb`; sudo YALNIZ apt-get için). Oturum/tetikleyici/zamanlama/bildirim/ajan başlatma araçlarını KULLANMA. PR açma. Yalnız kendi dalına gönder; geçmişi yeniden yazma, zorla gönderme yok; main'e dokunma. `pkill`/`killall` yok (yalnız `kill <pid>`). Ses üretme. İzin kutusu çıkarabilecek komut yok: `rm -rf`/`rm -r`/`mv`/`cp -r` hedefinde kabuk değişkeni kullanma (tam yolu elle yaz); silmeyi heredoc zincirine gömme; `bash -c '…'` ya da `until/while … sleep` bekleme döngüsü yazma; geçici dosyalar yalnız `~/is/` altında; `.git/` içine ve `.gitignore`'a yazma, `git config` ve `git clean` kullanma; Godot'nun ürettiği `.import`, `.translation`, `.uid` yan dosyalarını kayda ekleme. Dalda duran öteki `docs/_*` klasörlerine dokunma. Disk payı sınırlı: ham kare yığınlarını ve videoları iş bitince sil.
+
+## DÜZELTMELER (danışman incelemesi, kod okumasıyla; yukarıdakiyle çelişirse BU BÖLÜM geçerli)
+1. 17o `keep` veriyor (`chapter17o.gd:142`); kıyı x −920, sur x −700 (≈214 m): 250 m eşiği yalnız ortadaki ≈540 m'yi alıyor (`docs/_kanit_ist2_tasima11/testler/bolum/S_g_17o.txt:2`). Eski kutu kalanlar bu aralığın iki ucu ve buruna dönen koşu (`horn_world.gd:619,624`).
+2. **`keep`'i GENİŞLETME:** `_free` keep içine hiçbir şey kurmaz (`horn_world.gd:76-77,463,474`), `_wall_top` surları keep yanında alçaltır (`:599-604`), `skyline` ve `GalataView` de keep alır (`:59,174`).
+3. **Anahtar: bölge adına bağlı sabit.** Ör. `const DENIZ_UZAK := {"springs": <m>}` ve `_deniz_yakin` içinde `DENIZ_UZAK.get(region_name, DENIZ_YAKIN)` (`:574`). "springs"i yalnız 17o kurar; `World1453.build` düğümü ekleyip hemen kurduğu için (`world1453.gd:283-284`, `siege_field.gd:121-126`) bölüm önceden örnek değişkeni veremez, bu yüzden bölge adı. `_deniz_eski` / `--eskisur=17o` aynen çalışır (`:562-569`). Beklenen yan etki: 3852'lik `DENIZSET` satırı ve rng akışı YALNIZ 17o'da değişir (öteki bölümlerin satırları birebir).
+4. Koşu başına tek ağ, `visibility_range_end = 1200` (`:588`): bütçe için bu değer ayarlanır.
+5. **Atlanan sur kaynakları (kapsama EKLENDİ):** (a) **Galata surları** kutu ve oyuncunun KENDİ kıyısında: `scripts/level/galata_view.gd:96-106` (`horn_world.gd:174`'ten çağrılıyor) → `galata_view.gd` SENİN dosyan, YALNIZ "springs"/17o'ya bağlı seçmeli yolla (öteki çağıranlarda bit bit aynı) yeni kalem (Ceneviz surları da aynı taş dili: `deniz_set`/`sur_kule` parçaları; KUTU YASAĞI). (b) Blakherna kabuğu `horn_world.gd:799` 17o'dan görünüyorsa aynı bölge anahtarıyla. (c) Kara surlarının Haliç ucu `SiegeField._wall_extension` (`siege_field.gd:118-119`): 17o karelerinde görünüyorsa `siege_field.gd`'de YALNIZ bölge "springs"e bağlı seçmeli gizleme/yenileme satırı (öteki bölümler birebir; T13 bu dosyaya dokunmuyor); görünmüyorsa raporda "görünmüyor" + kare.
+6. `run_tests.sh`'ta 17o yalnız :146 çeşitleri; `map_check.gd`'de 17o kalemi yok.
+7. Dosya sahipliği buna göre: SEN listesine `scripts/level/galata_view.gd` (seçmeli) ve gerekirse `scripts/level/siege_field.gd` (madde 5c, seçmeli) eklenir; "Kimsenin değiştirmediği" listesinden ikisi çıkar. Madde 1'in karşılaştırma listesine GalataView kullanan bölümler de girer (grep `GalataView` / `horn_world.gd:174` çağıranları).
