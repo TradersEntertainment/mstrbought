@@ -24,3 +24,6 @@
 11. **CI 0.99.126 (#340) düştü: 20 `--difficulty=2` VISAUDIT personhidden D20_G_REPELLED** (dost düellocu, moloz
     yamacında yana yer yok). Yerelde 0/8 yeniden üretilemedi. Düzeltme `chapter20.gd _see_giust`: hat hâlâ doluysa komutan
     oyuncunun 1,7–2,2 m yanında hattı açık bir yere gelir.
+12. **42b: talim meydanının ötesi ufka kadar boş düz ova** (`42b_00` sağ üst/sol alt; göz −16/1,6/−32,5). Surun iç
+    yanında şehir yok gibi; bilinen "42b meydanı boş/çorak" notunun daha ağır hâli (görsel program ya da v2 şehir bağlaması).
+13. 38o: Haliç surunun ardında çıplak, düz gri şehir tepesi (`38o_05`): doku/çimen yok (görsel program).

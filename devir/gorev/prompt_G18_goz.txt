@@ -1,0 +1,150 @@
+**BU GÖREV ONAYLIDIR. Onay ya da soru beklemeden HEMEN başla, sonuna kadar kendi başına çalış, bitince rapor ver. Kimseye soru sorma; takılırsan bulduğunu rapora yaz ve en iyi kararla devam et. Dal oluşturmak, her adımda kaydetmek ve yalnız kendi dalına (`wip/goz18`) göndermek önceden onaylıdır.**
+
+# G18 (Opus): Göz kontrolü bulguları — hub kapı geçidinde arazi yırtığı + kutu binalar
+
+Depo: `TradersEntertainment/nothistorygame` (yerelde klonla). Taban: `wip/ist2-birlesik` = **b1531a7b**. Kendi dalın: `wip/goz18` (tabandan aç, yalnız buraya gönder).
+
+## Neden
+0.99.126'dan sonra yönetici, yeni sura bağlı 34 bölümde oyuncunun yolundan dört yöne bakan kareler çekti. Araç `tests/_ist/bakis_kare.gd`, tabanda var; kullanımı dosyanın başında.
+- `bak=x,y,z,yön` tek noktadan dört TAM BOY kare çeker.
+- `sonda=x0,z0,x1,z1` bir doğru boyunca 2 m arayla şunları basar: zemin çarpışması (`carp_y`), ham v2 arazisi (`arazi_ham`), düzlenmiş arazi (`arazi`, `IstGeo.h`).
+
+Kareler okunarak doğrulanacak.
+
+### 1. Hub kapı geçidinde arazi döşemenin üstüne çıkıyor (GERÇEK HATA, en önemlisi)
+Görünüş:
+- Şehir meydanından (hub; `byz_walls` bölgesi, SurHub "romanos") çıkış kapısına bakınca, geçidin içinde toprak yamuk bir parça olarak taş döşemenin üstüne çıkıyor; ortada mavimsi bir yarık var.
+- Yeniden üretmek: `bolum=10h bak=31,1.6,5.9,90 bas=6`.
+
+Ölçüm (`bolum=10h sonda=30,58,5.9`):
+- Setin zemin çarpışması peribolosta y **0,00** (x 42–52).
+- Görünen arazi aynı yerde **+0,12**: oyuncunun ayağı 12 cm toprağın içinde, döşeme toprağın altında kalıyor.
+- Dış surun ötesinde arazi −3,43, ham arazi 1,05'ten −4'e iniyor.
+
+Karşılaştırma, aynı kesimin 8y hâli (`bolum=8y sonda=0,-14,0,30`):
+- peribolosta arazi **−0,08**, set zemini 0,00 → doğru.
+
+Yani hub çerçevesinde set, gerçek araziye göre ~0,20 m aşağıda oturuyor.
+
+Kök, okuyarak doğrula:
+- v2 surunun peribolos düzlük kayıtları (`scripts/world/ist/sur_oturtma.gd` ~100–140, `IstGeo.duzle`, son kayıt kazanır) araziyi v2'nin kendi peribolos yüksekliğinde tutuyor.
+- Hub'ın kendi düzlemesi (`scripts/world/ist/sehir.gd:~1997`, r 48 + 10, `hx.origin.y − 0.12`) ve `baglama.gd` ~376–400 yaması (`byz_walls` için `q.x > sur_x` → `h_ham`) peribolos bandını düzeltmiyor.
+- Hub'ın v2'deki düşey yeri: `sur_set_hub.gd` `hub_v2 = a.xf · M⁻¹` ile `sehir.gd hub_xf()` / `IstBaglama` çerçevesi.
+
+Etkilenen bölümler: hub'ı kullanan hepsi, yani 10h, 12b, 13, 23, 24, 6 (`=byz`), 7 (`=byz`).
+- Kapı açık mı, oyuncu geçide giriyor mu, yalnız görüyor mu: her biri için not et.
+
+İstenen:
+- Hub'da sur setinin ayak izinde (iç surun dış yüzünden dış surun dış yüzüne, kesim boyunca) görünen arazi, setin zemininin hemen altında olmalı: 8y ile aynı ölçü, zemin −0,03…−0,15.
+- Kapı geçidinde ve peribolosta toprak döşemenin üstüne çıkmayacak.
+- Dış surun ötesi (teras, hendek, ova) bugünkü gibi kalacak.
+- Seçenekler:
+  - (a) Set bandına, v2 kayıtlarından SONRA, setin yüksekliğinde düzlük kayıtları; arazi ağı kayıttan sonra kurulmalı ya da `IstDunya.yenile()`.
+  - (b) Hub'ın düşey yerini setle tutarlı kılmak; ama meydan döşemesi (y 0) ile iç kapı eşiği arasında basamak OLMAMALI.
+- Hangisini seçtiğini ve nedenini rapora yaz.
+- 8y, 31o (B31O; 8y çerçevesi) ve öteki bölgelerde arazi DEĞİŞMEZ: önce/sonra sonda satırları aynı.
+
+### 2. 18b: Haliç sur yolunun hemen yanında penceresiz pembe kutu bina
+- 3–4 kat, beyaz kat çizgili, kapısız ve penceresiz; KUTU YASAĞI.
+- Yönetici karesi: göz 1,4/11,2/61,8 (başlangıç noktası); sol üst ve sağ alt çeyrekte.
+- Ne olduğunu bul: uzak LOD'un yakında kalması mı, sadeleştirilmiş şehir bloğu mu, eski dünya kalıntısı mı?
+- Kök nedeniyle düzelt: yakında tam ev modeli ya da hiç olmaması. Aynı kaynaktan başka bölümlerde de varsa onları da düzelt.
+
+### 3. 25: başlangıcın ~30 m çevresinde penceresiz pastel kutu evler ve koyu boş bir meydan
+- Göz −47,9/1,6/−71,1 (25 başlangıcı sur üstünde, −8,7/10,2/15,3; oyuncu Ayasofya içine de giriyor).
+- Oyuncunun yolundan görünüyor mu, erişilebiliyor mu? Ne olduklarını bul (31o'nun bilinen "pastel kutu ev" notu ile aynı aile olabilir).
+- Görünüyorsa kök nedeniyle düzelt; görünmüyorsa kanıtla ve rapora yaz.
+
+### 4. 36b (aday, düşük): hendek dibinde açık gri, düz, kalınlıksız düzlemler
+- Göz −37,2/−7,9/30,0. Büyük olasılıkla kesim ucundaki hendek kapağı.
+- Oyuncunun yolundan (sur yolu, teras, gedik) görünüp görünmediğini kontrol et.
+- Görünüyorsa kalınlık ve taş/toprak dokusu (tek görsel dil); görünmüyorsa rapora yaz.
+
+## Kurallar (kesin)
+Türkçe çalış, Türkçe yaz. Godot 4.4.1, gl_compatibility, prosedürel GDScript, birinci şahıs komedi oyunu "Gerçek Tarih Bu Değil" (1453 kuşatması).
+- Sahibinin kuralları: KUTU YASAĞI; HAVADA DURAN HİÇBİR ŞEY OLMAZ; TEK GÖRSEL DİL.
+- Sur ölçüleri ve ÇARPIŞMA DONDU. Her kayıttan önce aynı:
+  - `tests/_ist/sur_sozlesme.tscn` → `SURSOZLESME PASS kalem=13 kesim=8`
+  - `tests/_ist/sur_oyun_denetim.tscn` → `SUROYUN nokta=519 havada=0 gomuk=0 katida=0`
+  - `tests/_ist/sur_oyun_yuru.tscn` → `WALKTHRU OZET yol=7 tamam=7 takilma=0 dusme=0`
+  - `tests/_ist/esya_fizik.tscn` → `ESYATEST PASS`
+  - `tests/_ist/tasima11_halic_sonda.tscn` → `HALICSONDA OZET carp=661 karma=3854034809`
+  - `tests/_ist/tur14_marmara_sonda.tscn` → `MARMARASONDA OZET carp=1837 karma=2250736444`
+- Var olan replik metni, ses, denge, gizli süre, sayaç DEĞİŞMEZ. Yeni sesli replik yok. Kalabalık azaltılmaz.
+- Oyuncunun kare süresi kötüleşmez: hub bölümlerinde CITYCHECK µs ve açılış süresi önce|sonra.
+
+## Doğrulama (çıktılar `docs/_kanit_goz18/testler/`)
+1. Ayrıştırma `res://tests/parse_check.tscn` PASS; sözleşme altılısı aynı.
+2. Sonda önce|sonra:
+   - Geçit boyunca 10h, 12b, 13, 23, 24, 6 `cesit=byz`, 7 `cesit=byz` (gerekirse `bas=` ile bölüm akışı beklenir): peribolos bandında `arazi` ≤ `carp_y − 0,03` ve ≥ `carp_y − 0,3`.
+   - 8y (`sonda=0,-14,0,30`) ve 31o'da satırlar BİREBİR aynı.
+3. Otomatik test ×2 PASS: 10h, 12b, 13 `=city`, 23, 24, 6 `=byz`, 7 `=byz`, 18b, 25, 36b; ayrıca 8y ve 31o ×1 (değişmediğinin kanıtı).
+4. `tests/city_check.tscn` CITYCHECK PASS; `tests/street_check.tscn` STREETCHECK PASS.
+5. Değişen bölümlerde ZFIGHT 0: `timeout 150 godot --headless --path . -s tests/zfight_check.gd -- res://scenes/chapterX.tscn`.
+6. `tests/menu_return.tscn -- --chapter=26` ve `--chapter=20o` MENURETURN PASS.
+7. Tam paket bu görevde YOK (yönetici koşar). Ama değişen ortak dosyaların kullanıldığı bütün bölümlerin varsayılan otomatik testi ×1 PASS.
+
+## Kanıt → `docs/_kanit_goz18/`
+`rapor.md`:
+- her bulgu için TAMAM / KISMEN / YAPILMADI;
+- kök neden (dosya:satır);
+- seçilen düzeltme ve neden;
+- sonda tabloları önce|sonra;
+- "hâlâ kötü olanlar" (dürüst).
+
+Tam boy ÖNCE|SONRA kareler (1280×720 jpg 85; `bakis_kare bak=` ya da kendi kare aracın), her bulgu için oyuncunun gerçek bakışından:
+- 1. bulgu: 10h ve 13'te geçide bakış + kapının içinden ileri bakış;
+- 2. ve 3. bulgu: ilgili bakış.
+
+Sahibine en iyi 3 kare: `kare/sahip_*.jpg`. Kareler DALA KAYDEDİLİR.
+
+## Dosya sahipliği
+- **SEN:**
+  - `scripts/world/ist/baglama.gd`, `sur_set_hub.gd`, `sur_oturtma.gd`, `geo.gd` (yalnız bu bulguların düzeltmesi; başka bölge/bölüm davranışı değişmez);
+  - `scripts/world/ist/sehir.gd` (yalnız 1–3. bulguların kök nedeni oradaysa, en az değişiklik);
+  - bulgusu olan bölüm dosyaları (`chapter18b.gd`, `chapter25.gd`, `chapter36b.gd`, hub bölümleri; yalnız bulgunun düzeltmesi);
+  - yeni `tests/_ist/goz18_*` araçları (`bakis_kare.gd`'yi değiştirme, gerekirse kalıtımla genişlet).
+- **Başka oturum (aynı anda çalışıyor, DOKUNMA):** G17 denetim:
+  - `scripts/ui/hud.gd`, `scripts/npc/*`, `scripts/level/stage.gd`, `scripts/world/ist/sur_oyun_ag.gd`, `sur_oyun_parca.gd`;
+  - `tests/_denetim17/*`, `tests/run_tests.sh`, `chapter8y.gd`.
+  - Bulgun bunlardan birindeyse rapora yaz, dokunma.
+- **Kimsenin değiştirmediği:** `project.godot`, sözleşme ve sonda testleri, `VERSION`, `.github/*`, `scripts/ui/guncelleyici.gd`, `scripts/autoload/game_state.gd`, `i18n/*`.
+
+## KESME SIRASI
+Hedef 3–4 saat.
+1. 1. bulgu (hub kapı geçidi): ölç, düzelt, sonda + kare + bölüm testleri.
+2. 2. bulgu (18b).
+3. 3. bulgu (25).
+4. 4. bulgu (36b).
+5. Rapor + kareler.
+
+## Dayanıklılık ve yasaklar
+- **Kayıt:**
+  - Her adımın sonunda ve en geç 20 dakikada bir kaydet + gönder (yarım da olsa; kareler dahil).
+  - `docs/_kanit_goz18/durum.md` her kayıtta güncel; iş bitince ilk satırı `# G18 durum: BİTTİ` olur.
+  - İlk 40 dakikada ara kayıt.
+  - Kayıt iletisine model adı yazma.
+- **Süreçler:**
+  - Arka plan işleri ≤ 10 dakika; aynı anda en çok 4 süreç; bitti bildirimi gelmezse çıktı dosyasını kendin oku.
+  - Testleri çalışma ağacının bir eşinden koş (`~/is/kopya`).
+- **Kurulum:**
+  - Godot 4.4.1 linux x86_64 resmi sürümü `~/is/godot/godot` (indir).
+  - `timeout 900 ~/is/godot/godot --headless --path . --import`.
+  - Pencereli kare: `xvfb-run -a -s "-screen 0 1280x720x24" ~/is/godot/godot --path . --rendering-driver opengl3 --resolution 1280x720 …`. xvfb yoksa `sudo apt-get install -y xvfb` (sudo YALNIZ apt-get için).
+- **Yasak araçlar ve işler:**
+  - Oturum/tetikleyici/zamanlama/bildirim/ajan başlatma araçlarını KULLANMA.
+  - PR açma.
+  - Yalnız kendi dalına gönder; geçmişi yeniden yazma, zorla gönderme yok; main'e dokunma.
+  - `pkill`/`killall` yok (yalnız `kill <pid>`).
+  - Ses üretme.
+  - Denetim susturma, eşik gevşetme yok.
+- **İzin kutusu çıkarabilecek komut yok:**
+  - `rm -rf`/`rm -r`/`mv`/`cp -r` hedefinde kabuk değişkeni kullanma (tam yolu elle yaz).
+  - Silmeyi heredoc zincirine gömme.
+  - `bash -c '…'` ya da `until/while … sleep` bekleme döngüsü yazma.
+  - Geçici dosyalar yalnız `~/is/` altında.
+  - `.git/` içine ve `.gitignore`'a yazma; `git config` ve `git clean` kullanma.
+- **Kayda eklenmeyenler:** Godot'nun ürettiği `.import` ve `.translation` yan dosyaları ve ilgisiz `.uid`'ler kayda girmez. Yeni `.gd` dosyalarının `.uid`'si eklenir.
+- **Dal ve disk:**
+  - Dalda duran öteki `docs/_*` klasörlerine dokunma.
+  - Disk payı sınırlı: ham kare yığınlarını iş bitince sil.
