@@ -29,6 +29,9 @@
 > **09:00 UTC:** G18 açıldı (göz kontrolü bulguları 1–4; danışman kökü düzeltti: hub'da şehrin Romanos öğesinin
 > `pos.y`'si yama sınırı dışında doğal yükseklikte okunuyor → "iç kuşak" düzlük kaydı peribolosu +0,12'ye çekiyor; çözüm
 > `sur_oturtma.ic_y_ozel`). session_01RAjzxKy6HZWoDH7rF8FX1J → `wip/goz18`.
+> **10:20 UTC:** CI #341 de düştü: 20 `--difficulty=2` D20_G_DONE (aynı kök; şafak repliği). Yerel tekrar `--max-fps 20`
+> olmadan yapılmıştı (0/8; CI 2/2). Düzeltme `_giust_hatti_ac()` iki replikte; 20 FPS'de 8/8 PASS. main d8d34273 → **CI #342
+> (45373873762)**. QA dersi taslağı `$S/qa127.md`.
 
 Hazırlandığı an: 17 Kasım. Durum: 0.99.123 yayında (yeni surda 15 bölüm); 0.99.124 tam testte (yeni surda 27 bölüm).
 Görev yazıları hazır ve danışman (Fable) incelemesinden geçti: `devir/gorev/prompt_C12_fon.txt`, `devir/gorev/prompt_A14.txt`.
