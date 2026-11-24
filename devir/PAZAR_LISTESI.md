@@ -38,7 +38,11 @@
 > 898fec23. G18 geçitteki toprağın setin `SurDibiEtek`'i olduğunu buldu. Yönetici kökü ölçtü: kapı kesiği VAR, ama kapıyı
 > iki yandan tutan kulelerin geçide bakan yan kenarının eteği (`sur_oturtma_ag.gd kule()`) geçide giriyordu (8y'de de).
 > Düzeltme: geçide bakan kule kenarına etek yok + komşu köşede normal harmanlanmaz. 8y ve 10h geçidi temiz (kareler).
-> Doğrulama `gorev/dog127e.sh` koşuyor.
+> Doğrulama `gorev/dog127e.sh`: sözleşme altılısı aynı, ZFIGHT 0, 27 kapılı bölüm koşusu PASS → 0e9989f6.
+> **11:40 UTC:** CI #342 TESTLER GEÇTİ (paketleme sürüyor). **G17 teslim** (rapor dalda; durum "Bitti" küçük harf): dört
+> denetim pakette (görünmez zemin/alet/donuk KESİN, hayvan ADAY), aşçı kökü (`_face_listeners` Soldier), 8y hendek köprüsü
+> ayakları, öküzler. Açık: bütün bölümlerin PACE taraması (`tests/_denetim17/pace_tarama.sh`, 6–8 sa) koşulmadı; 26/26o
+> Sultan'ın atı (AyakHayvan eğim 17°). Birleşik 3d747148 (G16+G17+G18+etek+20). Tam paket `gorev/tam127.sh` koşuyor.
 
 Hazırlandığı an: 17 Kasım. Durum: 0.99.123 yayında (yeni surda 15 bölüm); 0.99.124 tam testte (yeni surda 27 bölüm).
 Görev yazıları hazır ve danışman (Fable) incelemesinden geçti: `devir/gorev/prompt_C12_fon.txt`, `devir/gorev/prompt_A14.txt`.
