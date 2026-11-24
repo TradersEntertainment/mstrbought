@@ -1,0 +1,130 @@
+**BU GÖREV ONAYLIDIR. Onay ya da soru beklemeden HEMEN başla, sonuna kadar kendi başına çalış, bitince rapor ver. Kimseye soru sorma; takılırsan bulduğunu rapora yaz ve en iyi kararla devam et. Dal oluşturmak, her adımda kaydetmek ve yalnız kendi dalına (`wip/denetim17`) göndermek önceden onaylıdır.**
+
+# G17 (Opus): Denetim genişletmesi — "HAVADA DURAN HİÇBİR ŞEY OLMAZ" bütün bölümlerde ölçülsün
+
+Depo: `TradersEntertainment/nothistorygame` (yerelde klonla). Taban: `wip/ist2-birlesik` = **f957694c**. Kendi dalın: `wip/denetim17` (tabandan aç, yalnız buraya gönder).
+
+## Neden (okuyarak doğrula)
+Oyun sahibi 0.99.125'te 8y'yi oynarken şunları gördü. Otomatik denetimlerin hiçbiri bunları yakalamamıştı:
+- **Görünmez rampa:** dış kapıdan köprüye inen toprak rampanın yalnız çarpışması vardı, görünen ağı yoktu (`scripts/world/ist/sur_oyun_ag.gd` `pis()` tek ağı kendi içine pişirip siliyordu). Oyuncu görünmez rampada yürüdü, kapı eşiği havada göründü. Tabanda DÜZELTİLDİ (192e1f8c).
+- **Havada keçiler:** `scripts/npc/goat.gd` zemini y 0 sanıyordu; 8y'nin ovası 3,5 m aşağıda. Tabanda düzeltildi (`Goat.zemin`).
+- **Donup bekleme:** 8y'de Hasan pazara ~24 sn yürüyordu, oyuncu ~15 sn donuk bekledi (`chapter8y.gd` `_finale`, `_hasan_lead`). Tabanda düzeltildi.
+- **Aşçı havayı karıştırıyor:** 8y ordugâh girişinde (`chapter8y.gd:898` `Stage.station(… "stir_pot" …)`, `scripts/level/stage.gd` `station`) kepçe kazanın dışında. Sahibinin karesi bölüm sonu repliği ("Ordugâh. Bir şafakta…") sırasında; yönetici yeniden üretemedi (oyuncu uzakta ve 4 m yakında kepçe kazanda). AÇIK.
+
+Neden kaçtı:
+- `VISAUDIT float/sunk` (`scripts/ui/hud.gd:2523 _ground_audit`, `_audit_chars`) yalnız kişilere bakıyor, hayvanlara ve eşyaya bakmıyor.
+- "Çarpışma var, görüntü yok" denetimi hiç yok.
+- Otomatik test hızlı kipte, bekleme süreleri ölçülmüyor.
+- İş istasyonlarında aletin hedefte olup olmadığı ölçülmüyor.
+
+## Hedef
+Dört yeni denetim. Her biri `run_tests.sh`'ta otomatik testte koşar, bulgu satırı basar ve paketi düşürür (`fail=1`, VISAUDIT gibi). Sonra bütün bölümlerdeki bulgular KÖK NEDENİYLE düzeltilir. Susturma, eşik gevşetme, liste dışı bırakma YOK; istisna yalnız gerçekten öyle olması gereken (uçan kuş, havada atılan gülle) ve gerekçesi rapora yazılmış durumlar için.
+1. **Hayvanlar ve duran eşya havada/gömük:**
+   - Kapsam: `_ground_audit` kalıbıyla, oyuncunun 30 m yakınındaki bütün hayvanlar (Goat, tavuk, köpek, at, deve, kedi, yerdeki kuşlar; `scripts/npc/` ve `canli_kit` kullananlar).
+   - Ölçüt: gövde tabanı ile altındaki katı zemin arasındaki fark > 0,15 m ise `VISAUDIT float`, ayak zeminin > 0,10 m altındaysa `sunk`.
+   - Uçan ve konmaya inen kuş sayılmaz (durumu belirgin olmalı).
+   - Bölüm başına bir kez, bölümün bütün akışı boyunca: başta değil, hareket ettikçe de.
+   - Satırda `who=<sınıf>` ve `src=` olur.
+2. **Görünmez zemin (`GORUNMEZZEMIN`):**
+   - Oyuncu zemindeyken her 0,5 sn: ayağın altındaki çarpışma noktasının ±0,3 m'sinde GÖRÜNEN bir yüzey (görünür MeshInstance3D üçgeni) var mı?
+   - Yaklaşım: aday ağlar (yakın, görünür; `MultiMesh` ve `Baked` dahil), ağ başına önbelleğe alınmış `generate_triangle_mesh()` + `intersect_ray`. AABB tek başına yetmez (arazi AABB'si her şeyi içerir).
+   - Yoksa: `GORUNMEZZEMIN scene=… at=… collider=<yol>`.
+   - Kasıtlı görünmez döşemeler (ör. 8y `_floor`) görünen arazinin hemen altındadır: ölçüt "görünen yüzey ±0,3 m'de" olduğu için bunlar geçer.
+   - Görünmez sınır duvarları zemin değildir (yalnız ayak altı ölçülür).
+   - **Kanıt şartı:** `pis()` düzeltmesi geçici olarak geri alınınca (yalnız yerel denemede, kayda girmez) 8y'de denetim rampayı yakalar; düzeltmeyle 0.
+3. **İş istasyonu aleti (`ALETAUDIT`):**
+   - `Stage.station` türlerinde aletin ucu hedefinde mi? `stir_pot`: kepçe ucu kazanın ağzında (yarıçap + 0,1 m); `dig`, `sweep`, `hammer_log`… için de aynı mantık, aletin uç noktası ile işin noktası.
+   - Bölüm boyunca örnekle; aralıksız > 1 sn dışarıdaysa satır bas.
+   - Sahibinin karesini yeniden üretmeyi dene: 8y'de oyuncu `END_AT`'ta, son sahne sırasında (konuşma, bakış dönüşü, `look_target`, sokak tepkisi). Kök nedeni bul ve düzelt.
+4. **Donuk bekleme (`DONUKAUDIT`):**
+   - Oyuncu `frozen` iken konuşma, zincir, kararma ya da sinema yoksa ve bu > 4 sn sürerse satır bas (gerçek zamanlı ölçülür).
+   - Hızlı kipte bekleme görünmez. Bu yüzden ölçüm, gerçek hızda oynanan yürüyüşlerde yapılır:
+     - 8y'nin `=yuru` çeşidi (`chapter8y.gd:178 _tasima10_yuru`) siperden sonra da sürsün: Hasan'ın ardından pazara, son sahneye kadar.
+     - Kanıt: Hasan düzeltmesi geçici geri alınınca DONUKAUDIT yakalar; düzeltmeyle 0.
+   - Gerçek hızda yürüyen başka çeşitler varsa (grep `yuru`, `walk_player`) onlar da.
+
+Sonra: tam paket (`SHARD=k SHARDS=4 MAXFPS=20`, bkz. Dayanıklılık) yeni denetimlerle koşulur. Her bulgu bölüm bölüm listelenir ve kök nedeniyle düzeltilir: zemin işlevi verilmemiş hayvan, pişirmede kaybolan ağ, yanlış y, kayan alet. Gerekirse kanıt karesiyle.
+
+## Kurallar (kesin)
+Türkçe çalış, Türkçe yaz. Godot 4.4.1, gl_compatibility, prosedürel GDScript, birinci şahıs komedi oyunu "Gerçek Tarih Bu Değil" (1453 kuşatması).
+- Sahibinin kuralları: KUTU YASAĞI; HAVADA DURAN HİÇBİR ŞEY OLMAZ; TEK GÖRSEL DİL.
+- Sur ölçüleri ve ÇARPIŞMA DONDU. Her kayıttan önce aynı:
+  - `tests/_ist/sur_sozlesme.tscn` → `SURSOZLESME PASS kalem=13 kesim=8`
+  - `tests/_ist/sur_oyun_denetim.tscn` → `SUROYUN nokta=519 havada=0 gomuk=0 katida=0`
+  - `tests/_ist/sur_oyun_yuru.tscn` → `WALKTHRU OZET yol=7 tamam=7 takilma=0 dusme=0`
+  - `tests/_ist/esya_fizik.tscn` → `ESYATEST PASS`
+  - `tests/_ist/tasima11_halic_sonda.tscn` → `HALICSONDA OZET carp=661 karma=3854034809`
+  - `tests/_ist/tur14_marmara_sonda.tscn` → `MARMARASONDA OZET carp=1837 karma=2250736444`
+- Var olan replik metni, ses, denge, gizli süre, sayaç DEĞİŞMEZ. Yeni sesli replik yok. Kalabalık azaltılmaz.
+- Denetimler yalnız otomatik testte/denetim kipinde çalışır. Oyuncunun oyununda kare süresi değişmez; bunu ölç: denetim kapalıyken önce/sonra aynı.
+- Denetim maliyeti: paketin toplam süresi ≤ +%15 (önceki tam paket 4 parça ≈ 1 sa 50 dk).
+
+## Doğrulama (çıktılar `docs/_kanit_denetim17/testler/`)
+1. Ayrıştırma `res://tests/parse_check.tscn` PASS; sözleşme altılısı aynı.
+2. Her denetim için "yakalıyor" kanıtı: bilinen hatanın geçici geri alınmasıyla satır çıkar (rampa, keçi `zemin` kaldırılınca, Hasan 1,35), düzeltmeyle 0. Geri alma yalnız `~/is/` altındaki eşte yapılır, kayda girmez.
+3. Tam paket: fail=0, `FAIL|TIMEOUT|SCRIPT ERROR` 0, eski ve yeni denetim satırı 0, menüye dönüş 2/2.
+4. Düzeltilen her bölümde ilgili çeşitler ×2 PASS.
+5. Bulunan ve düzeltilen her görsel hata için tam boy ÖNCE|SONRA kare (1280×720 jpg 85; kare aracı `tests/_ist/havada8y_kare.*` ya da `tasima12_kare` kalıbı).
+
+## Kanıt → `docs/_kanit_denetim17/`
+`rapor.md`:
+- TAMAM / KISMEN / YAPILMADI;
+- her denetimin ölçütü ve neyi kaçırabileceği (dürüst);
+- bulgu tablosu (bölüm, tür, kök neden, düzeltme, kanıt);
+- aşçı kepçesinin kök nedeni ya da "yeniden üretilemedi" ve neler denendi;
+- paket süresi önce|sonra;
+- "hâlâ kötü olanlar".
+
+Sahibine en iyi 3 ÖNCE|SONRA kare: `kare/sahip_*.jpg`. Kareler DALA KAYDEDİLİR.
+
+## Dosya sahipliği
+- **SEN:**
+  - `scripts/ui/hud.gd` (YALNIZ denetim işlevleri ve onları çağıran satırlar);
+  - `scripts/npc/*` hayvan sınıfları (zemin uyumu);
+  - `scripts/level/stage.gd` (station alet düzeltmesi + denetim kancası);
+  - bulgusu olan bölüm dosyaları (yalnız bulgunun düzeltmesi; en az değişiklik);
+  - `scripts/world/ist/sur_oyun_ag.gd` / `sur_oyun_parca.gd` (yalnız görüntü kaybı düzeltmesi; çarpışma ve ölçü DONDU);
+  - yeni `tests/_denetim17/*`;
+  - `tests/run_tests.sh` (YALNIZ `run()` içindeki süzgeç/`fail` satırlarına yeni ön ekler + gerekirse yeni blok);
+  - `chapter8y.gd` (yalnız `=yuru` uzatması ve aşçı/son sahne düzeltmesi).
+- **Başka oturum (aynı anda çalışıyor, DOKUNMA):** G16 güncelleyici — `scripts/autoload/game_state.gd`, `scripts/ui/game_menu.gd`, `scripts/ui/guncelleyici.gd`, `i18n/*`, `.github/workflows/release.yml`, `installer/*`, `tests/guncelleme_check.*`, `tests/_guncelleme/*`.
+- **Kimsenin değiştirmediği:** `project.godot`, sözleşme ve sonda testleri, `VERSION`.
+
+## KESME SIRASI
+Hedef 4–5 saat.
+1. Hayvan denetimi + bütün bulguların düzeltmesi.
+2. Görünmez zemin denetimi + bulgular.
+3. Alet denetimi + aşçı.
+4. Donuk bekleme denetimi + 8y `=yuru` uzatması.
+5. Kareler + rapor.
+
+## Dayanıklılık ve yasaklar
+- **Kayıt:**
+  - Her adımın sonunda ve en geç 20 dakikada bir kaydet + gönder (yarım da olsa; kareler dahil).
+  - `docs/_kanit_denetim17/durum.md` her kayıtta güncel.
+  - İlk 40 dakikada ara kayıt.
+  - Kayıt iletisine model adı yazma.
+- **Süreçler:**
+  - Arka plan işleri ≤ 10 dakika; aynı anda en çok 4 süreç; bitti bildirimi gelmezse çıktı dosyasını kendin oku.
+  - Tam paket parça parça: `SHARD=k SHARDS=4 MAXFPS=20 GODOT=~/is/godot/godot bash tests/run_tests.sh > ~/is/p_k.txt`. Dört parça ayrı arka plan işi; her biri ≤ 10 dakika kuralının istisnası, bitişini çıktı dosyasından izle.
+  - Testleri çalışma ağacının bir eşinden koş (`~/is/kopya`).
+- **Kurulum:**
+  - Godot 4.4.1 linux x86_64 resmi sürümü `~/is/godot/godot` (indir).
+  - `timeout 900 ~/is/godot/godot --headless --path . --import`.
+  - Pencereli kare: `xvfb-run -a -s "-screen 0 1280x720x24" ~/is/godot/godot --path . --rendering-driver opengl3 --resolution 1280x720 …`. xvfb yoksa `sudo apt-get install -y xvfb` (sudo YALNIZ apt-get için).
+- **Yasak araçlar ve işler:**
+  - Oturum/tetikleyici/zamanlama/bildirim/ajan başlatma araçlarını KULLANMA.
+  - PR açma.
+  - Yalnız kendi dalına gönder; geçmişi yeniden yazma, zorla gönderme yok; main'e dokunma.
+  - `pkill`/`killall` yok (yalnız `kill <pid>`).
+  - Ses üretme.
+- **İzin kutusu çıkarabilecek komut yok:**
+  - `rm -rf`/`rm -r`/`mv`/`cp -r` hedefinde kabuk değişkeni kullanma (tam yolu elle yaz).
+  - Silmeyi heredoc zincirine gömme.
+  - `bash -c '…'` ya da `until/while … sleep` bekleme döngüsü yazma.
+  - Geçici dosyalar yalnız `~/is/` altında.
+  - `.git/` içine ve `.gitignore`'a yazma; `git config` ve `git clean` kullanma.
+- **Kayda eklenmeyenler:** Godot'nun ürettiği `.import` ve `.translation` yan dosyaları ve ilgisiz `.uid`'ler kayda girmez. Yeni `.gd` dosyalarının `.uid`'si eklenir.
+- **Dal ve disk:**
+  - Dalda duran öteki `docs/_*` klasörlerine dokunma.
+  - Disk payı sınırlı: ham kare yığınlarını iş bitince sil.
