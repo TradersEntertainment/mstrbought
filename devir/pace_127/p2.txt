@@ -1,0 +1,31 @@
+PACETARAMA 1 sure=198 donuk=0 pass=1 rc=0
+PACETARAMA 4 sure=68 donuk=0 pass=1 rc=0
+PACETARAMA 7 sure=196 donuk=0 pass=1 rc=0
+PACETARAMA 9 sure=128 donuk=0 pass=1 rc=0
+PACETARAMA 12 sure=195 donuk=5 pass=1 rc=0
+  [12] DONUKAUDIT scene=chapter12.tscn t=64.8 len=5.3 after=D12_F_ITEM_CUBE at=(0.0,0.0,-0.4)
+  [12] DONUKAUDIT scene=chapter12.tscn t=79.2 len=5.7 after=D12_F_CUBE_2 at=(0.0,0.0,-0.4)
+  [12] DONUKAUDIT scene=chapter12.tscn t=86.1 len=5.3 after=D12_F_ITEM_PHONE at=(0.0,0.0,-0.4)
+  [12] DONUKAUDIT scene=chapter12.tscn t=101.3 len=5.6 after=D12_F_ITEM_PHONE at=(0.0,0.0,-0.4)
+  [12] DONUKAUDIT scene=chapter12.tscn t=164.7 len=5.7 after=D12_T_TEZKIRE at=(0.0,0.0,-0.4)
+PACETARAMA 10z sure=216 donuk=0 pass=1 rc=0
+PACETARAMA 10l sure=167 donuk=0 pass=1 rc=0
+PACETARAMA 12b sure=191 donuk=0 pass=1 rc=0
+PACETARAMA 17 sure=796 donuk=3 pass=1 rc=0
+  [17] DONUKAUDIT scene=chapter17.tscn t=262.6 len=5.7 after=D17E_G_END at=(3015.3,0.3,1.0)
+  [17] DONUKAUDIT scene=chapter17.tscn t=498.7 len=8.7 after=D17E_H_SPY at=(2984.8,0.0,-4.8)
+  [17] DONUKAUDIT scene=chapter17.tscn t=659.7 len=10.6 after=D17_N_LIFT at=(-2.8,-0.0,-34.0)
+PACETARAMA 19 sure=178 donuk=0 pass=1 rc=0
+PACETARAMA 22 sure=109 donuk=0 pass=1 rc=0
+PACETARAMA 25 sure=121 donuk=1 pass=1 rc=0
+  [25] DONUKAUDIT scene=chapter25.tscn t=65.8 len=5.0 after=D25_K_1 at=(-18.0,0.0,-73.0)
+PACETARAMA 19o sure=217 donuk=0 pass=1 rc=0
+PACETARAMA 22o sure=221 donuk=0 pass=1 rc=0
+PACETARAMA 36b sure=175 donuk=0 pass=1 rc=0
+PACETARAMA 44b sure=398 donuk=0 pass=1 rc=0
+PACETARAMA 29 sure=167 donuk=0 pass=1 rc=0
+PACETARAMA 32o sure=369 donuk=0 pass=1 rc=0
+PACETARAMA 39o sure=251 donuk=0 pass=1 rc=0
+PACETARAMA 34o sure=274 donuk=1 pass=1 rc=0
+  [34o] DONUKAUDIT scene=chapter34o.tscn t=62.0 len=38.9 after=D34O_U_02 at=(5.1,0.0,-6.8)
+PACETARAMA 27 sure=262 donuk=0 pass=1 rc=0

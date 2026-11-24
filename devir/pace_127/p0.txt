@@ -1,0 +1,28 @@
+PACETARAMA 2 sure=100 donuk=0 pass=1 rc=0
+PACETARAMA 5 sure=127 donuk=0 pass=1 rc=0
+PACETARAMA 8 sure=176 donuk=0 pass=1 rc=0
+PACETARAMA 10 sure=129 donuk=0 pass=1 rc=0
+PACETARAMA 13 sure=87 donuk=0 pass=1 rc=0
+PACETARAMA 10g sure=176 donuk=0 pass=1 rc=0
+PACETARAMA 16 sure=67 donuk=0 pass=1 rc=0
+PACETARAMA 14 sure=68 donuk=0 pass=1 rc=0
+PACETARAMA 18 sure=92 donuk=0 pass=1 rc=0
+PACETARAMA 20 sure=199 donuk=0 pass=1 rc=0
+PACETARAMA 23 sure=223 donuk=0 pass=1 rc=0
+PACETARAMA 26 sure=618 donuk=1 pass=1 rc=0
+  [26] DONUKAUDIT scene=chapter26.tscn t=353.3 len=4.4 after=D26_N_OUT at=(12.6,0.1,1.6)
+PACETARAMA 20o sure=195 donuk=0 pass=1 rc=0
+PACETARAMA 24o sure=191 donuk=1 pass=1 rc=0
+  [24o] DONUKAUDIT scene=chapter24o.tscn t=41.1 len=6.1 after=D24O_D_01 at=(-10.5,0.0,-1.0)
+PACETARAMA 42b sure=394 donuk=0 pass=1 rc=0
+PACETARAMA 43o sure=363 donuk=1 pass=1 rc=0
+  [43o] DONUKAUDIT scene=chapter43o.tscn t=257.1 len=25.3 after=D43O_F_URBAN at=(-0.9,0.0,-49.3)
+PACETARAMA 30 sure=154 donuk=1 pass=1 rc=0
+  [30] DONUKAUDIT scene=chapter30.tscn t=96.4 len=11.3 after=D30_D_EMPEROR at=(14.0,12.0,3.6)
+PACETARAMA 37o sure=367 donuk=0 pass=1 rc=0
+PACETARAMA 31o sure=421 donuk=1 pass=1 rc=0
+  [31o] DONUKAUDIT scene=chapter31o.tscn t=128.1 len=6.1 after=D31O_T_02 at=(6.6,3.4,-76.6)
+PACETARAMA 35o sure=276 donuk=3 pass=1 rc=0
+  [35o] DONUKAUDIT scene=chapter35o.tscn t=71.9 len=9.7 after=D35O_D_01 at=(5.0,0.0,13.0)
+  [35o] DONUKAUDIT scene=chapter35o.tscn t=127.7 len=7.3 after=D35O_T_SLOPE at=(4.7,-0.2,42.8)
+  [35o] DONUKAUDIT scene=chapter35o.tscn t=154.1 len=43.1 after=D35O_T_SLOPE at=(4.7,-0.8,49.0)

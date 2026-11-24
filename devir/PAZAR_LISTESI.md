@@ -54,7 +54,12 @@
 > `releases/latest/download/guncelleme.json` 200 (`surum` 0.99.127, motor 4.4.1, windows 1290221824 B, linux 1262389712 B,
 > sha256'lar); ham ikililer GET 206 (MZ / ELF). Oyunun kendi denetimi gerçek ağda: `GUNCELLEME uzak=0.99.127 yerel=0.99.127
 > yeni=hayir kod=200`. 0.99.128 çıkınca 0.99.127 kullananlar menüde bandı görür (Windows değiştirmesinin ilk gerçek denemesi).
-> **PACE taraması** (`gorev/pace_hepsi.sh`, 14:10–): bütün bölümler gerçek hızda; bulgular `/root/is/pace/` → 0.99.128.
+> **PACE taraması BİTTİ** (14:10–15:32, `gorev/pace_hepsi.sh`, çıktılar `devir/pace_127/`): 62 bölümün hepsi PASS;
+> 16 bölümde 27 DONUKAUDIT (> 4 sn). Yanlış alarm (denetimin meşru listesinde olmayan etkin mini oyun): 35o denge (43,1 +
+> 7,3 sn; `phase="slope"`, `balance`), 34o kalıp kırma/kol (38,9), 43o drone pilotajı (25,3). Gerçek adayları: 30 (11,3 sn
+> D30_D_EMPEROR, sur tepesi), 17 (10,6 D17_N_LIFT; 8,7 D17E_H_SPY; 5,7 D17E_G_END), 38o (8,1 / 5,6 / 5,1), 35o 9,7
+> (D35O_D_01), 24o / 29o / 31o (6,1), 12 (×5 ~5,5 eşya incelemesi), 25 / 26 / 6 / 10a / 30o (4,2–5,0). → 0.99.128 G19:
+> denetime "etkin mini oyun" kuralı (denge/drone/tokmak; oyuncunun girdisi işliyor) + gerçek beklemelerin kök düzeltmesi.
 > **AÇIK İŞLER (0.99.128 adayları):** (1) 26 =nophoto Squad overlap (iki tam pakette; `chapter26.gd` BEKCI26 katmanları,
 > yedek bölük sık nizam); (2) ESYATEST yük altında gomuk=1; (3) bütün bölümlerin PACE (gerçek hız) donuk taraması
 > `tests/_denetim17/pace_tarama.sh` koşulmadı (6–8 sa; sahibine söz verildi); (4) 26/26o/35o Sultan'ın atı ön toynaklar
