@@ -7,6 +7,11 @@
 > **23 Kasım 18:22 UTC:** sahibi "31o ve 17o'yu hallet" dedi. İki yardımcı açıldı: TAŞIMA 13 (31o surun ardı, 8y
 > kalıbı; `wip/ist2-tasima13`, yazı `gorev/prompt_T13_31o.txt`) ve TUR 15 (17o uzak surlar; `wip/ist2-tur15`, yazı
 > `gorev/prompt_T15_17o.txt`). Teslimden sonra birleştir, tam paket, 0.99.126.
+> **24 Kasım 01:50 UTC:** ikisi teslim etti, raporlar ve kareler (tam boy) kabul; `wip/ist2-birlesik` = 3f787c70 (iki
+> birleştirme + benim düzeltmem: 31o'nun v2 kurulumu artık bölüm açılışında, yükleme perdesinin altında; eskiden başlık
+> kartından sonra 30–50 sn donuk kararmış ekran). 31o dört çeşit + `--eskisur=31o` + 17o PASS, denetim 0. Sözleşme ve
+> CITYCHECK/menüye dönüş koşusu (`gorev/dog126b.sh`), sonra tam paket (`gorev/tam126.sh`), temizse 0.99.126
+> (`gorev/surum126.py`, `gorev/qa126.md`). Sahibine kareler: `kareler/0_99_126/`.
 
 Hazırlandığı an: 17 Kasım. Durum: 0.99.123 yayında (yeni surda 15 bölüm); 0.99.124 tam testte (yeni surda 27 bölüm).
 Görev yazıları hazır ve danışman (Fable) incelemesinden geçti: `devir/gorev/prompt_C12_fon.txt`, `devir/gorev/prompt_A14.txt`.
@@ -60,6 +65,11 @@ Birleştirme + kendi doğrulamam (≈1 saat), tam test paketi (≈1,5 saat), Git
   (tepeden karede yanık caddenin ötesi boş kum) → 31o bu sürümde varsayılan eski sette (`SurSet.ESKI_VARSAYILAN`,
   `--yenisur=31o`). Aynı eksik daha önce taşınan sur bölümlerinde de olabilir (26/26o vb.; oyuncu oralarda surun dibinde
   kalıyor): görsel programda yeni setin ardına şehir (v2 şehri ya da CityLife) bağlanmalı, sonra 31o yeniye geçer.
+  **→ 31o için KAPANDI (TAŞIMA 13, 24 Kasım):** 8y kalıbı (SurHub + IstBaglama "fallen31o"), `ESKI_VARSAYILAN = []`.
+  Kalanlar (görsel tura): tepeden caddenin çevresinde ~57 m seyrek kuşak (`sehir.gd` ~3159: oyun alanı tek daire; uzun
+  alanı şerit boyunca küçük dairelere bölmek), v2 kurulumunda `LoadingScreen.pump` yok (bütün hub bölümlerinde perde donuk),
+  v2 ziyareti başına menüye dönüşte 680 sahipsiz düğüm, v2 statik önbellekleri evre geçişinde +92 MB, 17o uzak surlar gece
+  çok koyu, 17o `in_world=false` ölü yolu eski kutu (oynanmıyor). Ayrıntı: dalların `docs/_kanit_ist2_tasima13|tur15/rapor.md`.
 
 ## F. İstanbul bittikten sonra (senin önceki isteklerin; sırası sende)
 1. **Keşif denemesi**: çatılarda hareket, nöbetçiler, sızma görevi, serbest zaman (Ayasofya–Yerebatan mahallesi).
