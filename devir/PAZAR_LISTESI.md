@@ -43,6 +43,8 @@
 > denetim pakette (görünmez zemin/alet/donuk KESİN, hayvan ADAY), aşçı kökü (`_face_listeners` Soldier), 8y hendek köprüsü
 > ayakları, öküzler. Açık: bütün bölümlerin PACE taraması (`tests/_denetim17/pace_tarama.sh`, 6–8 sa) koşulmadı; 26/26o
 > Sultan'ın atı (AyakHayvan eğim 17°). Birleşik 3d747148 (G16+G17+G18+etek+20). Tam paket `gorev/tam127.sh` koşuyor.
+> **11:50 UTC: 0.99.126 İNDİRMELERİ YAYINDA** (CI #342 başarılı: testler, paket, GitHub Releases ve açık depo yüklendi;
+> `releases/latest` → v0.99.126). main d8d34273.
 
 Hazırlandığı an: 17 Kasım. Durum: 0.99.123 yayında (yeni surda 15 bölüm); 0.99.124 tam testte (yeni surda 27 bölüm).
 Görev yazıları hazır ve danışman (Fable) incelemesinden geçti: `devir/gorev/prompt_C12_fon.txt`, `devir/gorev/prompt_A14.txt`.
