@@ -12,6 +12,14 @@
 > kartından sonra 30–50 sn donuk kararmış ekran). 31o dört çeşit + `--eskisur=31o` + 17o PASS, denetim 0. Sözleşme ve
 > CITYCHECK/menüye dönüş koşusu (`gorev/dog126b.sh`), sonra tam paket (`gorev/tam126.sh`), temizse 0.99.126
 > (`gorev/surum126.py`, `gorev/qa126.md`). Sahibine kareler: `kareler/0_99_126/`.
+> **24 Kasım 06:35 UTC: 0.99.126 YAYINDA** (main 7f3814ce, parent 88ed3d3c; `wip/0.99.126`; birleşik cd7f4532; site
+> a456e3d; CI Release #340 = 45341370406). Tam paket (`gorev/tam126b.sh`, f957694c) 4×114 PASS, denetim 0, menüye dönüş 2/2.
+> **İstanbul uyarlaması tamam: eski surda bölüm kalmadı** (E maddesi kapandı; 21o yeraltında). Sahibinin 8y notları (L)
+> 0.99.126'da: rampa görünür, keçiler yerde, donuk bekleme yok. **G16 güncelleyici** teslim edildi, kabul edildi ve birleşik
+> dala alındı (e956ba36; Windows değiştirmesi gerçek Windows'ta denenmedi, her hata yolu eski exe'yi geri koyar; ilk gerçek
+> deneme 0.99.127 → 0.99.128 geçişinde sahibinin makinesinde olacak). **G17 denetim** sürüyor (`wip/denetim17`).
+> Göz kontrolü: `tests/_ist/bakis_kare.*` (otomatik oyun sırasında oyuncunun göz hizasından dört yön, 2×2 kare) yeni sura
+> bağlı 33 bölümde koşuyor; bulgular 0.99.127'ye.
 
 Hazırlandığı an: 17 Kasım. Durum: 0.99.123 yayında (yeni surda 15 bölüm); 0.99.124 tam testte (yeni surda 27 bölüm).
 Görev yazıları hazır ve danışman (Fable) incelemesinden geçti: `devir/gorev/prompt_C12_fon.txt`, `devir/gorev/prompt_A14.txt`.
