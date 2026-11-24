@@ -172,3 +172,41 @@ Hedef 3–4 saat.
   - `.git/` içine ve `.gitignore`'a yazma, `git config` ve `git clean` kullanma.
 - **Kayda ekleme:** Godot'nun ürettiği `.import`, `.translation`, `.uid` yan dosyalarını kayda ekleme (yeni betiğin `.uid`'si HARİÇ: yeni `.gd` dosyalarının `.uid`'si eklenir, depodaki kalıp gibi).
 - **Dal ve disk:** dalda duran öteki `docs/_*` klasörlerine dokunma. Disk payı sınırlı: dışa aktarılmış ikilileri (her biri ≈1,2 GB) iş bitince sil; aynı anda en çok iki ikili tut.
+
+## DÜZELTMELER (danışman incelemesi, kod okumasıyla; yukarıdakiyle çelişirse BU BÖLÜM geçerli)
+A. Olgusal
+1. Bayraklar `--` SONRASINDA: oyun yalnız `OS.get_cmdline_user_args()` okur (`game_state.gd:115`); e2e komutu `<ikili> --headless -- --guncelleme-kaynak=… --guncelleme-oto`. Yeni bayraklar aynı döngüye (`:115-185`).
+2. `--guncelleme-oto` menüye bağlanamaz: ana menüden önce başlık ekranı tuş bekler (`hud.gd:3733-3765`, menü `:3769`). Oto kipte denetim+indirme+değiştirme MENÜSÜZ, `GameState._ready`'den başlar, iş bitince kendisi `quit` eder (KESME 1'e dahil).
+3. `--chapter=0/1 --autotest` menü AÇMAZ (`hud.gd:3818`, `:650` `_fast()`): yalnız gerileme denetimi.
+4. `tests/menu_return_check` YOK. Doğrusu `res://tests/menu_return.tscn -- --chapter=26` ve `--chapter=20o` → `MENURETURN PASS` (`run_tests.sh:314-320`; `--headless`, `--autotest`'siz: ağ sızmasını yalnız başsız engeli tutar).
+5. Başsız engeli `DisplayServer.get_name() == "headless"` (depo kalıbı `game_state.gd:1044,1378`; `ui_fit_check.gd:148,165` ve `quip_check.gd:18` `GameMenu`'yü başsız kurar) + `OS.has_feature("editor")` engeli: testlerde `OS.get_executable_path()` Godot'nun kendisidir; açılış temizliği ve değiştirme ona ASLA dokunmaz (yalnız dışa aktarılmış pakette, `OS.has_feature("template")`).
+6. `.translation` kuralı: `i18n/strings.tr.translation` ve `strings.en.translation` İZLENİR ve her yeni anahtarda yeniden üretilip KAYDEDİLİR (örnek `fa66841e`). Öteki `.import`/`.translation` eklenmez.
+7. i18n anahtarları `UI_GUNC_*` (`check_keys.py:17` önekleri; `UI_C<rakam>` ile başlama: 60 karakter sınırı `check_voice_rules.py:50`); üç sütun `keys,tr,en`, boş hücre/çift anahtar yasak (`check_keys.py:12-13,31-34`); virgüllü metin tırnak içinde.
+8. Ayar anahtarı `settings` sözlüğüne (`game_state.gd:65`; `_load_settings` yalnız sözlüktekileri okur `:1235`); satır `show_settings()` (`game_menu.gd:704`) içinde `_set_check(col, "UI_GUNC_…", "<anahtar>")`. `TolgaQuips.ACTION`'da olmayan anahtar yorum üretmez (`tolga_quips.gd:114-124`): `tolga_quips.gd`'ye DOKUNMA.
+9. `GameMenu` hem ana menü hem duraklatma (`mode`, `game_menu.gd:16,30`): bant YALNIZ `mode == "main"` iken `show_root()`'ta (`:308`). Menü her dönüşte yeniden yaratılır (`hud.gd:3823,3830`): "bir kez" için `static var`/`GameState`'te durum.
+B. Godot 4.4.1 tuzakları
+10. EN KRİTİK: gömülü pck her kaynak okumasında yol adıyla yeniden açılır (`FileAccessPack`). Yeniden adlandırmadan SONRA hiçbir `res://` okuması olmaz (load, sahne değişimi, arka plan yüklemesi `game_state.gd:1076`). Değiştirmeden önce bekleyen yükleme olmasın; adım 1 → 2 → `create_process` → `quit()` TEK işlevde, arada `await` yok; hata iletisi için gereken her şey (metin, düğüm) ÖNCEDEN bellekte.
+11. exe yolunu açılışta BİR KEZ sakla (Linux `get_executable_path` `/proc/self/exe` okur; adlandırmadan sonra `.eski` döner). `OS.set_restart_on_exit` KULLANMA; saklanan yolla `OS.create_process`, dönüş `-1` ise geri al.
+12. Yeniden başlayan süreç: normal kipte argüman boş; oto kipte `["--headless", "--", "--guncelleme-surum-yaz"]` gibi: çocuk `GUNCELLEME surum=…` yazıp çıkar.
+13. `HTTPRequest.timeout` bütün isteğin süresi: 8 sn yalnız manifest isteğinde; indirmede `timeout = 0` + kendi takılma bekçin (30 sn `get_downloaded_bytes()` ilerlemezse iptal). İndirme için ayrı düğüm, `accept_gzip = false`, `download_chunk_size` 1–4 MB. İptal/hatada yarım `.yeni`'yi SEN sil. Tamamlanınca dosyanın kapandığını doğrula; adlandırmayı bir kare sonra yap.
+14. Yönlendirme başka alan adına gidebilir (`objects.githubusercontent.com` / `release-assets.githubusercontent.com`): alan adını koda yazma. İlk adres `https://github.com/TradersEntertainment/nothistorygamedemo/releases/` ile başlamıyorsa indirme. İndirme isteğine yalnız `User-Agent`.
+15. Güncelleyici düğümü menüde değil `GameState`'in çocuğu (`Chaos`/`AudioAudit` kalıbı `game_state.gd:127,131`; `PROCESS_MODE_ALWAYS` `:193`): menü seçimde silinir (`hud.gd:3830`); duraklatmada indirme sürer; yeni autoload GEREKMEZ.
+16. `DirAccess.get_space_left()` örnek yöntemi: `DirAccess.open(<exe klasörü>)`. 0/hata "bilinmiyor" sayılır, engellemez.
+17. `FileAccess.set_unix_permissions(<.yeni>, 493)` (0o755) ADLANDIRMADAN ÖNCE `.yeni` üzerinde; hata dönerse `get_unix_permissions` ile çalıştırma bitine bak (FAT/exFAT'te chmod düşebilir → sayfa yolu).
+18. Windows: hedef varsa adlandırma başarısız → eski `.eski` önce silinir (silinemezse sayfa yolu); yeni 1,2 GB dosyayı virüs tarayıcı kilitleyebilir → 3–5 kez 0,5 sn arayla dene; exe'ye açık `FileAccess` varsa paylaşım hatası → geri alma bunu kapsar.
+19. `HashingContext`: `Thread` içinde 4–8 MB `get_buffer` (`FileAccess.get_sha256()` ana iş parçacığını dondurur). `Engine.get_version_info()` → `"%d.%d.%d"`; manifestte "4.5" = "4.5.0". Motor koşulu teknik zorunluluk değil, yayıncının "elle kur" anahtarı (raporda böyle). `boyut` JSON'dan float → `int()`. Saat yanlışsa TLS düşer → sessiz.
+C. Eksik riskler
+20. CI paketli oyun adımı (`release.yml:85-90`, `--headless --quit-after 300`, autotest'siz) `SCRIPT ERROR|Failed to load script` arar: açılış temizliği/bayrak ayrıştırma hata basmaz; `class_name Guncelleyici` yalnız `scripts/` içinde (`check_export_refs.py`).
+21. Ham ikilileri `dist/`'e KOYMA: `dist/*` dört yere gider (gizli depo `:118`, açık depo `:144`, ayna `:168-171`, artifact `:190`). Zip'lerden sonra (`:96`) ikilileri `mv` ile `dist_ham/`'e al (kopya değil) ve `guncelleme.json`'u oraya yaz; YALNIZ açık depo adımının `files:` satırına `dist_ham/*` ekle. Ayna, gizli depo, artifact adımları DEĞİŞMEZ (madde 1'deki "süzgeç" gereksiz).
+22. Tek dosya sınırı 2 GiB: manifest adımına `test "$boyut" -lt 2000000000`.
+23. Manifesti API'siz al: `https://github.com/TradersEntertainment/nothistorygamedemo/releases/latest/download/guncelleme.json` (tek istek, 60/saat API sınırına takılmaz). İkili `…/releases/download/v<surum>/<ad>`, sayfa `…/releases/latest`. API `digest` çapraz denetimi DÜŞER. 403/404/429 "yeni yok".
+24. `--guncelleme-kaynak` YALNIZ `http://127.0.0.1` ve `http://localhost` kabul eder; normal yolda yalnız `https://`; manifestteki `ad` içinde `/`, `\`, `..` reddedilir.
+25. İki pencere: açılış temizliği yalnız 10 dakikadan eski `.yeni`'yi siler; bir örnek değiştirince ötekinin pck okuması bozulur (madde 10) → raporda "bilinen sınır".
+26. Yazılabilirlik denemesi benzersiz adlı dosyayla; asıl güvence geri alma. Program Files'ta sayfa yolu.
+27. Bant taşması `ui_fit_check`'te sınanmaz (başsızda bant çıkmaz): `guncelleme_check` bandı sahte manifestle TR ve EN kurup dikdörtgenin 1280×720 içinde kaldığını KENDİSİ ölçer.
+D. Sahiplik ve sıra
+28. Depodaki `VERSION` kayda girmez. E2e için `~/is/` altında TEK kopya: `VERSION` 0.99.900 yaz → A'yı dışa aktar → 0.99.901 yaz → B'yi dışa aktar.
+29. "Ne değişti?": `data/changelog.json` ve varsayılan dal bir kez elle doğrulanır; yoksa/şema belirsizse düğme doğrudan `OS.shell_open(<releases sayfası>)` (raporda yaz).
+30. `hud.gd` sahiplikte yok ve gerekmez: bant `game_menu.gd`'de, düğüm `GameState` altında.
+31. `installer/OYNA.txt` satırı tek satır ve Türkçe.
+E. Yol: tam ikili değiştirme uygun (zip açmak 1,2 GB'ı belleğe alır; NSIS sessiz Linux'u kapsamaz). Tek sadeleştirme madde 23.
