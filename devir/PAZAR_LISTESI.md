@@ -32,6 +32,13 @@
 > **10:20 UTC:** CI #341 de düştü: 20 `--difficulty=2` D20_G_DONE (aynı kök; şafak repliği). Yerel tekrar `--max-fps 20`
 > olmadan yapılmıştı (0/8; CI 2/2). Düzeltme `_giust_hatti_ac()` iki replikte; 20 FPS'de 8/8 PASS. main d8d34273 → **CI #342
 > (45373873762)**. QA dersi taslağı `$S/qa127.md`.
+> **10:35 UTC: G18 TESLİM** (rapor `docs/_kanit_goz18/rapor.md` dalda): hub iç kuşak düzlüğü set zemininde (sonda +0,12 →
+> −0,08; kapalı yollar birebir aynı), 18b Blakherna Sarayı temsili pencereli/kapılı (`landmarks1453.gd`), 25 "aya" parçası
+> evleri tam model (`byz_city.gd _build_fill`); 36b hendek ucu teşhis (hendek içinden görünüyor; dokunulmadı). Birleşik
+> 898fec23. G18 geçitteki toprağın setin `SurDibiEtek`'i olduğunu buldu. Yönetici kökü ölçtü: kapı kesiği VAR, ama kapıyı
+> iki yandan tutan kulelerin geçide bakan yan kenarının eteği (`sur_oturtma_ag.gd kule()`) geçide giriyordu (8y'de de).
+> Düzeltme: geçide bakan kule kenarına etek yok + komşu köşede normal harmanlanmaz. 8y ve 10h geçidi temiz (kareler).
+> Doğrulama `gorev/dog127e.sh` koşuyor.
 
 Hazırlandığı an: 17 Kasım. Durum: 0.99.123 yayında (yeni surda 15 bölüm); 0.99.124 tam testte (yeni surda 27 bölüm).
 Görev yazıları hazır ve danışman (Fable) incelemesinden geçti: `devir/gorev/prompt_C12_fon.txt`, `devir/gorev/prompt_A14.txt`.
