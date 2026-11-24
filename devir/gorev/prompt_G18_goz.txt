@@ -148,3 +148,61 @@ Hedef 3–4 saat.
 - **Dal ve disk:**
   - Dalda duran öteki `docs/_*` klasörlerine dokunma.
   - Disk payı sınırlı: ham kare yığınlarını iş bitince sil.
+
+## DÜZELTMELER (danışman incelemesi, kod okumasıyla; yukarıdakiyle çelişirse BU BÖLÜM geçerli)
+Hiçbiri çalıştırılarak denenmedi. Sayısal zincir iki sonda değeriyle (+0,12 / −0,08) tutuyor; ilk 15 dakikada `print` ile doğrula (madde 15).
+
+1. **Kök: set aşağıda DEĞİL, arazi 0,20 m yukarıda.**
+   - Hub ve 8y çerçevesi aynı v2 yüksekliğinde: ikisi de `−y_peri` = +0,12 kaydırır (`sur_set_hub.gd:48-49` `M8`, `:69-72` `M`, `:76-77` `hub_v2`; `baglama.gd:235-242`).
+   - +0,12'nin kaynağı tek kayıt: `sur_oturtma.gd:153-157` "iç kuşak" (`c=9,0 r=9,6 geçiş 0,4`, `y = g["y"]` = şehrin Romanos kapı öğesinin `pos.y`'si). Hub'da x 34,0…54,0 bandını kaplar; iç kapı geçidinin ortasında (x≈34) −0,12'den +0,12'ye basamak yapar.
+   - O `pos.y`, `sehir.gd:1933-1942`'de sur ekseni boyunca 7 `IstGeo.h` örneğinin ortancası − 0,05. Okuma yamanın içinden geçer (yama `IstDunya.build`'den önce: `baglama.gd:397` → `:455`).
+     - 8y: `sur_z = 2,5`, eksen z 0 içeride → `dy − 0,03` → `pos.y = dy − 0,08` → −0,08.
+     - Hub: `sur_x = HUB_IC_X + 2,0 = 34,5`, eksen x 35,0 dışarıda → `h_ham` → +0,12 (`baglama.gd:393-401`).
+   - Şehrin Romanos öğesi sonradan kaldırılıyor (`baglama.gd:508-524`), düzlük kaydı kalıyor.
+   - Hub'ın kendi düzlemesi (`sehir.gd:1997`) oturtmadan ÖNCE kayıtlı (oturtma `sehir.gd:2422`); son kayıt kazandığı için (`geo.gd:201-212`) bandı düzeltemez.
+2. **(b) seçeneği SİLİNDİ.** Hub'ın düşey yeri setle zaten tutarlı. Hub'ı oynatmak seti de taşır (`sur_set_hub.gd:131-133`); uzak hub'ı (7a, 11) ve meydan–eşik hizasını bozar.
+3. **Tercih edilen (c): kaydı kaynağında düzelt, ağ yenilemesi gerekmez.**
+   - `sur_oturtma.gd`'ye `static var ic_y_ozel := {}` (kimlik → v2 y) ekle.
+   - `kur` içinde `ogeler` dolup `dy_kayit` yazıldıktan sonra (`:111` sonrası), `ic_y_ozel`'de olan öğe için: `g["dy"] = g["y"] + g["dy"] − yeni_y; g["y"] = yeni_y`.
+     - İç kayıtlar (`:143` şehir önü, `:157` iç kuşak) set yüksekliğine iner.
+     - Dış kayıtların (`:146,150,154,161`) mutlak `y + dy`'si, `dy_kayit` ve `oturtma_dy` (`:107-111`) aynı kalır.
+   - `IstBaglama.build`'de `IstDunya.build`'den önce (`baglama.gd:455` öncesi) doldur: YALNIZ `region_name == "byz_walls" and SurHub.sahnede()` iken `{"romanos": xf.origin.y − 0.08}`. Öteki her durumda `clear()`.
+   - TUZAK: `OTURTMA.temizle()` `kur`'dan hemen önce çağrılır (`sehir.gd:2421`). Sözlüğü `temizle`'de BOŞALTMA; her `IstBaglama.build` başında boşalt.
+   - Kayıtlar `sehir.gd:2424` `yenile(alan)`'dan önce oluşur: ek ağ yenilemesi ve açılış maliyeti yok.
+4. **(a) kalacaksa** (c tutmazsa):
+   - `IstDunya.yenile(alan := Rect2())` bir örnek işlevi (`dunya.gd:1239-1243`); erişim `IstBaglama.dunya`.
+   - Dikdörtgen v2 koordinatında verilir. Boşsa BÜTÜN parçalar yeniden kurulur ve açılış süresi kuralı bozulur.
+   - Kayıtlar `sur_oturtma.gd:118-137` `ekle` kalıbıyla daire dizisi olur: geçiş 0,4; kenarlar iç sur (hub x 32,5–37,5) ve dış sur (52,5–55,1) gövdesinin içinde; uçlardan 7 m içeride.
+5. **Yama eşiğini (`sur_x`) değiştirme yolu yanlış:** tek başına −0,40 verir (`zr = ic.grow(4)`) ve yarıçap içindeki komşu şehir dilimlerinin `pos.y`'sini oynatır.
+6. **Kapsam kilidi:**
+   - Değişiklik yalnız `aktif_bolge == "byz_walls" and SurHub.sahnede()` iken etkili olur.
+   - Kapalıyken `OTURTMA kur oge= duz= bant=` satırı (`sur_oturtma.gd:209`) ve iki sonda karması birebir aynı kalır.
+   - 8y, 31o, uzak hub (7a, 11), `--eskisur`, `--eski-dunya` yollarına kod değmez.
+7. **Izgara:**
+   - Sondanın `arazi` sütunu analitik `IstGeo.h`; görünen ağ yakında 6 m ızgara (`dunya.gd:34`). Bantta her kaynak ≤ −0,03 ise toprak döşemeyi delemez.
+   - İstisna kesimin iki ucu (hub z −24,5 ve 35,5): komşu dilimlerin iç kuşağı 2,6 m içeri taşar. Zorunlu ek ölçüm: `sonda=45,-26,45,37` (peribolos boyunca).
+   - Uçta toprak > 0 çıkarsa rapora yaz. Komşuyu sözlüğe EKLEME (sur gövdesiyle basamak doğar).
+8. **Ölçüt `carp_y`'den bağımsız:** ışın ilk çarpanı alır (sur tepesi, kemer).
+   - Yeni ölçüt: x 34…54 arasındaki her satırda `arazi` ∈ [−0,30; −0,03] (set zemini hub y 0, `sur_set_hub.gd:10`).
+   - x < 34 ve x > 55,1'de `arazi` önce|sonra aynı.
+9. **31o sonda koordinatı:** `bolum=31o sonda=0,-15.5,0,28.5` (31o çerçevesi 8y'den z −1,5 kayık).
+10. **`bas=` yetmez; hub'ı bekleyen araç yaz.**
+    - Yeni `tests/_ist/goz18_sonda.gd` (`extends "res://tests/_ist/bakis_kare.gd"`): `_sonda` ve `_tam_boy`'u ez.
+    - `IstBaglama.aktif_bolge == "byz_walls"` ve sahnede SurHub düğümü olana dek bekle (en çok 120 sn, yoksa `GOZ18_HUB_YOK`), sonra `super`.
+    - 13 hub'ı büro sahnesinden SONRA kurar (`chapter13.gd:217`). 13 için `cesit` verme: `tasima12_kare._hazirla` `city` çeşidini kurar.
+    - 24'ün ikinci yarısı başka şehre geçer (`chapter24.gd:388-390`): ölçüm ilk yarıda.
+11. **Kapı:** hub'ı kuran tek yer `byz_city.gd:1636`, hep `kapi_acik: true`. Not edilecek tek şey: oyuncu geçide ve peribolosa girebiliyor mu, yoksa yalnız görüyor mu.
+12. **"Mavimsi yarık" ayrı adım.**
+    - Arazi düzeltmesinden sonra `bak=31,1.6,5.9,90` yeniden çek.
+    - Yarık sürüyorsa aday: `SurHub.kur` kesimin şehir levhasını siliyor (`sur_set_hub.gd:137-142`), hub alanı x 32,5'te bitiyor; geçitte (x 32,5–37,5) görünen döşeme kalmamış olabilir.
+    - Düzeltme hub tarafında görünen döşemeyle (`byz_city.gd` `_build_walls_yeni` ~`:1635`), çarpışmasız. `sur_oyun_ag.gd`/`sur_oyun_parca.gd` G17'nin: dokunma, rapora yaz.
+13. **Dosya sahipliği eki:**
+    - 1. bulgu için hiçbir `chapter*.gd` değişmez.
+    - `chapter18b/25/36b.gd`'ye dokunmadan önce `git fetch origin wip/denetim17` ile G17 dalında aynı dosya değişmiş mi bak. Değiştiyse düzeltmeyi dünya dosyasına koy ya da rapora bırak.
+    - `goz18_*` araçları pakete BAĞLANMAZ (`run_tests.sh` G17'nin).
+    - Kök neden oradaysa en az değişiklikle senin (raporda dosya:satır): `scripts/level/byz_city.gd`, `scripts/world/ist/sokak.gd`, `evler.gd`, `mahalle_doku.gd`, `hayat*.gd`, `dunya.gd`.
+14. **Kapalı yol kanıtı (Doğrulama 7 yerine):** 8y, 31o, 7 (varsayılan = 7a uzak hub), 11 ve bir Haliç/Marmara bölümü (ör. 19) ×1 PASS, artı madde 6'daki `OTURTMA kur` satırının önce|sonra aynılığı.
+15. **İlk adım ölçüm:**
+    - Geçici `print` ile 10h ve 8y'de Romanos öğesinin `pos.y`'sini, `hub_v2().origin.y`'yi ve `a.xf.origin.y`'yi bas.
+    - Beklenen: 10h'de `pos.y − hub.y = +0,12`, 8y'de −0,08.
+    - Tutmuyorsa 1 ve 3 geçersiz: (a)'ya dön, rapora yaz.
