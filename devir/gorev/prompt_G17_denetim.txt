@@ -128,3 +128,47 @@ Hedef 4–5 saat.
 - **Dal ve disk:**
   - Dalda duran öteki `docs/_*` klasörlerine dokunma.
   - Disk payı sınırlı: ham kare yığınlarını iş bitince sil.
+
+## DÜZELTMELER (danışman incelemesi, kod okumasıyla; yukarıdakiyle çelişirse BU BÖLÜM geçerli)
+1. Olgular
+1. `chapter8y.gd:899` `stir_pot` (898 `dig`); `_tasima10_yuru` `:180`.
+2. `=yuru` hikâyesiz yürüyüş botu: `_ready` `_run()`'dan önce döner (`:169-171`), `_trench/_hasan_lead/_finale` hiç çalışmaz; `AUTOTEST PASS` basmaz (`T9YURU OZET`, `tests/_ist/tasima9_bot.gd:111-112`) → `run()`'a eklenirse `:78` paketi düşürür. DONUKAUDIT için `=yuru` UZATILMAZ.
+3. Gerçek hız: `Stage.fast()` = `autotest and not pace` (`stage.gd:8-9`); `pace` yalnız `PACE` ortam değişkeni ya da `--audioaudit=` (`game_state.gd:19,131`). PACE'siz koşuda yürüyüşler ışınlanır, replik tek kare. Doğru yol: `PACE=1 … --chapter=8y --autotest` (kalıp `tests/audio_run.sh:18`; 8y botu PACE'te gerçek adımla yürür, `chapter8y.gd:1947-1962`).
+4. Var olanlar: `hud._pace_tick` (`hud.gd:665-676`) PACE'te `PACE dead … len=` basar (donuk + replik yok, ≥ 0,8 sn) ama paket okumaz → DONUKAUDIT bunun genişletmesidir. `tests/phys_audit.gd:12` `AIR` sınıfı "çarpışma var görüntü yok"dur (`:812,820`), `MMFLOAT` da var; yalnız `PHYS=1` + xvfb ile koşar ve paketi düşürmez (`run_tests.sh:329-339`) → GORUNMEZZEMIN bunun yöntemini kullanır ya da onu pakete bağlar.
+5. Rampa kaçış nedeni: `Unclip.standable` her `ConcavePolygonShape3D`/`HeightMapShape3D`'yi "görünen arazi" sayar (`unclip.gd:281-301`); yeni denetim bu kısayolu KULLANMAZ.
+6. Denetimler yalnız `GameState.autotest`'te: 0,5 sn Timer (`hud.gd:191-196`, tur başına 40 kişi) + her replikte (`:1759-1764`); kararmada (> 0,95) ve `player` yoksa atlanır (`:2526-2529`); kişi başına bir kez. 8y testte `time_scale = 2.5` (`chapter8y.gd:168`): örnekleme gerçek zamanla (`ignore_time_scale`).
+7. Hayvan sınıfları: `Goat, Chicken, Cat, Horse, Ox, ThiefGull` (`scripts/npc/`) + `Gulls` (`scripts/level/gulls.gd`). Köpek/deve/koyun sınıfı YOK: `canli_kit` türleri `CK.bld_ekle` ile birleşik ağa pişer (`ordugah_oba.gd:680-713`, `ordugah_yapi2.gd:173-175`, `ordugah_yerleske.gd:188`); sınıfsız düğümler `chapter10.gd:208`, `chapter16.gd:128`, `slipway.gd:2621`, `hayat_yakin_govde.gd:270`, `hipodrom.gd:403`.
+8. Hasan kanıtı: geri almada hem 1,35 hız hem `_process`'teki `and not _hasan_walking` (`chapter8y.gd:1392`) birlikte, koşu PACE'li.
+2. Tasarım
+9. (a) Hayvanlara grup: sınıfların `_ready`'sine `add_to_group("hayvanlar")`, sınıfsızlara kurucuda aynı grup (ağaç taraması yok).
+10. (a) Kök y ölçülmez: `AyakHayvan` `AyakEgim` çocuğunu oynatır (`ayak_hayvan.gd:90-92`). Ölçü: `d0..d3` uçlarının (kuşta gövde AABB tabanı) en alçak dünya y'si ile `Unclip.floor_y` farkı.
+11. (a) Yanlış alarm: keçi kaçarken +0,22 zıplar (`goat.gd:98`), tavuk +0,12 (`chicken.gd:113`) → "aralıksız ≥ 1 sn" şartı; öküz yatarken −0,62 (`ox.gd:83`); kedi/tavuk y'yi izlediğinden alır (`cat.gd:56`, `chicken.gd:61`); binili at, gemideki hayvan (`hud.gd:2562-2564` kuralı); `ThiefGull`/`Gulls` `set_meta("airborne")` (`hud.gd:2546-2547`).
+12. (a) Pişmiş hayvanlar: `bld_ekle` çağrısında yalnız testte `pos.y` ile zemin karşılaştırılır.
+13. (b) Yöntem: `phys_audit.gd`'ninki (görünür ağları ayrı fizik uzayına/katmanına üçgen olarak kopyala, tek ışın); çevre 12 m, tembel, kareye yayılı (`world_walk.gd:17` `BUDGET_MS` kalıbı).
+14. (b) Tuzaklar:
+    - başsızda MultiMesh dönüşümü saklanmaz: `get_meta("xforms")` / `WorldWalk.inst_xf` (`world_walk.gd:109-114,250`);
+    - WorldWalk MultiMesh'e yönlü KUTU koyar (`:262-270`);
+    - `collider=` kaynağı `_src[own]` ile yazılır (`:32-34`);
+    - v2 arazisinde yükseklik ağdadır (`zemin_v2.gdshader:56-61`);
+    - 8y `OvaZemini` 1 m ızgara (`chapter8y.gd:503-526`, arazi arada 0,2 m oynar): eşik BAŞTAN ±0,35 m;
+    - kapsam dışı (gerekçe rapora): su ve saydam ağlar, dünya arazisi katılaşana dek ilk saniyeler, hareketli taşıyıcı, merdiven, yüzme, `pinned`, uçuş;
+    - görünen ama çarpışmasız güverte ters durumdur (`Unclip.on_mesh`, `unclip.gd:416`).
+15. (c) Uç = `t.global_transform * Vector3(0, 0, len)` (`len` metası `items.gd:384`); hedef `tool_aim` (+ `tool_aim_world`) (`items.gd:411-414`). `Stage.station` köke `is_noktasi`/`is_yaricap` metası yazar (kazan: yerel (0, 0.79, 0.8), r 0,33; `stage.gd:679-684`).
+16. (c) Ölçüt: 3 sn pencerede EN KÜÇÜK uç–hedef uzaklığı ≤ pay (çekiç/balta/testere/kürek çevrimin çoğunda uzakta, `items.gd:446-455`); yalnız `stir` için "sürekli içeride". `"live": false` figürlerin aleti pişmiş (`stage.gd:800-804`; `ordugah_kisi.gd:26` "asci"): kurulumda bir kez ölç.
+17. (d) Meşru donuklar listesi: `hud.street_busy()` (`hud.gd:1322-1324`), `is_faded()`, kart/akış şeması, `cinematic`, `move_mode == "script"`, `pinned`, mini oyunlar (`drill`, `arena`, `gun_drill`, `duel`, `cannon_crew`), kamera/konum tween'i. Ölçüt: hiçbiri yok + oyuncu konumu ve kamera açısı değişmiyor + > 4 sn gerçek zaman.
+18. (d) Pakete yalnız 8y PACE koşusu, yeni blokta kendi `timeout`'uyla; bütün bölümlerin PACE taraması paket DIŞI ayrı betik (`tests/_denetim17/pace_tarama.sh`), sonucu raporda tablo.
+3. Kapsam kuralı (susturma yok ile uyumlu)
+19. İki aşama: her denetim önce `…ADAY` ön ekiyle basar (süzgeçte görünür, `fail` yapmaz). Bir tam paketle sayım → `bulgular.md`'de kök nedene göre kümelenir (`src=` ile; aynı kurucu = tek kök neden).
+20. Sıra: sahibinin gördüğü 8y → en çok bulgu üreten ortak kurucu → tek tek bölümler. Bir tür ancak sayımı 0 olunca `fail=1`'e bağlanır; 0 olmayan ADAY kalır ve kalan her satır raporda "hâlâ kötü" diye sayısıyla durur. Eşik, kapsam ve liste DEĞİŞMEZ.
+21. Tavan: bir türde > 40 kök neden kümesi varsa en kötü 15 düzeltilir (sapma × görünürlük), kalanı listelenir, o tür KISMEN. Denetimin kendi yanlış alarmı ölçüt düzeltmesidir; gerekçe + örnek satır rapora.
+4. Sahiplik
+22. `game_state.gd`'ye bayrak eklenmez (G16'nın): `OS.has_environment("…")` kalıbı (`hud.gd:2399`, `game_state.gd:19`).
+23. `hud.gd` `tests/`'ten `preload` etmez: ortam korumalı `load()` (`hud.gd:2401-2402`). Yeni `class_name` yok, yeni i18n anahtarı yok.
+24. `run_tests.sh`: G17 yalnız `run()` içi (`:77-98`) ve yeni bloğunu `:312` ile `:313` arasına koyar (G16 bloğu başka yerde).
+25. Sahipliğe EKLENDİ: `scripts/level/items.gd` (alet ucu, `_tool_pose`), `scripts/npc/ayak_hayvan.gd`, `scripts/level/gulls.gd`, `ordugah_*.gd` (pişmiş hayvan y'si), `scripts/npc/unclip.gd` (`standable`; yalnız denetim için yeni işlev, var olan davranış aynı), `hud._face_listeners` (madde 27 düzeltmesi için açık istisna), `scripts/npc/soldier.gd` (yalnız madde 27-28).
+5. Aşçı kepçesi (koddan çıkarım; ÖLÇEREK doğrula)
+26. Yapısal zayıflık: kepçe "aim" kipinde (`items.gd:279`) ele bağlı, yalnız YÖNÜ kazandaki dünya noktasına çevrilir (`items.gd:496-499`; hedef `stage.gd:793-795`), boyu sabit 0,62: gövde döner/kayar/yükselirse kepçe kazanı gösterir ama içinde olmaz.
+27. Dönme adayı: `hud._face_listeners` Person'da `rig.activity != ""` olanı atlar ama Soldier'da yalnız `pose != "stand"`'e bakar (`hud.gd:2979-2982`); istasyon askeri `Soldier.new(coat, "stand", hat)` (`stage.gd:789`), işi yalnız `rig.activity`'de (`soldier.gd:425-427`); `no_talk` sorulmuyor (`street_eye.gd:439-441` soruyor). Replik bitince `_release_listeners` `look_target`'ı siler (`hud.gd:2926-2927`), `gaze_dir`'in işe dönüş kolu yalnız `look_target` varken çalışır (`stage.gd:261-272`, `soldier.gd:287-294`) → asker dönük kalır. Aşçı tohuma göre %60 Soldier (`stage.gd:785`). Dönme oyuncu kazanın 4,5 m'sinden geçerken olmuş olabilir (son sahnede aşçı eşiğe ≥ 4,5 m; Tolga'nın repliği kimseyi döndürmez, `hud.gd:2951`).
+28. Yükselme adayı: `plant_feet` her 0,5 sn kökü ±0,25 kaydırır, toplam sınırı yok (`stage.gd:806-812, 381-396`).
+29. Yeniden üretim otomatik testte olmaz (testte `_focus_speaker` `hud.gd:2893` ve kişi tepkileri `person.gd:979` kapalı): pencereli, PACE'li, gerçek girdiyle kazanın 1–4 m'sinden geç, sonra END_AT'tan geriye bak; Tolga'nın repliğinde yazdır: sınıf, `rotation.y` − istasyon yönü, kök − istasyon kökü, `look_target`, el–hedef ve uç–hedef uzaklığı.
+30. Düzeltme yönü: kepçe ucu hedefe kilitlensin (el `Stage.grip`/`Rig.reach` ile sapa; `_two_hands`, `items.gd:509`), istasyon işçisine `work_begin(w, is_noktasi)` (`stage.gd:179-183`), `_face_listeners` Soldier'da da `rig.activity`'ye baksın.
