@@ -20,6 +20,12 @@
 > deneme 0.99.127 → 0.99.128 geçişinde sahibinin makinesinde olacak). **G17 denetim** sürüyor (`wip/denetim17`).
 > Göz kontrolü: `tests/_ist/bakis_kare.*` (otomatik oyun sırasında oyuncunun göz hizasından dört yön, 2×2 kare) yeni sura
 > bağlı 33 bölümde koşuyor; bulgular 0.99.127'ye.
+> **24 Kasım 08:50 UTC:** CI #340 (0.99.126) TESTLERDE DÜŞTÜ (20 `--difficulty=2` VISAUDIT personhidden D20_G_REPELLED;
+> yerelde 0/8) → indirmeler yüklenmedi. Düzeltme (`chapter20.gd _see_giust`: hat doluysa komutan yana gelir; 20'nin 10
+> çeşidi PASS) yayın ağacına (cd7f4532 + yalnız bu dosya; güncelleyici 0.99.127'de kalır): main 6ec065b6 → VERSION
+> değişmediği için CI tetiklenmedi, etiket gönderimi proxy'de 403 → `.github/release-mirrors.txt`'e `#` açıklama satırı
+> (okunmaz) ile main 503b14e8 → **CI #341 (45359520591)**. Birleşik dal 3e79cb5c + mirrors.
+> Göz kontrolü bulguları: `devir/GOZ_KONTROLU_BULGULAR.md`, kareler `kareler/0_99_127/`.
 
 Hazırlandığı an: 17 Kasım. Durum: 0.99.123 yayında (yeni surda 15 bölüm); 0.99.124 tam testte (yeni surda 27 bölüm).
 Görev yazıları hazır ve danışman (Fable) incelemesinden geçti: `devir/gorev/prompt_C12_fon.txt`, `devir/gorev/prompt_A14.txt`.
