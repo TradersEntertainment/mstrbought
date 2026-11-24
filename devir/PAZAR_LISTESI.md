@@ -146,3 +146,23 @@ Süreler tahmindir, ölçüm değil.
 - Küçükler: harpuşta yan yüzü yakında hâlâ koyu zeytin bant; kapı kanadı fazla temiz/açık (kir, çürüme, is); 23 ve 31o
   karelerini güncel dalda yeniden çek (eski kemer o dallarda kalmıştı).
 - Sonra bir "afiş karesi" (kapı + muhafız + alçak güneş) hedef ölçütü olarak çekilir.
+
+## L. Sahibinin oynayış notları (24 Kasım sabahı, 0.99.125, 8y → 9)
+Hatalar (0.99.126'ya düzeltme; kök neden ölçüldü, kanıt `kareler/0_99_126/8y_*`):
+1. **Dış kapı ile köprü arası "havada"**: toprak rampanın yalnız çarpışması vardı, görünen ağı yoktu (`sur_oyun_ag.gd`
+   `pis()` tek ağı kendi içine pişirip siliyordu). Oyuncu görünmez rampada yürüyor, kapı eşiği havada duruyor görünüyordu.
+   Aynı yol 26/31o Romanos köprüsünde de var. Düzeltme: tek ağ pişirilmez (ebeveyniyle birleşir).
+2. **Keçiler havada** (ova keçisi 3,5 m, pazar keçisi 2,5 m): `Goat` zemini hep y 0 sanıyordu; 8y ovası yeni surda 3,5 m
+   aşağıda. Düzeltme: `Goat.zemin` (bölümün zemin işlevi).
+3. **Pazarda donup kalma**: Hasan 1,35 m/sn ile dolambaçlı yoldan ~24 sn yürüyor, oyuncu 9 sn'de varıp donuyordu. Düzeltme:
+   Hasan 2,8 m/sn; son sahne Hasan varmadan başlamaz, oyuncu bu arada serbest.
+4. **Aşçı havayı karıştırıyor** (kepçe kazanın dışında): inceleniyor.
+Neden yakalanmadı (dürüst): VISAUDIT yalnız kişileri (Person/Soldier) denetliyor, hayvanları değil; görünmez zemin (çarpışma
+var, görüntü yok) için hiç denetim yok; otomatik test yürüyüşleri hızlı kipte (Hasan bekleme süresi ölçülmüyor); yardımcı
+kareleri yolun ileri bakışlarıydı, dönüp kapıya bakan kare yoktu. → **Denetim genişletmesi (yardımcı işi):** hayvanlar ve
+duran eşyalar için havada/gömük denetimi; "görünmez zemin" denetimi (oyuncunun bastığı çarpışmanın üstünde görünen yüzey yok);
+gerçek hızda "bekleme" denetimi (oyuncu donuk kalma süresi > N sn → uyarı).
+Görsel (görsel programa, G/H/K ile birlikte):
+- Ordugâh boş ("hiç asker kimse yok"), birimler kötü; çadırlar ve kapılar "aşırı kötü" → sahibi: "Blender MCP kullanırız";
+  toplar vb. de Blender'da üretilecek. Not: bu, sanatçı + Blender hattının (I.1) ilk listesi: çadır (Osmanlı otağı ve asker
+  çadırı), kapı (sur kapısı kanadı, çadır kapısı), top, pazar tezgâhı, asker birimleri.
