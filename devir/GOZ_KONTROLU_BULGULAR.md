@@ -27,3 +27,11 @@
 12. **42b: talim meydanının ötesi ufka kadar boş düz ova** (`42b_00` sağ üst/sol alt; göz −16/1,6/−32,5). Surun iç
     yanında şehir yok gibi; bilinen "42b meydanı boş/çorak" notunun daha ağır hâli (görsel program ya da v2 şehir bağlaması).
 13. 38o: Haliç surunun ardında çıplak, düz gri şehir tepesi (`38o_05`): doku/çimen yok (görsel program).
+
+## Kapanış (24 Kasım 09:10 UTC)
+34 bölüm (0, 4, 4b, 6/7 Bizans, 8y, 10h, 12b, 13, 17, 17o, 18b, 19, 19o, 20, 20o, 21, 22, 22o, 23, 24, 25, 26, 26o, 28o, 29,
+29o, 31o, 32o, 36b, 37o, 38o, 41o, 42b) çekildi; her bölümde 1–4 kare tam boy incelendi. Gerçek hata: 1 (hub kapı geçidi,
+7 bölüm). Kutu/boşluk: 5, 6, 12. Aday: 10. Görsel program: 2/9, 7, 8, 13. Havada duran ya da gömük bir şey, görünmez
+zemin ya da kırık geometri başka yerde görülmedi. Araç notları: halka noktası denizde dibe, kalabalığın içine ya da
+hendek dibine düşebiliyor (kare aracın yanılgısı); dövüşte dünyayı durdurmak testin sayaçlarını bozabiliyor (41o
+finishers 2/3, 6/4b beklenen sonuç farkı: araç kurulumu, oyun hatası değil).
