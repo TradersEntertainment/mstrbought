@@ -45,6 +45,17 @@
 > Sultan'ın atı (AyakHayvan eğim 17°). Birleşik 3d747148 (G16+G17+G18+etek+20). Tam paket `gorev/tam127.sh` koşuyor.
 > **11:50 UTC: 0.99.126 İNDİRMELERİ YAYINDA** (CI #342 başarılı: testler, paket, GitHub Releases ve açık depo yüklendi;
 > `releases/latest` → v0.99.126). main d8d34273.
+> **13:55 UTC: 0.99.127 main'de** (4c703023; birleşik b583705a; site ec22418) → **CI #343 (45408223153)**. İlk güncelleyici
+> sürümü: release.yml artık `dist_ham/` + `guncelleme.json` yüklüyor → CI sonrası açık depoda `guncelleme.json` var mı bak.
+> Tam paket tam127: 4×114 PASS; düşüren 3 satır: 31o =petrion_bad personhidden (düzeltildi, 4 çeşit PASS), 26 =nophoto
+> Squad overlap ve ESYATEST gomuk=1 (yük altında; tek başına 4/4 temiz) → **AÇIK İŞLER** aşağıda.
+>
+> **AÇIK İŞLER (0.99.128 adayları):** (1) 26 =nophoto Squad overlap (iki tam pakette; `chapter26.gd` BEKCI26 katmanları,
+> yedek bölük sık nizam); (2) ESYATEST yük altında gomuk=1; (3) bütün bölümlerin PACE (gerçek hız) donuk taraması
+> `tests/_denetim17/pace_tarama.sh` koşulmadı (6–8 sa; sahibine söz verildi); (4) 26/26o/35o Sultan'ın atı ön toynaklar
+> havada (AyakHayvan eğim 17°); (5) 36b hendek ucu kalınlıksız gri levhalar (hendek içinden görünüyor); (6) 42b talim
+> meydanının çevresi boş ova; (7) görsel program: toplar/kızaklar, çadırlar, gölge rengi, duman, 38o çıplak tepe, 25 koyu
+> meydan, Blakherna Sarayı kütle; (8) sahibi Meshy Pro alırsa 8y kapı önü + ordugâh denemesi (8–10 model + Forward+).
 
 Hazırlandığı an: 17 Kasım. Durum: 0.99.123 yayında (yeni surda 15 bölüm); 0.99.124 tam testte (yeni surda 27 bölüm).
 Görev yazıları hazır ve danışman (Fable) incelemesinden geçti: `devir/gorev/prompt_C12_fon.txt`, `devir/gorev/prompt_A14.txt`.
