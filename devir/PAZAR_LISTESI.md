@@ -50,6 +50,11 @@
 > Tam paket tam127: 4×114 PASS; düşüren 3 satır: 31o =petrion_bad personhidden (düzeltildi, 4 çeşit PASS), 26 =nophoto
 > Squad overlap ve ESYATEST gomuk=1 (yük altında; tek başına 4/4 temiz) → **AÇIK İŞLER** aşağıda.
 >
+> **15:25 UTC: 0.99.127 YAYINDA** (CI #343 başarılı, bütün adımlar yeşil). Açık depoda `releases/latest` → v0.99.127;
+> `releases/latest/download/guncelleme.json` 200 (`surum` 0.99.127, motor 4.4.1, windows 1290221824 B, linux 1262389712 B,
+> sha256'lar); ham ikililer GET 206 (MZ / ELF). Oyunun kendi denetimi gerçek ağda: `GUNCELLEME uzak=0.99.127 yerel=0.99.127
+> yeni=hayir kod=200`. 0.99.128 çıkınca 0.99.127 kullananlar menüde bandı görür (Windows değiştirmesinin ilk gerçek denemesi).
+> **PACE taraması** (`gorev/pace_hepsi.sh`, 14:10–): bütün bölümler gerçek hızda; bulgular `/root/is/pace/` → 0.99.128.
 > **AÇIK İŞLER (0.99.128 adayları):** (1) 26 =nophoto Squad overlap (iki tam pakette; `chapter26.gd` BEKCI26 katmanları,
 > yedek bölük sık nizam); (2) ESYATEST yük altında gomuk=1; (3) bütün bölümlerin PACE (gerçek hız) donuk taraması
 > `tests/_denetim17/pace_tarama.sh` koşulmadı (6–8 sa; sahibine söz verildi); (4) 26/26o/35o Sultan'ın atı ön toynaklar
