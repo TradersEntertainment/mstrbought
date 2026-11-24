@@ -26,6 +26,9 @@
 > değişmediği için CI tetiklenmedi, etiket gönderimi proxy'de 403 → `.github/release-mirrors.txt`'e `#` açıklama satırı
 > (okunmaz) ile main 503b14e8 → **CI #341 (45359520591)**. Birleşik dal 3e79cb5c + mirrors.
 > Göz kontrolü bulguları: `devir/GOZ_KONTROLU_BULGULAR.md`, kareler `kareler/0_99_127/`.
+> **09:00 UTC:** G18 açıldı (göz kontrolü bulguları 1–4; danışman kökü düzeltti: hub'da şehrin Romanos öğesinin
+> `pos.y`'si yama sınırı dışında doğal yükseklikte okunuyor → "iç kuşak" düzlük kaydı peribolosu +0,12'ye çekiyor; çözüm
+> `sur_oturtma.ic_y_ozel`). session_01RAjzxKy6HZWoDH7rF8FX1J → `wip/goz18`.
 
 Hazırlandığı an: 17 Kasım. Durum: 0.99.123 yayında (yeni surda 15 bölüm); 0.99.124 tam testte (yeni surda 27 bölüm).
 Görev yazıları hazır ve danışman (Fable) incelemesinden geçti: `devir/gorev/prompt_C12_fon.txt`, `devir/gorev/prompt_A14.txt`.
