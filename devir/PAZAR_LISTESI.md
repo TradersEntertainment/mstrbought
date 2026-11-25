@@ -86,6 +86,9 @@
 > yeni 0; 36/36 PASS. (b) 36b overlap (−11,1; 21,0): Giustiniani'nin dönüş yeri savunucu yolunda (8'de 6) → TOPLAN +
 > (−2,4; 0,8); ayrıca iki yürüyüş aynı adamı çekiştiriyordu (tam üst üste yürüyüş) → yürüyüş sırası + üst üste bekleme.
 > Sondalı 8/8, hedefli 16/16 PASS. da88172c; main 2a951cc6, CI #346 45651160219 (16:07).
+> **17:25 UTC: 0.99.128 YAYINDA.** CI #346 testler PASS (16:08–17:09), paket, guncelleme.json (surum 0.99.128, exe
+> 1290242240 B), macOS, Releases, açık depo PASS; releases/latest = v0.99.128; ham ikililer iniyor (206). Sahibine
+> rapor: oyun içi güncelleyiciyle güncelle (ilk gerçek Windows denemesi), büyük bölümleri dene.
 > Kalan (yeni açık iş 12): 36b karşı uç sırasında savunucular ≤ 0,15 sn 0,12–0,29 m yanından geçiyor (eskiden de; denetim
 > 3 ardışık ister).
 > **AÇIK İŞLER (0.99.129 adayları; yeni):** (9) 37o `=lose` VISAUDIT overlap Duelist↔Soldier (0.2,-2.8,24.3): 16 koşuda
