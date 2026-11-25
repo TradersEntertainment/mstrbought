@@ -81,6 +81,13 @@
 > `_spawn_patrol` izin ilk noktası reisin y'sinde, `_form` tek karede y'yi izden alıyor; er oynamayınca `_place`
 > düzeltmiyor. Düzeltme 0092d611 + sonda `tests/_ci344/devriye_yamac.gd` (eski 112/112 havada, yeni 0); hedefli
 > 15/15 PASS. main 0e7baa6f (mirrors satırıyla yeniden tetik), CI #345 45626896067; site 09799b2.
+> **14:45 UTC: CI #345 de düştü:** (a) ESYATEST gomuk=1 (AÇIK İŞ (2)): zorla dondurulan kalas sallanırken 4,8 cm zeminde
+> (42 koşuda 3, `ESYA_IZ=1` izi) → `_zemin_batmasi` ile 0–12 cm yukarı; sonda `tests/_ci344/esya_gomuk_sonda.gd` eski 1 /
+> yeni 0; 36/36 PASS. (b) 36b overlap (−11,1; 21,0): Giustiniani'nin dönüş yeri savunucu yolunda (8'de 6) → TOPLAN +
+> (−2,4; 0,8); ayrıca iki yürüyüş aynı adamı çekiştiriyordu (tam üst üste yürüyüş) → yürüyüş sırası + üst üste bekleme.
+> Sondalı 8/8, hedefli 16/16 PASS. da88172c; main 2a951cc6, CI #346 45651160219 (16:07).
+> Kalan (yeni açık iş 12): 36b karşı uç sırasında savunucular ≤ 0,15 sn 0,12–0,29 m yanından geçiyor (eskiden de; denetim
+> 3 ardışık ister).
 > **AÇIK İŞLER (0.99.129 adayları; yeni):** (9) 37o `=lose` VISAUDIT overlap Duelist↔Soldier (0.2,-2.8,24.3): 16 koşuda
 > 1 (eski kodla); yalnız test kurgusunda (ally_cap 0, z 24'teki azaplar kalkmıyor, Cenevizli içlerinden geçiyor).
 > (10) HornWorld `_city_east` "plan" adımı yükte 1,5–2,3 sn (tek nabız); gerekirse plan içine nabız. (11) B6 uzak
