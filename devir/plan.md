@@ -1,4 +1,4 @@
-# DURUM 25 Kasım 11:10 UTC — 0.99.128 YAYINDA: main 85b8f77f, wip/0.99.128, site c255bef; CI #344 (45601474425) KOŞUYOR
+# DURUM 25 Kasım 13:50 UTC — 0.99.128 CI #345 (45626896067) KOŞUYOR: main 0e7baa6f (CI #344 38o devriye havada → 0092d611)
 - Bekçi `$S/bekle_yayin.sh 0.99.128 7000` (b1fvn72pz) → guncelleme.json 0.99.128 olunca: releases/latest doğrula,
   sahibine Türkçe rapor (oyun içi güncelleyiciyle güncelle = ilk gerçek Windows denemesi; yüklemeleri dene; hangi
   bölümde ne gördüğünü yaz; ElevenLabs anahtarını yenile). CI düşerse: günlük → yerelde --max-fps 20 → kökten düzelt.

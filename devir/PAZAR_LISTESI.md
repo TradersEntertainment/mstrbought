@@ -77,6 +77,10 @@
 > çekişi yazı tura (%50), fıçı için art arda 3 iyi çekiş → ~%6 koşuda çıkış hiç olmuyor, `_duel_won` varsayılan true;
 > belirli yapıldı (54a7460b), 7/7 (4 aynı anda). Birleşik acf560ab; main 85b8f77f (parent 4c703023, docs/_* hariç),
 > wip/0.99.128; site c255bef. Bekçi `gorev/bekle_yayin.sh 0.99.128 7000` (guncelleme.json).
+> **13:45 UTC: CI #344 testte düştü** (38o VISAUDIT float: iki CityLife devriye eri aynı y'de 0,8 m havada). Kök:
+> `_spawn_patrol` izin ilk noktası reisin y'sinde, `_form` tek karede y'yi izden alıyor; er oynamayınca `_place`
+> düzeltmiyor. Düzeltme 0092d611 + sonda `tests/_ci344/devriye_yamac.gd` (eski 112/112 havada, yeni 0); hedefli
+> 15/15 PASS. main 0e7baa6f (mirrors satırıyla yeniden tetik), CI #345 45626896067; site 09799b2.
 > **AÇIK İŞLER (0.99.129 adayları; yeni):** (9) 37o `=lose` VISAUDIT overlap Duelist↔Soldier (0.2,-2.8,24.3): 16 koşuda
 > 1 (eski kodla); yalnız test kurgusunda (ally_cap 0, z 24'teki azaplar kalkmıyor, Cenevizli içlerinden geçiyor).
 > (10) HornWorld `_city_east` "plan" adımı yükte 1,5–2,3 sn (tek nabız); gerekirse plan içine nabız. (11) B6 uzak
