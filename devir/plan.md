@@ -1,3 +1,7 @@
+# DURUM 25 Kasım 19:55 UTC — G21 LYKOS AÇILDI: session_01RAjzxKE9tCRLMHXwBnsvLr → `wip/lykos21` (yazı devir/gorev/prompt_G21_lykos.txt
+#   + Fable 27 düzeltme; tahmini 6–8 sa). Nöbetçi `$S/bekle_g21.sh 7000` (b2xcm0egw; süre dolarsa yeniden kur).
+#   Teslimde: rapor + tam boy kareler (özellikle 43o drone), birleştir, doğrula, tam paket → 0.99.129; sonra G22 yazısı.
+
 # PLAN (25 Kasım ≈18:00 UTC) — Meydanı böl: saray ve kançılarya içeri, Lykos şeridi bostan (0.99.129 / 0.99.130)
 
 ## Context
