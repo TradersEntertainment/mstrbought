@@ -89,6 +89,10 @@
 > **17:25 UTC: 0.99.128 YAYINDA.** CI #346 testler PASS (16:08–17:09), paket, guncelleme.json (surum 0.99.128, exe
 > 1290242240 B), macOS, Releases, açık depo PASS; releases/latest = v0.99.128; ham ikililer iniyor (206). Sahibine
 > rapor: oyun içi güncelleyiciyle güncelle (ilk gerçek Windows denemesi), büyük bölümleri dene.
+> **25 Kasım ≈18:00 UTC: sahibi 43o drone karesi:** "bu şehrin yeri doğru mu, ne alaka surlar dibinde". Kararları:
+> SARAY VE KANÇILARYA İÇERİ (300–500 m) + LYKOS ŞERİDİ BOSTAN. Plan `devir/plan.md` başı: G21 lykos (yazı
+> `gorev/prompt_G21_lykos.txt`, Fable incelemesi) → 0.99.129; G22 saray içeri → 0.99.130; Faz 3 (G23, sorulacak):
+> eski dünya kara surları hâlâ SiegeField kutu.
 > Kalan (yeni açık iş 12): 36b karşı uç sırasında savunucular ≤ 0,15 sn 0,12–0,29 m yanından geçiyor (eskiden de; denetim
 > 3 ardışık ister).
 > **AÇIK İŞLER (0.99.129 adayları; yeni):** (9) 37o `=lose` VISAUDIT overlap Duelist↔Soldier (0.2,-2.8,24.3): 16 koşuda

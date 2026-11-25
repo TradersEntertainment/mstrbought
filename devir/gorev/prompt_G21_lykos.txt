@@ -1,0 +1,174 @@
+**BU GÖREV ONAYLIDIR. Onay ya da soru beklemeden HEMEN başla, sonuna kadar kendi başına çalış, bitince rapor ver. Kimseye soru sorma; takılırsan bulduğunu rapora yaz ve en iyi kararla devam et. Dal oluşturmak, her adımda kaydetmek ve yalnız kendi dalına (`wip/lykos21`) göndermek önceden onaylıdır.**
+
+# G21 (Opus): Lykos şeridi — surun ardı 1453'teki gibi bostan, bağ, harap kilise, dağınık ev (iki dünyada)
+
+Depo: `TradersEntertainment/nothistorygame` (yerelde klonla). Taban: `wip/ist2-birlesik` = **a09a28ed** (0.99.128). Kendi dalın: `wip/lykos21` (tabandan aç, yalnız buraya gönder).
+
+## Neden (okuyarak doğrula)
+Oyun sahibi 43o'da (Sultan'ın otağı, Tolga drone uçuruyor) Romanos Kapısı'na bakan bir kare gönderdi. Sorusu: "bu şehrin yeri doğru mu, çok garip duruyor, ne alaka surlar dibinde". Sonra iki karar verdi:
+1. Surun ardındaki Lykos şeridi 1453'teki gibi olsun: bostan, bağ, harap kilise, dağınık ev, boş meydan. BOŞ ÇAYIR YOK; şehrin kalanı bugünkü gibi dolu kalır. **Bu görev bu.**
+2. Bizans meydanının saray avlusu ve kançılaryası 300–500 m içeri taşınacak. Bu sonraki görev (G22); senin işin bunun yolunu ve yerini hazırlamak.
+
+Tarih ve oyun içi gerekçe:
+- 1453'te kara surlarının ardı büyük ölçüde bostan, bağ, açık sarnıç bahçesi, harabe ve kopuk köy mahallesiydi (nüfus 40–50 bin): `docs/ISTANBUL_PLAN.md:30-33`; M04/M05/M07 satırları 77-83.
+- 43o'da Sultan'ın seslendirilmiş repliği `D43O_F_VIEW3` aynen bunu söylüyor: "Ve içeride... bostanlar, harap kiliseler, boş meydanlar. Şehir, kabuğunun içinde küçülmüş." (`i18n/strings.csv:8478`). Bölümün tasarım notu da öyle: `scripts/chapter43o.gd:13-14`.
+- Bugünkü sıkışıklık sahibinin 12 Kasım isteğinden: `docs/_ajan/gorev/ist2_kalite_notlari.md` madde 0 ("boş alan istemiyorum") ve 0b ("sura yaslayabiliriz").
+- **Madde 0 hâlâ geçerli** (boş 40 m kare yok). **Madde 0b yalnız bu şeritte gevşiyor**: sur dibine yaslı sıra ev yok; ama boş kuşak da yok, seyrek doku var.
+
+## Birimler ve yerler (doğrula)
+- v2 (İstanbul v2, `scripts/world/ist/`):
+  - dünya metresi = gerçek metre × 0,35 (`geo.gd:12`); `x = e·0,35`, `z = −n·0,35`.
+  - Kapılar (gerçek e, n; `geo.gd:603-612`): Topkapı/Romanos (−4836,7, 889,4); Hücum Kapısı/Sulukule/Pempton (−4199,1, 1822,6); Dördüncü Askerî Kapı (−4866,0, 357,7).
+- Hub (ByzCity "walls") yereli → v2: `SurHub.hub_v2()` (`scripts/world/ist/sur_set_hub.gd:76`).
+  - Kayıtlı sonuç: köken (−1660,16; 14,09; −296,24), yaw 161,9° (`docs/_kanit_ist2_tasima12/testler/uzak_hub.txt`).
+  - Hub −x yönü = şehrin içi (surdan dik).
+- Eski dünya (World1453 + SiegeField; ordugâh bölümleri 6a, 9, 10, 10b, 10z, 13 ordugâh, 16, 24o, 25, 43o):
+  - `world.x` sur boyunca; iç sur z ≈ −2,3; şehir −z.
+  - Romanos: x 0 (kemer, `LANDMARKS.romanos`) ve x 37 (`LAND_GATES[2]`, gerçek geçit).
+  - Pempton: x −230 (`world1453.gd:125`).
+  - Hub byz_walls dönüşümü `world1453.gd:106-108`: `world.x = 5,5 − yerel.z`, `world.z = −36,3 + yerel.x`.
+
+## Hedef
+### 1. Şeridin sınırı
+- Sur boyunca: Romanos'un ~300 gerçek m güneyinden Pempton'un ~200 gerçek m kuzeyine. Lykos vadisi ve Mesoteikhion; Sultan drone'la buraya bakıyor.
+- Derinlik: iç surun şehir yüzünden içeri **150–250 dünya m** (≈ 430–715 gerçek m). Kenarı düz çizgi gibi okunmasın; WallRear'daki `depth` gibi dalgalı olsun.
+- İki dünyada aynı tanım: tek bir yardımcı işlev, ör. `IstGeo.lykos_seridi(x, z) -> float` (0 dışarıda, 1 içeride, kenarda yumuşak). Eski dünyada da onu ya da eşini kullan.
+
+### 2. v2 (`geo.gd`, `sokak.gd`, `hayat_yakin.gd`)
+- **`IstGeo.mahalle`** (`geo.gd:366-411`): duvar bandı kuralından (`:394-396`, `d_kara < 110` → `sur_dibi` 0,75) ÖNCE şerit kuralı. `_ada` (`:420-455`) gibi karmalı 60–90 m'lik hücre mozaiği. Türler:
+  - bostan ("bostan", ~0,12)
+  - bağ (`alt` "bag")
+  - harabe (~0,15)
+  - seyrek (~0,35; dağınık ev, avlu, ahır)
+  - manastır/şapel (`alt` "manastir")
+  - mezarlık (`alt` "mezarlik")
+  - Oranı göz ve tarihle ayarla; dağınık ev şeridin her yerinde görünür olsun ("içi boş" değil, "küçülmüş şehir").
+- **Savunma yolu sıra ev zorlaması** (`sokak.gd:1244-1246`; bostan/harabe/kir/seyrek ≥ 0,9 `sur_dibi`'ye zorlanıyor) şeritte KAPANIR. Mahalle sözlüğüne bayrak, ör. `"serit": true`.
+  - Savunma yolunun kendisi (surun iç yüzünden 3 m içeride 4 m'lik yol) KALIR; yalnız sıra evler kalkar.
+- **Boş meydan:** şeritte birkaç "boş meydan" (döşeli, kuyulu ya da çeşmeli; çevresinde 1–3 ev ya da harap duvar). `_doku` (`sokak.gd:1733-1839`) bugün meydanı yalnız sık türlerde koyuyor (`:1756`); şerit için seçenek ekle.
+  - Her meydanda kuyu ya da çeşme olur; ISTBOS'ta boş sayılmaz.
+- **Harap kilise:** bir tane hazır model yok. `IstKiliseler` harabe parçalarını (`kiliseler.gd:58-73`: harabe_tonoz/kemer/sutun/mozaik/sarmasik) şapel/küçük kilise ile birleştir. Ya da harap kilise türü ekle: yarım duvar, çökmüş kubbe kasnağı, sütun. Kutu değil; bakılabilir ayrıntı, tek görsel dil.
+- **Kalabalık AZALMAZ** (sahibinin kuralı).
+  - `hayat_yakin.gd:30` TARGET bostan 5 / harabe 4. Şerit türleri için ayrı hedef ya da şerit bayrağıyla hedef. Bostanda çalışanlar, keşişler, askerler (sur yakını), su taşıyanlar, çobanlar.
+  - CITYCHECK 24 ve 31o başlangıçları bu şeritte: (−1669, −272) ve (−1603, −331). Orada ≥ 8 sivil şartı (`tests/city_check.gd:14`) gevşetilmeden geçmeli.
+  - STREETCHECK (e) 24'te ≥ 8 v2 ajanı bekliyor (`street_check.gd:576`).
+- **ISTBOS %0:** her 40 m'lik şehir karesinde bir şey (`_ogeler` dolgusu `sokak.gd:1843-1884` bunu kendiliğinden sağlıyor; ölç).
+- **Ev sayısı:** `ISTSEHIR2`/`ISTDOKU2` ev sayısı önce|sonra raporlanır. 9 binin altına düşerse rapora yaz (sahibinin 0b hedefi 9–12 bin); ama şerit için zorla ev ekleme.
+
+### 3. Kapıdan içeri yol (v2 ve eski dünya)
+- Saray avlusu + kançılarya G22'de hub-yerel **−x ≈ 360–420**'ye taşınacak (site A, Lykos terası). Örnek: (−390, 0, −13) → v2 ≈ (−1293, ~6, −163).
+- **Sen yeri seç:** `IstGeo.h` ile ölç; eğim ≤ %8, 84 × 70 m'lik alan; anıt, sarnıç (Mokios) ve Lykos çizgisiyle çakışma yok. Sonucu tek yere yaz:
+  - `sur_set_hub.gd`'ye YALNIZ EKLEME: `const SARAY_OFS := Vector3(…)` (hub-yerel) ve `static func saray_v2() -> Vector3` (v2 dünya konumu, `hub_v2() * SARAY_OFS`).
+  - Var olan hiçbir satır değişmez; SURSOZLESME aynı kalır.
+- **v2 yolu:** Romanos kapısının iç yüzünden SARAY_OFS'a giden açık bir sokak (`sokak.gd`; bugün `_gate_road` `:937-952` kuzeydoğuya, en yakın Mese koluna gidiyor). Yol şeridin içinden geçer, ucunda sokak ağına bağlanır.
+  - SARAY_OFS'ta şimdilik bir mahalle meydanı + kuyu yeterli. Orayı ev doldurmasın: 84 × 70 m'yi boş tut (meydan, ağaç, kuyu; boş çayır değil). G22 oraya saray avlusunu ve kançılaryayı kuracak.
+- **Eski dünya yolu:** ROAD (`scripts/world/city_plan.gd:51`) zaten içeri gidiyor. SARAY_OFS'ın eski dünya karşılığı byz_walls dönüşümüyle ≈ (18,5; −426); ROAD'un ~45 m doğusu. Gerekirse kısa bağlantı.
+  - CityLife "lykos" pazarı (`city_life.gd:348`, (0, −160)) şeridin içinde kalıyor; SARAY_OFS'ın eski dünya karşılığının yanına taşı.
+
+### 4. Eski dünya şeridi (43o'nun gördüğü)
+- `scripts/world/wall_rear.gd` evsiz bandı (65–120 m, `:17-25`), `siege_field.gd`'nin şehir dolgusu (`:184-190` civarı; `WallRear`, `CityPlan`) ve şehir evleri: Romanos–Pempton arasında aynı şerit tanımıyla bostan, bağ, harabe, dağınık ev, boş meydan.
+  - Eski dünyanın kendi kurucularıyla. Eski dünyada v2 kurucuları da varsa onları kullan; tek görsel dil.
+- **Uzak hub dokunulmaz** (`ByzCity.far_hub`, `byz_city.gd:122`; kutu iç suru SiegeField'in sur boşluğunu dolduruyor `siege_field.gd:262-298`). G22'nin işi.
+- 43o'nun drone bakışları (`WALLS_AT`, `chapter43o.gd:37`; Sultan'ın VIEW1–3 anı) ve ordugâhtan surlara bakış (9, 13 ordugâh) **en önemli kanıt**: surun ardında bostanlar, harap kiliseler, dağınık evler görünmeli.
+
+## Kurallar (kesin)
+Türkçe çalış, Türkçe yaz. Godot 4.4.1, gl_compatibility, prosedürel GDScript. Oyun: birinci şahıs komedi "Gerçek Tarih Bu Değil" (1453 kuşatması).
+- **Sahibinin kuralları:**
+  - KUTU YASAĞI: düz kutu bina, kutu kilise, kutu duvar yok; her yapı bakılabilir ayrıntılı.
+  - HAVADA DURAN HİÇBİR ŞEY OLMAZ: gömük de yok; yamaçta zemine oturur.
+  - TEK GÖRSEL DİL.
+- **Sur sözleşmesi DEĞİŞMEZ.** Her kayıttan önce aynı çıkmalı:
+  - `tests/_ist/sur_sozlesme.tscn` → `SURSOZLESME PASS kalem=13 kesim=8`
+  - `tests/_ist/sur_oyun_denetim.tscn` → `SUROYUN nokta=519 havada=0 gomuk=0 katida=0`
+  - `tests/_ist/sur_oyun_yuru.tscn` → `WALKTHRU OZET yol=7 tamam=7 takilma=0 dusme=0`
+  - `tests/_ist/esya_fizik.tscn` → `ESYATEST PASS`
+  - `tests/_ist/tasima11_halic_sonda.tscn` → `HALICSONDA OZET carp=661 karma=3854034809`
+  - `tests/_ist/tur14_marmara_sonda.tscn` → `MARMARASONDA OZET carp=1837 karma=2250736444`
+- **Şehrin kalanı değişebilir:** `IstSokak` tek sıralı rastgele sayı kullanıyor, şerit her şeyi kaydırır (`sokak.gd:534-535`). Ama bakış kalitesi düşmemeli. Şeridin dışından 2 bölge önce|sonra kare.
+- Replik metni, ses, denge, gizli süre, sayaç DEĞİŞMEZ. Kalabalık azaltılmaz. Yeni replik yok.
+- Bölüm betiklerine dokunma (yalnız test/kanıt betikleri yeni dosya olarak).
+- Yükleme: `YUKLEMEAUDIT_KESIN` çıkmaz. Yükleme süresi önce|sonra (`tests/load_time.gd -- --only=chapter24`, `chapter43o`) raporlanır; belirgin artış olmasın.
+
+## Doğrulama (çıktılar `docs/_kanit_lykos21/testler/`)
+1. Ayrıştırma `res://tests/parse_check.tscn` PASS; sözleşme altılısı aynı.
+2. **Bölüm testleri ×2** (`--max-fps 20`, `--chapter=X --autotest[=v]`, `tests/run_tests.sh`'taki çeşitlerle):
+   - hub bölümleri: 6 `=byz` çeşitleri, 7 `=byz` çeşitleri, 10h, 12b, 13 `=city`, 23, 24;
+   - 8y, 31o çeşitleri;
+   - ordugâh bölümleri: 9, 10, 10b, 13 (ordugâh dalı), 16, 43o çeşitleri, 7 (varsayılan, 7a uçuşu), 11.
+   - Hepsinde `AUTOTEST PASS`; VISAUDIT, WALKTHRU, HELDAUDIT, GORUNMEZZEMIN, ALETAUDIT, DONUKAUDIT, ESYAAUDIT (dusme/havada/gomuk/tikama/sinir) satırı 0.
+3. `tests/city_check.tscn` CITYCHECK PASS (24 ve 31o ≥ 8 sivil; gevşetmeden). `tests/street_check.tscn` STREETCHECK PASS. FLIGHTCHECK PASS (`run_tests.sh`'taki komut). ZFIGHT 0 (değişen bölümler).
+4. **ISTBOS:**
+   - `tests/_ist/gezi.gd` `bos=1` ve `tests/_ist/doku2_kare.gd` sayımı: şehir içi %0.
+   - Şeritte "boş" karelerin listesi (varsa).
+5. **Kareler** (TAM BOY, `kare/`, önce|sonra, gündüz):
+   - 43o drone: sahibinin karesi Romanos'a ~60–80 m yükseklikten, surun dışından içeri bakıyor; `WALLS_AT` ve Sultan'ın VIEW1–3 anı.
+   - Ordugâhtan surlara (9 ya da 13 ordugâh).
+   - v2'de şerit: göz hizasında (0,5–3 m) 4 bakış (bostan, harap kilise, boş meydan, dağınık ev); 70 m'den tepeden 2 bakış; hub surunun yürüyüş yolundan içeri 1 bakış; yeni yolda yürüyüş 2 bakış.
+   - Şeridin dışı (şehir hâlâ dolu): 2 bakış.
+   - Sahibine en iyi 3 kanıt: `kare/sahip_*.jpg`. Kareler DALA KAYDEDİLİR.
+
+## Kanıt → `docs/_kanit_lykos21/`
+- `rapor.md`:
+  - her hedef maddesi TAMAM / KISMEN / YAPILMADI;
+  - şerit tanımı ve oranlar;
+  - SARAY_OFS seçimi ve ölçümleri (yükseklik, eğim, çakışma);
+  - ev ve kalabalık sayıları önce|sonra;
+  - yükleme süresi önce|sonra;
+  - değişen dosya:satır listesi;
+  - "hâlâ kötü olanlar" (dürüst).
+- `durum.md`: her kayıtta güncel; iş bitince ilk satırı `# G21 durum: BİTTİ`.
+
+## Dosya sahipliği
+Aynı anda başka yardımcı yok. G22 senin dalının üstüne gelecek.
+- **SEN:**
+  - `scripts/world/ist/geo.gd`, `scripts/world/ist/sokak.gd`, `scripts/world/ist/hayat_yakin.gd`;
+  - `scripts/world/ist/kiliseler.gd` ve `ayrinti*.gd`/`bitki*.gd` (yalnız yeni parça eklemek için);
+  - `scripts/world/ist/sehir.gd` (yalnız şerit yamalarını, harap kiliseyi ve meydanı ÇİZMEK için gereken en az değişiklik; `_make_hub`, `hub_xf`, `oyun_alanlari` DEĞİŞMEZ);
+  - `scripts/world/wall_rear.gd`, `scripts/level/siege_field.gd` (yalnız şehir dolgusu ve şerit), `scripts/world/city_plan.gd` (yalnız gerekiyorsa bağlantı yolu), `scripts/world/city_life.gd` (yalnız lykos pazarı);
+  - `scripts/world/ist/sur_set_hub.gd` (YALNIZ `SARAY_OFS` ve `saray_v2()` eklemesi);
+  - yeni `tests/_ist/lykos21_*`.
+- **Kimsenin değiştirmediği:**
+  - `scripts/level/byz_city.gd`, `scripts/world/ist/baglama.gd`, `scripts/world1453.gd` (ya da bulunduğu yol), bölüm betikleri;
+  - `project.godot`, sözleşme ve sonda testleri, `VERSION`, `.github/*`, `i18n/*`, ses dosyaları.
+
+## KESME SIRASI
+Hedef 3–4 saat.
+1. Ölç (önce): kareler + sayılar.
+2. v2 şeridi (geo + sokak + meydan + harap kilise + kalabalık) → kaydet.
+3. SARAY_OFS + yol (v2 ve eski) → kaydet.
+4. Eski dünya şeridi → kaydet.
+5. Testler + kareler + rapor.
+
+v2 şeridi tek başına da teslim edilebilir değerde olmalı.
+
+## Dayanıklılık ve yasaklar
+- **Kayıt:**
+  - Her adımın sonunda ve en geç 20 dakikada bir kaydet + gönder (yarım da olsa; kareler dahil).
+  - `durum.md` her kayıtta güncel.
+  - İlk 40 dakikada ara kayıt.
+  - Kayıt iletisine model adı yazma.
+- **Süreçler:**
+  - Arka plan işleri ≤ 10 dakika; aynı anda en çok 4 süreç.
+  - Bitti bildirimi gelmezse çıktı dosyasını kendin oku.
+  - Testleri çalışma ağacının bir eşinden koş (`~/is/kopya`).
+- **Kurulum:**
+  - Godot 4.4.1 linux x86_64 resmi sürümü `~/is/godot/godot` (indir).
+  - `timeout 900 ~/is/godot/godot --headless --path . --import`.
+  - Pencereli kare: `xvfb-run -a -s "-screen 0 1280x720x24" ~/is/godot/godot --path . --rendering-driver opengl3 --resolution 1280x720 …`.
+  - xvfb yoksa `sudo apt-get install -y xvfb` (sudo YALNIZ apt-get için).
+  - Bölümlerin kare kipi: `--shots=<klasör>` (`GameState.shots_dir`; ör. 43o `_run_shots`).
+- **Yasak araçlar ve işler:**
+  - Oturum/tetikleyici/zamanlama/bildirim/ajan başlatma araçlarını KULLANMA.
+  - PR açma. Yalnız kendi dalına gönder; geçmişi yeniden yazma, zorla gönderme yok; main'e dokunma.
+  - `pkill`/`killall` yok (yalnız `kill <pid>`).
+  - Ses üretme. Denetim susturma, eşik gevşetme yok.
+- **İzin kutusu çıkarabilecek komut yok:**
+  - `rm -rf`/`rm -r`/`mv`/`cp -r` hedefinde kabuk değişkeni kullanma (tam yolu elle yaz); silmeyi heredoc zincirine gömme.
+  - `bash -c '…'` ya da `until/while … sleep` bekleme döngüsü yazma.
+  - Geçici dosyalar yalnız `~/is/` altında.
+  - `.git/` içine ve `.gitignore`'a yazma; `git config` ve `git clean` kullanma.
+- **Kayda eklenmeyenler:** Godot'nun ürettiği `.import`/`.translation` yan dosyaları ve ilgisiz `.uid`'ler kayda girmez. Yeni `.gd` dosyalarının `.uid`'si eklenir.
+- **Dal ve disk:**
+  - Dalda duran öteki `docs/_*` klasörlerine dokunma.
+  - Disk payı sınırlı: ham kare yığınlarını iş bitince sil.
+- **Önbellek:** v2 önbelleği (`user://ist_onbellek`) `geo.gd` md5'iyle kendiliğinden geçersizleşir (`sokak.gd:459`). Ölçümlerde soğuk/ılık ayrımını yaz.

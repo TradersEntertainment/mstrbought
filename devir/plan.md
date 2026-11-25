@@ -1,4 +1,84 @@
-# DURUM 25 Kasım 17:25 UTC — 0.99.128 YAYINDA (CI #346 45651160219, main 2a951cc6; guncelleme.json 0.99.128). Sahibinin denemesi bekleniyor.
+# PLAN (25 Kasım ≈18:00 UTC) — Meydanı böl: saray ve kançılarya içeri, Lykos şeridi bostan (0.99.129 / 0.99.130)
+
+## Context
+Sahibi 43o drone karesi gönderdi: "bu şehrin yeri doğru mu, çok garip duruyor, ne alaka surlar dibinde". Bulgular:
+1. **Bizans meydanı** tek blok ve iç surun hemen ardında: ByzCity "walls", 84×70 m; cadde, Logothetes kançılaryası, saray avlusu + İmparator, Giustiniani, Romanos Kapısı. Romanos'ta savunmayı İmparator ve Giustiniani yönetti; burası doğru. Saray ve kançılarya ise orada değildi, sahne için toplanmışlar.
+2. **Eski dünya bölümleri meydanı kutu surla pişiriyor.**
+   - Hangileri: CampDay ordugâhları (6a, 9, 10, 10b, 10z, 13 ordugâh, 16, 24o, 25, 43o).
+   - Nasıl: `ByzCity.far_hub` (`byz_city.gd:122`) `_build_walls`'u eski kipte çağırıyor; kutu iç sur, kuleler ve kemer kuruluyor.
+   - Kara surları da `SiegeField` kutu modeli (`siege_field.gd`).
+   - Sonuç: meydan "surlara yapışık, surlu bir kasaba" gibi görünüyor.
+   - TAŞIMA 12 bunu yalnız v2'de (7, 11) düzeltti.
+3. **Şehir surlara kadar sıra evle dolu.** Sebep 12 Kasım kalite notu 0/0b (`docs/_ajan/gorev/ist2_kalite_notlari.md`): sur dibi `sur_dibi` 0,75, `geo.gd:394`. 43o'da Sultan'ın seslendirilmiş repliği `D43O_F_VIEW3` ise "içeride bostanlar, harap kiliseler, boş meydanlar" diyor; görüntüyle çelişiyor.
+
+**Sahibinin kararları (AskUserQuestion):**
+- Saray ve kançılarya içeri (300–500 m).
+- Lykos şeridi bostan: surun ardında ~150–250 m bostan, bağ, harap kilise, dağınık ev, boş meydan. Boş çayır yok; şehrin kalanı dolu kalır.
+
+Birimler oyun (dünya) metresi; gerçek mesafe × 0,35 (`geo.gd:12`).
+
+## Tasarım (varsayılanlar; onayda değişebilir)
+- **İç mahallenin yeri.** Hub-yerel −x ≈ 360–420 (site A, Lykos terası).
+  - v2: ≈ (−1290, 6–7, −170), eğim ≤ %7. Eski dünyada aynı ofset düz.
+  - Tek ofset iki dünyada da çalışır; bölge dönüşümleri (`world1453.gd:106` byz_walls, `SurHub.hub_v2`) değişmez.
+  - Kesin nokta `IstGeo.h` ile ölçülür: eğim ≤ %8; anıt, sarnıç (Mokios) ve Lykos çizgisiyle çakışma yok.
+- **Surda kalanlar:** Giustiniani'nin iskelesi, Romanos kapısı, nöbetçiler, caddenin sur ucu, küçük bir nöbet/ikmal yeri (sandık, ocak, meşale).
+- **İçeri gidenler:** saray avlusu + İmparator + divan, kançılarya (7 oda, 7 kâtip), meydan + çeşme + tezgâhlar, Niko ve kayığı, zindan hücresi (6/7), tabelalar.
+  - ByzCity aynı bölüm çerçevesinde ikinci bir kök düğüm kurar (ofset P).
+  - Kançılaryanın x'i sabite bağlanır (bugün x = 0'a gömülü: `byz_city.gd:1489`, `clerk_x` 1825).
+- **Aradaki yol.** Kapıdan iç mahalleye gerçek sokak: v2'de `sokak.gd` açık yol, eski dünyada ROAD hattı (`city_plan.gd:51`). Serbest yürünür (≈ 2 dk).
+- **Senaryolu gidiş-gelişler.** 10h kalıbı: kararma + yerleştirme (`chapter10h.gd:290, 420`); oyuncu isterse yürür.
+  - 6b: martı kovalamacası iç meydanda. Tünek sayısı ve sabır süreleri aynı (denge aynı).
+  - 6b: `D6B_T_CHASE_4` "Surlara gidiyor!" ile martı surlara uçar, kararma olur, son tünek Giustiniani'nin masası.
+  - 10h: `D10H_L_04` "Bak, saray" kapıda değil, saraya varışta çalar.
+  - Replik metni ve sesi değişmez; yeni replik yok.
+- **Uzak görünüş.** `far_hub` (eski dünya) ve `hub_sehir` (v2, `sehir.gd:2216`) iki parça olur: sur parçası + iç mahalle.
+  - Eski dünyada sur parçasının kutu iç suru SiegeField boşluğunu (`siege_field.gd:262-298`) doldurduğu için şimdilik kalır; Faz 3'e bakın.
+- **Lykos şeridi.** Romanos–Pempton arası, surun iç yüzünden ~150–250 m.
+  - v2: `IstGeo.mahalle`'de duvar bandından önce mozaik kuralı. 60–90 m hücrelerde bostan, bağ, harabe, seyrek (dağınık ev), manastır, mezarlık.
+  - v2: `sokak.gd:1244` savunma yolu sıra ev zorlaması şeritte kapanır.
+  - v2: boş meydan + kuyu; `_ogeler` dolgusu → ISTBOS %0.
+  - v2: `hayat_yakin.gd:30` TARGET şeritte ayarlanır; CITYCHECK 24/31o ≥ 8 sivil kalır.
+  - Eski dünya: `wall_rear.gd:17-25` bandı + SiegeField dolgusu bostan/harabe; CityLife "lykos" pazarı (`city_life.gd:348`, (0,−160)) iç mahalleye taşınır.
+
+## Yürütme (yardımcılar sırayla, aynı anda değil: `sokak.gd` ve `siege_field.gd` ortak)
+1. **G21 "LYKOS BOSTAN"** (Opus, dal `wip/lykos21`, taban `wip/ist2-birlesik`, ≈ 3–4 sa).
+   - İş: şerit iki dünyada + kapıdan içeri yol iskeleti. Hedef: `IstSehir.oyun_alanlari()`'nda "saray" varsa o, yoksa hub-yerel (−380, 0).
+   - Dosyalar: `geo.gd`, `sokak.gd`, `hayat_yakin.gd`, `wall_rear.gd`, `city_life.gd` (yalnız lykos pazarı), yeni `tests/_ist/lykos21_kare.*`.
+   - Teslimde: doğrulama + tam paket → **0.99.129**. 43o'daki görüntü burada zaten düzelir: şerit bostan olur, meydanın ardı açılır.
+2. **G22 "SARAY İÇERİ"** (Opus, G21'in üstünde, dal `wip/saray22`, ≈ 6–10 sa).
+   - Dünya ve kurulum dosyaları:
+     - `byz_city.gd`: bölünme, sabitler, `_RESERVED`, `Dressing.auto` alanları, `far_hub` iki pişirme.
+     - `world1453.gd`: `FAR_REGIONS` iki dikdörtgen; sur parçası z −2,3'ü kesmeye devam eder.
+     - `siege_field.gd`: dikdörtgen başına düz y.
+     - `baglama.gd`: `YAMA`/`TEMIZ` dikdörtgen listesi, `hub_alan`.
+     - `sehir.gd`: ikinci düzleme + öğe, `oyun_alanlari` "saray", `_make_hub` ikiye.
+   - Bölümler:
+     - `chapter6.gd`: z eşikleri 144/306/791/871, tünekler, otomatik test, byzyuru.
+     - `chapter7.gd`: izler 239-260.
+     - `chapter10h.gd`: `HALL` kopyası 16, geçişler.
+     - `chapter12b.gd`: `city.emperor` düğümü yine kurulur.
+     - `chapter13.gd` (Niko 220-223), `chapter23.gd` (`HALL`), `chapter24.gd` (yol arka planı).
+   - Testler: `tasima12_kare`, `tasima10_kare`, `tur14_bolum_kare`, `city_audit`, `flight_check`.
+   - Teslimde → **0.99.130**.
+3. Görev yazıları önce Fable'a okutulur. Standart yasaklar geçerli: oturum/zamanlayıcı/ajan araçları, pkill, ses üretimi, PR, main, liste dışı dosya, denetim susturma, izin istemi doğuran komutlar. KUTU YASAĞI, havada duran yok, tek görsel dil; denge ve replik değişmez. Nöbetçi arka plan betiği; send_later yok.
+4. **Faz 3 (ayrı, sonra; sahibine sorulur):** Osmanlı tarafının (eski dünya) kara surlarının tamamı hâlâ SiegeField kutu modeli. Yeni sur kalemine geçirmek ayrı bir görev (G23).
+
+## Doğrulama
+- **Tam boy kareler, önce/sonra:**
+  - 43o drone, sahibinin karesindeki bakış (`WALLS_AT`) ve Sultan'ın VIEW1–3 anı.
+  - Ordugâhtan surlara bakış (9, 27).
+  - 6b/10h sur parçası ve iç mahalle göz hizasında (0,5–3 m).
+  - Şerit göz hizasında ve 70 m tepeden; yol boyunca yürüyüş.
+- **Testler:**
+  - Hub bölümleri bütün çeşitleriyle ×2, `--max-fps 20`: 6 byz*, 7 byz*, 10h, 12b, 13=city, 23, 24.
+  - CITYCHECK 24/31o (≥ 8 sivil), STREETCHECK, ISTBOS %0 (`gezi bos=1`), FLIGHTCHECK, WORLDCHECK, ZFIGHT.
+  - YUKLEMEAUDIT KESIN 0, yükleme süresi ölçülür.
+  - Sözleşme altılısı birebir: SURSOZLESME 13/8, SUROYUN 519/0/0/0, WALKTHRU 7/7, ESYATEST, HALICSONDA 661, MARMARASONDA 1837.
+  - Tam paket fail = 0, menüye dönüş 2/2, CI başarılı.
+- Ev sayısı 9 binin altına düşerse sahibine bildirilir (0b hedefi 9–12 bin).
+
+# (Eski) DURUM 25 Kasım 17:25 UTC — 0.99.128 YAYINDA (CI #346 45651160219, main 2a951cc6; guncelleme.json 0.99.128). Sahibinin denemesi bekleniyor.
 # (Eski) 16:10 — CI #346 koşuyordu (#344 38o devriye, #345 ESYATEST gömük + 36b overlap düzeltildi)
 - Bekçi `$S/bekle_yayin.sh 0.99.128 7000` (b1fvn72pz) → guncelleme.json 0.99.128 olunca: releases/latest doğrula,
   sahibine Türkçe rapor (oyun içi güncelleyiciyle güncelle = ilk gerçek Windows denemesi; yüklemeleri dene; hangi
