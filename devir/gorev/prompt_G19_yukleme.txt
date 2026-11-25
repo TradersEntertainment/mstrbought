@@ -1,0 +1,163 @@
+**BU GÖREV ONAYLIDIR. Onay ya da soru beklemeden HEMEN başla, sonuna kadar kendi başına çalış, bitince rapor ver. Kimseye soru sorma; takılırsan bulduğunu rapora yaz ve en iyi kararla devam et. Dal oluşturmak, her adımda kaydetmek ve yalnız kendi dalına (`wip/yukleme19`) göndermek önceden onaylıdır.**
+
+# G19 (Opus): Yükleme — Windows "Yanıt vermiyor" hiç olmasın, bölümler daha hızlı yüklensin
+
+Depo: `TradersEntertainment/nothistorygame` (yerelde klonla). Taban: `wip/ist2-birlesik` = **b583705a** (0.99.127). Kendi dalın: `wip/yukleme19` (tabandan aç, yalnız buraya gönder).
+
+## Neden (okuyarak doğrula)
+Oyun sahibi Windows'ta oynuyor: "genel bir yükleme sorunu var, 'Yanıt vermiyor'a dönüyor, bölümler zor yükleniyor". Windows bu uyarıyı, ana iş parçacığı ~5 sn pencere iletilerini işlemeyince verir. Yönetici iki salt okuma incelemesi yaptı:
+
+- **Bölüm dünyası `_ready` içinde, ana iş parçacığında tek seferde kuruluyor.**
+  - `GameState._change_with_loader` (`scripts/autoload/game_state.gd:1082-1116`) yalnız ~200 baytlık `.tscn`'yi `load_threaded_request` ile yüklüyor.
+  - Asıl kurulum `change_scene_to_packed` sonrası bölümün `_ready`'sinde. Perde `_ready` dönünce kalkıyor.
+- **Pencereyi canlı tutan tek şey `LoadingScreen.pump()`** (`scripts/ui/loading_screen.gd:120-154`).
+  - 150 ms'de bir `DisplayServer.process_events()` çağırıyor, perdeyi `disable_3d` ile çiziyor ve girdiyi `gui_disable_input` ile yutuyor.
+  - Tek çağıranı `Props._place` (`scripts/level/props.gd:425`). Perde yokken (`current == null`) hiçbir şey yapmıyor.
+  - QA_DERSLER'de açık kayıt: `docs/QA_DERSLER.md:1193` "v2 kurulumu yükleme perdesini canlı tutmuyor".
+- **Nabız atmayan ağır yollar** (Props'tan geçmiyorlar):
+  - `IstBaglama.build` (`scripts/world/ist/baglama.gd:354-479`) → `IstDunya.build/_kur` (`ist/dunya.gd:79-123`; parça döngüsü sınırsız bütçe: `:115`) → `IstSehir.attach_v2` (`ist/sehir.gd:1429-1454`): `_place_v2` (:1838), `_hatlar_v2`/`_hat_far_add`/`_hat_far_commit` (:2039-2115, :2301), `_sehir_dokusu_v2` (:3148) → `IstSokak.build` (`ist/sokak.gd:202`) → `IstMahalleDoku._kur` (`ist/mahalle_doku.gd:77`; **8000 ms'lik tek döngü** :974), `_layers2`/`_merge_groups` (:3422-3514), `_on_pisir` (:1463-1519; 6,7–7,9 sn), `_parcalar_bagla`.
+  - Ordugâh uzak hücreleri: `IstOrdugah.attach` (`ist/ordugah.gd:573`) → `IstOrdugahYonetici.kur` (`ist/ordugah_yonetici.gd:30-166`, `_pisir`/`_ekle`). 2,5–6,4 sn; v2'nin her bölgesinde (`sehir.gd:1524-1543`).
+  - Kalabalık: `IstHayat._kur` (`ist/hayat.gd:69`; `IstHayatYakin.attach` :106, soğukta 6,3 sn).
+  - Pişirme: `World1453.bake` (`world1453.gd:436-540`, GDScript köşe döngüsü + `generate_lods`) ve `Props.bake_static` (`level/props.gd:612-669`).
+  - Ayrıca: `SiegeField.build` (`siege_field.gd:106`; `await _step` yalnız `lite`'ta), `Scenery.solidify` (`scenery.gd:76`), `SurOyun.kur` (`ist/sur_oyun.gd:521`).
+- **Perdesiz kurulumlar** (perde yok, nabız yok):
+  - 31o Eyüp evresi (`chapter31o.gd:767-768` `Horn.build` + `World1453.build`).
+  - 24 → Ayasofya (`chapter24.gd:378-391`).
+  - 26 → Ayasofya (`chapter26.gd:2421`, `:2998`).
+  - 13'ün dünyaları başlık kartından sonra (`chapter13.gd:209`, `:217`, `:231`, `:739`).
+  - Oyun açılışındaki ilk bölüm (`scripts/boot.gd:17` doğrudan `change_scene_to_file`).
+- **Kayıtlı süreler** (başsız/xvfb, yük altında; kaynakları `docs/_kanit_ist2_*`):
+  - 8y/23/24 ≈ 55 sn; 12b/10h ≈ 48–50 sn; 31o ≈ 39 sn.
+  - 11: soğukta 40, ılıkta 20–27 sn.
+  - SurSet bölümleri 3–5 sn.
+- **Önbellek** `user://ist_onbellek/` (`ist/sokak.gd:226`):
+  - Anahtarda oyun sürümü + betik md5'i var (`sokak.gd:253`). Her güncelleme ya da kurulum soğuk yükleme demek.
+  - `onbellek_yaz` aynı türün öteki anahtarlarını siliyor (`sokak.gd:297-301`). Bölgeler arasında birbirini siliyor olabilir (doğrulanmadı).
+- **İsraf:** hub bölgelerinde şehir hub'ı `_make_hub` (`sehir.gd:2162`) ile `_on_pisir`'de üç kez (LOD 2/1/0) kurulup sonra `IstBaglama._temizle` (`baglama.gd:510-531`) ile siliniyor.
+- **Ölçüm araçları:**
+  - `tests/load_time.gd` (`LOADTIME … ready= …`, başsız).
+  - `tests/city_check.gd` (açılış yüklemesi sn).
+  - Günlük satırları: `ISTBAGLAMA kurulum_ms`, `ISTDUNYA kurulum_ms`, `ISTSEHIR2 kur_ms/hat_ms/doku_ms/parca_ms`, `ISTONPISIR ms`, `ISTDOKU2`, `ISTHAYAT kur_ms`, `SURSET kurulum_ms`.
+  - `HitchAudit` (`scripts/autoload/hitch_audit.gd`) yükleme karelerini bilerek atlıyor.
+
+## Hedef
+### KESME A — "Yanıt vermiyor" hiç olmasın (görüntü ve çarpışma BİT BİT aynı)
+1. **Genel nabız.** `LoadingScreen` içinde statik `nabiz(kaynak := "")`. `pump()` ona yönlenir; eski çağrı kalır.
+   - Perde olsun olmasın: son nabızdan ≥ 150 ms geçtiyse `DisplayServer.process_events()`; girdi bugünkü gibi `gui_disable_input` ile yutulur.
+   - Perde varsa ayrıca bugünkü çizim (`disable_3d` + `force_draw`).
+   - Ağır döngülere ve adımlara çağrı eklenir; çağrı ucuz olmalı (`Time.get_ticks_msec` karşılaştırması). Kapsam: `IstDunya._kur` parça döngüsü, `mahalle_doku` döngüleri (974 dahil), `IstSokak.build` döngüleri, `attach_v2`'nin her adımı ve öğe/hücre döngüleri, `_on_pisir` iş başına, `World1453.bake` ve `Props.bake_static` çağrı başına (büyük döngülerinde N köşede bir de), ordugâh `_pisir/_ekle`, kalabalık pişirme, `SiegeField` adımları, `Scenery.solidify`, `SurOyun.kur` adımları, ByzCity `_build_*` adımları.
+2. **Perdesiz kurulumlara perde.** Bölüm ortası yeniden kurulumlar kısa bir yükleme perdesiyle sarılır: 31o Eyüp, 24 ve 26 → Ayasofya, 13'ün dünyaları.
+   - Hazır olanı kullan: `GameState._show_loader(true, path)` / `_show_loader(false)` (`game_state.gd:1119`) ya da `LoadingScreen` örneği. Kendi kararma ve kart akışlarıyla çakışmasın: kararmış ekranın üstünde perde, sonra eski akış.
+   - Açılıştaki ilk bölüm (`boot.gd:17`) de perdeyle yüklenir, menü arka planı (`title_backdrop.gd`) bugünkü gibi kalır. Olmuyorsa en azından nabız.
+   - Otomatik testte perde gösterilmez (bugünkü kural), nabız yine çalışır.
+3. **Ölçüm denetimi (`YUKLEMEAUDIT`).**
+   - Nabız, iki çağrı arasındaki en uzun boşluğu ve o boşluğun öncesindeki son `kaynak` adını tutar.
+   - Bir kurulum bitince (bölüm `_ready` sonrası ilk kare ve bölüm ortası kurulumlar) `YUKLEMEAUDIT scene=… evre=… toplam_ms=… en_uzun_bosluk_ms=… kaynak=…` basar.
+   - Yalnız otomatik testte ve ölçüm kipinde basar; oyuncunun oyununda ölçüm maliyeti yok.
+   - Önce `YUKLEMEAUDIT_ADAY` olarak basılır (paketi düşürmez).
+   - Hedef: başsız (`--max-fps 20`) her bölümde ve her bölüm ortası kurulumda `en_uzun_bosluk_ms` < 1000. Windows eşiği ~5000; oyuncunun makinesi bizimkinden yavaş olabilir.
+   - Hedef tutunca `tests/run_tests.sh`'ta KESİN yapılır: `YUKLEMEAUDIT` eksiz basılırsa `fail=1`.
+
+### KESME B — Yükleme süresi kısalsın (görüntü ve çarpışma aynı; v2 sonda karmaları değişmez)
+4. **İsrafı at.**
+   - Hub bölgelerinde `_temizle` ile silinecek v2 öğeleri `_place_v2`/`_on_pisir`/`_make_hub`'da baştan kurulmaz. Kapsam kilidi: yalnız silinecekleri atla; öteki bölgeler bit bit aynı.
+   - "doku öğeleri `_on_pisir` dışı" önerisi ölçülerek tartılır.
+5. **Önbellek.**
+   - Bölgeler arası silme yaşanıyorsa tür başına birkaç anahtar saklanır, en eski silinir (`user://ist_onbellek` boyut sınırıyla). Bölüm değiştirince `ls user://ist_onbellek` ile doğrula.
+   - Anahtar oyun sürümü ve ilgisiz betiklerden arındırılır: yalnız ilgili kurucu betiklerin md5'i + elle artırılan bir kurucu sürüm sabiti. Yanlış eski veri riskini rapora yaz.
+6. **Uzak ordugâh ve kalabalık.**
+   - Açılışta yalnız oyuncuya yakın ordugâh hücreleri kurulur; uzaktakiler perde kalktıktan sonra kare bütçesiyle akar (`IstDunya` `butce_us` ve `IstSehir._queue`/`BUDGET_US` kalıbı).
+   - Akış sırasında havada ya da boş görünüm olmamalı: uzak hücre zaten uzakta. Kanıt kare.
+   - Kalabalık soğuk pişirmesi de aynı kalıpla.
+7. Ölç ve rapora yaz.
+   - Her değişiklik `tests/load_time.gd` (`ready` ms) ve `YUKLEMEAUDIT` ile önce|sonra ölçülür.
+   - Bölümler: 8y, 10h, 11, 12b, 13, 23, 24, 26, 31o, bir SurSet bölümü (20) ve 0.
+   - Hem soğuk (`user://ist_onbellek` ve öteki önbellekler silinmiş; kullanıcı klasörü `~/.local/share/godot/app_userdata/<proje>`, yalnız `~/is/` altındaki eşte değil gerçek yerde silinir) hem ılık.
+   - Tek başına koş (paralel yük ölçümü bozar).
+
+## Kurallar (kesin)
+Türkçe çalış, Türkçe yaz. Godot 4.4.1, gl_compatibility, prosedürel GDScript, birinci şahıs komedi oyunu "Gerçek Tarih Bu Değil" (1453 kuşatması).
+- Sahibinin kuralları: KUTU YASAĞI; HAVADA DURAN HİÇBİR ŞEY OLMAZ; TEK GÖRSEL DİL.
+- **Görüntü, geometri ve çarpışma DEĞİŞMEZ** (bu bir hız görevi). Her kayıttan önce aynı:
+  - `tests/_ist/sur_sozlesme.tscn` → `SURSOZLESME PASS kalem=13 kesim=8`
+  - `tests/_ist/sur_oyun_denetim.tscn` → `SUROYUN nokta=519 havada=0 gomuk=0 katida=0`
+  - `tests/_ist/sur_oyun_yuru.tscn` → `WALKTHRU OZET yol=7 tamam=7 takilma=0 dusme=0`
+  - `tests/_ist/esya_fizik.tscn` → `ESYATEST PASS`
+  - `tests/_ist/tasima11_halic_sonda.tscn` → `HALICSONDA OZET carp=661 karma=3854034809`
+  - `tests/_ist/tur14_marmara_sonda.tscn` → `MARMARASONDA OZET carp=1837 karma=2250736444`
+- Kesme B'de v2 dünyasının görünen içeriği aynı: `ISTSEHIR2`/`ISTDOKU2`/`ISTONPISIR` sayım alanları (öğe, hücre, ev, üçgen sayıları) önce|sonra aynı. Atılan öğeler yalnız zaten silinenler.
+- Var olan replik metni, ses, denge, gizli süre, sayaç DEĞİŞMEZ. Kalabalık azaltılmaz.
+- `process_events` sırasında oyuncunun girdisi oyuna geçmez (bugünkü `gui_disable_input` kalıbı; oyuncu hareketi de kurulum sırasında işlenmez).
+
+## Doğrulama (çıktılar `docs/_kanit_yukleme19/testler/`)
+1. Ayrıştırma `res://tests/parse_check.tscn` PASS; sözleşme altılısı aynı.
+2. `YUKLEMEAUDIT` tablosu: bütün bölümler (`for` ile `--chapter=X --autotest`, `--max-fps 20`) + bölüm ortası kurulumlar (31o, 24, 26, 13 çeşitleri) önce|sonra; hedef < 1000 ms.
+3. `tests/load_time.gd` önce|sonra tablosu (soğuk/ılık), yukarıdaki bölümler.
+4. Pencereli kanıt (xvfb): 31o ve 24 yüklenirken 0,5 sn arayla kare çekilir. Perdedeki dönen simge ve çubuk ilerliyor olmalı. Önce: donmuş aynı kare. Kareler `kare/`.
+5. Bölüm testleri ×2 PASS: değişen dosyaların bütün bölümleri (en az 8y, 10h, 11, 12b, 13 `=city`, 23, 24, 26 çeşitleri, 31o çeşitleri, 6 `=byz`, 7 `=byz`, 17o, 19, 0, 1).
+6. `tests/city_check.tscn` CITYCHECK PASS ve açılış süresi önce|sonra; `tests/street_check.tscn` PASS; ZFIGHT 0 (değişen bölümler); `tests/menu_return.tscn -- --chapter=26` ve `20o` PASS.
+7. Tam paket bu görevde YOK (yönetici koşar). Ama `run_tests.sh` değişikliği `bash -n` ve tek parça (`SHARD=0 SHARDS=8`) koşusuyla denenir.
+
+## Kanıt → `docs/_kanit_yukleme19/`
+`rapor.md`:
+- KESME A / B maddeleri TAMAM / KISMEN / YAPILMADI;
+- en uzun boşluk ve yükleme süresi tabloları;
+- değişen her nabız noktası (dosya:satır);
+- önbellek kararı ve riski;
+- "hâlâ kötü olanlar" (dürüst).
+
+Sahibine en iyi 2 kanıt (önce|sonra perde kareleri): `kare/sahip_*.jpg`. Kareler DALA KAYDEDİLİR.
+
+## Dosya sahipliği
+Aynı anda başka yardımcı yok.
+
+**SEN:**
+- `scripts/ui/loading_screen.gd`, `scripts/autoload/game_state.gd` (yalnız perde/yükleme işlevleri), `scripts/boot.gd`;
+- nabız için en az değişiklikle: `scripts/level/props.gd`, `scripts/world1453.gd` (ya da bulunduğu yol), `scripts/world/ist/*.gd` (dunya, sehir, sokak, mahalle_doku, ordugah, ordugah_yonetici, hayat, hayat_yakin, baglama, sur_oyun, evler), `siege_field.gd`, `scenery.gd`, `scripts/level/byz_city.gd`;
+- bölüm ortası perde için: `chapter31o.gd`, `chapter24.gd`, `chapter26.gd`, `chapter13.gd` (yalnız sarmalama);
+- `tests/run_tests.sh` (yalnız `YUKLEMEAUDIT` satırları);
+- yeni `tests/_yukleme19/*`.
+
+**Kimsenin değiştirmediği:** `project.godot`, sözleşme ve sonda testleri, `VERSION`, `.github/*`, `scripts/ui/guncelleyici.gd`, `i18n/*`, replik ve ses dosyaları.
+
+## KESME SIRASI
+Hedef 4–5 saat.
+1. Ölç (önce): `YUKLEMEAUDIT` iskeleti + `load_time` tabloları.
+2. KESME A 1–3 (nabız, perdeler, denetim) → kaydet.
+3. KESME B 4 (israf).
+4. KESME B 5 (önbellek).
+5. KESME B 6 (uzak ordugâh/kalabalık).
+6. Rapor + kareler.
+
+A tek başına da teslim edilebilir değerde olmalı: B'den önce A'yı kaydet ve doğrula.
+
+## Dayanıklılık ve yasaklar
+- **Kayıt:**
+  - Her adımın sonunda ve en geç 20 dakikada bir kaydet + gönder (yarım da olsa; kareler dahil).
+  - `docs/_kanit_yukleme19/durum.md` her kayıtta güncel; iş bitince ilk satırı `# G19 durum: BİTTİ` olur.
+  - İlk 40 dakikada ara kayıt.
+  - Kayıt iletisine model adı yazma.
+- **Süreçler:**
+  - Arka plan işleri ≤ 10 dakika; aynı anda en çok 4 süreç (ölçümlerde 1); bitti bildirimi gelmezse çıktı dosyasını kendin oku.
+  - Testleri çalışma ağacının bir eşinden koş (`~/is/kopya`).
+- **Kurulum:**
+  - Godot 4.4.1 linux x86_64 resmi sürümü `~/is/godot/godot` (indir).
+  - `timeout 900 ~/is/godot/godot --headless --path . --import`.
+  - Pencereli kare: `xvfb-run -a -s "-screen 0 1280x720x24" ~/is/godot/godot --path . --rendering-driver opengl3 --resolution 1280x720 …`. xvfb yoksa `sudo apt-get install -y xvfb` (sudo YALNIZ apt-get için).
+- **Yasak araçlar ve işler:**
+  - Oturum/tetikleyici/zamanlama/bildirim/ajan başlatma araçlarını KULLANMA.
+  - PR açma.
+  - Yalnız kendi dalına gönder; geçmişi yeniden yazma, zorla gönderme yok; main'e dokunma.
+  - `pkill`/`killall` yok (yalnız `kill <pid>`).
+  - Ses üretme.
+  - Denetim susturma, eşik gevşetme yok.
+- **İzin kutusu çıkarabilecek komut yok:**
+  - `rm -rf`/`rm -r`/`mv`/`cp -r` hedefinde kabuk değişkeni kullanma (tam yolu elle yaz).
+  - Silmeyi heredoc zincirine gömme.
+  - `bash -c '…'` ya da `until/while … sleep` bekleme döngüsü yazma.
+  - Geçici dosyalar yalnız `~/is/` altında. Godot kullanıcı klasöründeki önbellek silmesi de tam yolla.
+  - `.git/` içine ve `.gitignore`'a yazma; `git config` ve `git clean` kullanma.
+- **Kayda eklenmeyenler:** Godot'nun ürettiği `.import` ve `.translation` yan dosyaları ve ilgisiz `.uid`'ler kayda girmez. Yeni `.gd` dosyalarının `.uid`'si eklenir.
+- **Dal ve disk:**
+  - Dalda duran öteki `docs/_*` klasörlerine dokunma.
+  - Disk payı sınırlı: ham kare yığınlarını iş bitince sil.
