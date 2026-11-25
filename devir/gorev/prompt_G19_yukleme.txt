@@ -161,3 +161,107 @@ A tek başına da teslim edilebilir değerde olmalı: B'den önce A'yı kaydet v
 - **Dal ve disk:**
   - Dalda duran öteki `docs/_*` klasörlerine dokunma.
   - Disk payı sınırlı: ham kare yığınlarını iş bitince sil.
+
+## DÜZELTMELER (danışman incelemesi, kod okumasıyla; yukarıdakiyle çelişirse BU BÖLÜM geçerli)
+
+**A. Nabız (`process_events`) kuralları**
+1. **Nabız yalnız açık bir "kurulum kapsamı" içinde çalışır.**
+   - Neden: `Props._place` (`level/props.gd:425`) oynanışta da çağrılıyor (ör. `chapter31o.gd:731-733` kor parçası). Oynanışta kare ortasında `gui_disable_input=true` ile olay boşaltmak tuş/fare olaylarını KAYBETTİRİR (`player.gd:273`, `hud.gd:4071`, `game_state.gd:1818`).
+   - Kural: `LoadingScreen.kurulum_basla(evre)` / `kurulum_bitir()`; sayaç > 0 ya da `current != null` iken çalışır, değilse tek `if` ile döner.
+   - `_last_pump` ve boşluk ölçümü kapsam başında sıfırlanır (bugün yalnız `_enter_tree`'de: `loading_screen.gd:157-159`).
+2. **Başlık menüsü kapsam dışı.** `TitleBackdrop._build` (`title_backdrop.gd:49-66`) menü etkileşimliyken `LandWalls` kurar ve `Props._place`'ten geçer. Nabız orada "bir tuşa bas" ve menü tıklamalarını yutar (`hud.gd:3400-3401`).
+3. **Perdesiz kipte `force_draw` YOK.** "Yanıt vermiyor" için ileti işlemek yeter. Çizim zararlı:
+   - yarım 3B sahne çizilir ve her nabızda gölgelendirici derlenir;
+   - `force_draw` `frame_post_draw` yayar, onu bekleyen eşyordamlar kurucunun ortasında uyanır (`hud.gd:1562-1563` `snap_photo`; ör. `chapter24o.gd:824`).
+4. **Perdeli kipte alt görünümler.** `root.disable_3d` yalnız kök görünümü kapatır. `LivePortrait` (`live_portrait.gd:26`, `own_world_3d = false`) ve ayna (`mirror.gd:40`) açıksa yarım dünyayı çizer. Bölüm ortası perde açılmadan önce konuşma kartı/portre kapalı olmalı; rapora yaz.
+5. **Kalkan perde nabzı durdursun.** `_show_loader(false)` (`game_state.gd:1123-1130`) içinde ilk iş `LoadingScreen.current = null`. Bugün ancak `_exit_tree`'de boşalıyor (`loading_screen.gd:162-164`); 0,4 sn'lik solmada titreme yapar.
+6. **Yutulmayan girdi: `is_action_just_pressed`.** `gui_disable_input` yalnız olay dağıtımını keser; `Input` tekil durumu güncellenir.
+   - Kural: bölüm ortası kurulumda `player.frozen` kurulum bitene + 2 kare sonrasına kadar açık kalır.
+   - Yutulan "bırakma" olayıyla açık kalan tuş var mı diye şunların `_input`'ları taransın: `chapter34o/33o/21/18/22/35o`, `duel.gd`, `cannon_crew.gd`.
+7. **Odak ve kapatma olayları kurulumun ortasında gelir.**
+   - Kapsam açıkken `GameState.changing = true`, kapsam kapanınca `false`.
+   - `Hud._ready`'nin erken `changing = false`'ı (`hud.gd:199`) kapsam açıkken atlanır.
+   - Kapatma isteği zaten erteleniyor (`game_state.gd:1638-1648`); dokunma.
+8. **Yalnız ana iş parçacığı, iç içe çağrı yok.**
+   - Nabız başında `if OS.get_thread_caller_id() != OS.get_main_thread_id(): return` (havuz işleri: `mahalle_doku.gd:170`, `city_stream.gd:153`).
+   - Statik `_nabizda` bayrağıyla iç içe çağrı engellenir.
+   - `WorkerThreadPool.wait_for_task_completion` (`mahalle_doku.gd:194`, `city_stream.gd:100/120/160`) ölçümde ayrı satır olur.
+9. **Otomatik testte `process_events` çağrılmaz, yalnız saat tutulur.** Botlar `Input.parse_input_event` ile tuş basıyor (`chapter20.gd:1319`, `22o:1792`, `28o:1407`, `36b:1258`, `37o:1664`, `chaos.gd:68/99`); boşaltma testleri kararsızlaştırır. Pencereli kanıt koşusu için ayrı anahtar: `YUKLEME_OLAY=1`.
+10. **`mahalle_doku.gd:974` 8000 ms TAVANLI bir bütçe döngüsü.** Nabız bu bütçeden yer; açılışta biten iş sayısı makineye göre değişir, kalan akışta kurulur. `ISTDOKU2` açılış sayıları "bit bit aynı" ölçütüne alınmaz; toplamlar akış bittikten sonra karşılaştırılır.
+
+**B. Bölüm ortası perde**
+11. **API eşzamanlı (await'siz) olur.** `_on_scene_changed` iki kare bekler; `_to_ayasofya` eşyordam değil (`chapter24.gd:380`, çağrı `:888`; `:889-892` kare sırası yük taşıyor). Öneri (`game_state.gd`, perde bölümü):
+    - `kurulum_perdesi_ac(path, evre)`: test/çekim/başsız ise (koşul `game_state.gd:1061` ile aynı) yalnız kapsam + ölçüm açar. Değilse `_show_loader(true, path)` + bir kez eşzamanlı çizim (`loading_screen.gd:150-153` bloğu) + `changing = true`.
+    - `kurulum_perdesi_kapat()`: kapsamı kapatır, `changing = false`, `YUKLEMEAUDIT` basar, `_show_loader(false)`.
+    - Çağıranlara yeni `await` eklenmez.
+12. **Kurulumdan sonraki ilk karenin `delta`'sı kurulum süresi kadardır.** Aynı karede başlatılan zamanlayıcı/tween o karede biter (`chapter26.gd:2424`, `chapter31o.gd:133`). Bugün de böyle; DEĞİŞTİRME (gizli süre değişmez). Perdenin 0,35 sn'lik solması da yutulur; kabul, rapora yaz.
+13. **Beyaz kararmalı yerlerde koyu perde AÇILMAZ, yalnız nabız.**
+    - Beyaz kararmalı: 13 (`chapter13.gd:186` → `:252`), 26 (`chapter26.gd:1939` → `_aya` `:2425`). Bu kurulumlar > 3 sn ölçülürse rapora "sahibine karar" yaz.
+    - Siyah kararmalı, perdeye uygun: 24 (`chapter24.gd:865`), 31o Eyüp (`chapter31o.gd:345-346`).
+14. **Yerler:**
+    - Çekim yolları (`chapter26.gd:2998` `_run_shots`, `chapter24.gd:1071`, `chapter13.gd:1206`): perde yok, yalnız nabız.
+    - 31o'nun üçüncü evresi de var: `_scaffold_phase` `chapter31o.gd:1005-1012` (`ByzCity.new()`).
+    - 13'te `OtagHall.new()` (`chapter13.gd:238`) kapsama alınır.
+    - 31o ev evresi `_ready`'de (`chapter31o.gd:101-109`); `:254` yalnız yedek.
+    - Doğru yollar: `scripts/world/world1453.gd`; `siege_field.gd`, `scenery.gd`, `byz_city.gd` `scripts/level/` altında.
+    - `sehir.gd:1524-1543` `_parcalar_bagla`'dır (ordugâh + gemiler + hayat).
+15. **Nabız konamayan duraklar ölçüme girer** (madde 22): `game_state.gd:1091` `unload_current_scene`, `chapter31o.gd:139` v2 kökü `queue_free`, `chapter24.gd:384-385`.
+
+**C. `boot.gd:17`**
+16. **Önce ölç; büyük olasılıkla gereksiz.** Oyuncuda `boot.gd` yalnız `chapter1`'i açar; "Devam et" zaten perdeli (`game_state.gd:1150-1153`).
+    - `chapter1` `ready` < 700 ms ise `boot.gd`'ye dokunma.
+    - Gerekirse:
+      - `_change_with_loader`'ı çağır ve `changing = true` yap. `change_scene` yan etkili (`game_state.gd:1042-1053`).
+      - Koşul `:1061` ile aynı.
+      - `path` = "" (kapakta "Bölüm 1" görünmesin: `loading_screen.gd:205-207`).
+      - Madde 5 şart.
+      - Uyarı kartının (`hud.gd:3718`) ilk ~0,5 sn'si perde altında kalır; rapora yaz.
+
+**D. KESME B**
+17. **Silinecek öğeler listeden ÇIKARILMAZ; yalnız ağ kurulumu atlanır.** Öğeler `_temizle`'den önce başka yerleri etkiliyor:
+    - `IstGeo.duzle` (`sehir.gd:1922-1923`, hub `:1997`);
+    - `_coz_cakisma(cand)` (`:1895`);
+    - kapı hat kesimi (`:1951-1959`);
+    - `meydan_aya_cevre` boşlukları (`:1976-1986`);
+    - sokak/ev damgası ve önbellek imzası (`sokak.gd:308-316`).
+
+    Öğe sözlüğü, tutucu, `duzle`, `cand`, `items.append` aynen kalır. Atlanan yalnız `_build(it, 2)` (`sehir.gd:1961`, `:2132`) ve `_on_pisir`'deki `_build(it, 1/0)` (`:1475-1483`); `_temizle` aynı işi yapar. `_hat_far_add`'e (`:2039`) DOKUNMA.
+18. **Tek ortak ölçüt işlevi: `IstBaglama.silinecek_mi(it)`;** `_temizle` de onu çağırır.
+    - `hub_sehir`'in `pos`'u `_temizle`'den önce `_hub_dondur`'da değişir (`baglama.gd:470` → `:497-498`). Ölçüt `hub_x.origin` kullanır; `_place_v2` anındaki `pos = hx.origin` (`sehir.gd:1999`) ile aynı olduğunu günlükle doğrula.
+    - `koru` ve `kara_suru` istisnaları: `baglama.gd:514, 520-525`.
+    - `aktif_bolge` bayat kalabilir. Ölçüt yalnız `IstBaglama.build` içindeki kurulum sürerken doğru dönsün (statik bayrak).
+    - `_make_hub` `ByzCity` kurucularını çalıştırır; bunlar genel RNG tüketir (`byz_city.gd:1452`) ve `Props` önbelleklerini ısıtır. Atlanınca sonraki RNG'li içerik kayabilir. Çarpışma sondaları + çizilen nesne karmasıyla (`docs/QA_DERSLER.md:1186-1188`) doğrula.
+19. **Sayım kuralı.** `ISTSEHIR2 yer=`/`hat=` ve `ISTBAGLAMA temizle sehir_oge=` (`baglama.gd:531`) AYNI kalmalı. Değişmesi beklenen yalnız `ISTONPISIR adet=`/`ms=` ve `hub_ms`.
+20. **Önbellek.**
+    - Bölgeler arası silme kodda doğrulanıyor: sokak imzası bölgeye bağlı veri içeriyor (`sokak.gd:308-330`), `onbellek_yaz` aynı adın öteki dosyalarını siliyor (`:297-301`). `ls` ile kanıtla.
+    - Adlar ve yerleri: `sokak`, `zemin`, `avlu`, `hayat`, `sokak_esya`, `dosek_*.png`, evler (`mahalle_doku.gd:163/402/571`, `hayat_veri.gd:145`, `ayrinti_sokak.gd:88`, `evler.gd:712`). İmzalar zincirli; saklama sayısı bütün adlarda aynı.
+    - "En eski" değişiklik zamanına göre seçilemez. Küçük bir dizin dosyasında son kullanım tutulur; silme eksik dosyaya dayanıklı olur (paralel test parçaları aynı `user://`'ı paylaşır).
+    - **Oyun sürümünü anahtardan ÇIKARMA, kanıtlanmadıkça.** `export_presets.cfg:19, 65` `script_export_mode=2`: paketli oyunda `.gd` durmayabilir, `dosya_md5` (`sokak.gd:245-248`) "" döner; o zaman kodu geçersiz kılan TEK şey oyun sürümüdür.
+    - Güvenli yol: md5 boşsa sürüm anahtarda kalır; doluysa "ilgili betik md5'i + `ONBELLEK_SURUM`". İlgili betik listesi çıktıyı etkileyen her betiği kapsar. Kazanç belki yalnız geliştirme makinesinde; rapora açıkça yaz.
+21. **Uzak ordugâh hücreleri ertelenirse surdan bakınca ova boş görünür.** Hücre ağı ordugâhın uzaktan görünen TEK temsilidir (`ordugah_yonetici.gd:23-25, 30-87`).
+    - Sıra:
+      1. Hücre ağını diske önbelleğe al (hücredeki öğeler + `it["y"]` + gece imzası).
+      2. Erteleme yalnız açılış kamerasının göremediği hücrelere.
+    - Tuzaklar:
+      - `hucreler` `mi`'siz hücreye dayanıklı olmalı.
+      - Ertelenmiş iş `IstBaglama.birak()`'tan sonra çalışmamalı (`baglama.gd:138-148`; 24 → Ayasofya, 31o evre değişimi). `_exit_tree`/`birak`'ta kuyruk boşaltılır.
+      - `kur()` yeniden çağrılabilir (`ordugah_yonetici.gd:31-35`); yarım kuyruk iptal edilir.
+      - Kök dönüşümü kurulumdan SONRA oturur (`baglama.gd:465-468`): ertelenmiş kod yerel koordinatta kalır, `global_*` okumaz (`ordugah_yonetici.gd:84`).
+      - Testler akış bitmeden ölçmesin: `akis_bitti` bayrağı.
+    - Aynı kurallar kalabalık soğuk pişirmesinde (`hayat.gd:69, 106`).
+
+**E. `YUKLEMEAUDIT`**
+22. **Boşluk yalnız nabızlar arası ölçülürse en büyük donmalar kaçar** (ilk çizim, eski sahnenin boşaltılması, ilk fizik adımı, ertelenmiş kurucular, havuz beklemesi).
+    - Ölçüm kipinde her `_process` karesi de bir canlılık noktasıdır (`kaynak="kare"`).
+    - Pencere: `change_scene`/`kurulum_perdesi_ac` başından `is_node_ready()` + 5 kareye kadar.
+    - Ek alanlar: `ilk_kare_ms`, `bosalt_ms`.
+    - `scene=` düğümün `scene_file_path`'inden alınır (`tests/load_time.gd:28` bölümü köke ekler).
+23. **Başsız ölçüm CPU kurulumu için anlamlı ama ilk kare maliyetini ölçmez.**
+    - Ek: pencereli (xvfb, opengl3) `YUKLEMEAUDIT_PENCERE`. 8y, 24, 31o, 11 için `ilk_kare_ms` ve perde kalktıktan sonraki ilk 60 karenin en uzunu.
+    - llvmpipe gerçek ekran kartı değil; yalnız önce|sonra kıyas.
+24. **v2 yolunda gölgelendirici ısınması yok** (`world1453.gd:243-244` erken döner; `ShaderWarmup.after_world` `:300` v2'ye ulaşmıyor).
+    - Önce madde 23 ile ölç. İlk kareler > 1000 ms ise `IstBaglama.build` sonunda (`baglama.gd:478` öncesi) `ShaderWarmup.after_world(f)` ADAY olarak eklenir; görüntü değişmez.
+    - Perdenin ısınmayı bekleyip beklemeyeceği ölçüme göre rapora.
+25. **KESİN eşik iki kademeli.** Hedef (rapor): tek başına koşuda < 1000 ms. Pakette `fail=1` eşiği ≥ 2500 ms (8 parça CPU paylaşır). Eşik baştan böyle tanımlanır; sonradan gevşetme sayılmaz. `run_tests.sh:78-88` kalıbıyla eklenir.
+26. **Nabız maliyeti sıcak döngülerde sayaçla.** `World1453.bake` köşe döngüsü ve `ordugah_yonetici.gd:149-158` `_ekle`: `if (k & 4095) == 0`. `load_time` tablosunda A'nın tek başına etkisi ayrı sütun olur; hedef `ready` +%2'den az.
+27. **Kanıt karesi.** "Önce" karesi olarak `_ready` kurulumlarındaki donuk perde de çekilir (8y ya da 24 açılışı; v2 yolu bugün nabızsız).
