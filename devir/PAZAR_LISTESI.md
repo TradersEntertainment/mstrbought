@@ -63,6 +63,14 @@
 > **25 Kasım 05:25 UTC: sahibi "yükleme sorunu, Yanıt vermiyor" dedi.** Kök: bölüm dünyası `_ready`'de tek seferde; v2
 > kurucuları `LoadingScreen.pump` çağırmıyor; bölüm ortası kurulumlarda perde yok. **G19 yükleme** açıldı:
 > session_01RAjzxKb4yV64iDSc3rLT7v → `wip/yukleme19` (yazı `gorev/prompt_G19_yukleme.txt` + danışman 27 düzeltme).
+> **25 Kasım 09:00 UTC: G19 teslim etti (033a6d71), birleşti (288ea111).** v2 açılışlarında en uzun boşluk 29–37 sn →
+> 0,6–1,0 sn; perde çarkı/çubuğu artık canlı (RenderingServer); yükleme soğuk ~53 → ~40, ılık ~37 → ~29 sn; önbellek
+> artık bölge değişiminde ve her oturumda silinmiyor. B6 (uzak ordugâh ertelemesi) yapılmadı; hub_sehir atlanamadı
+> (üçgen karması). Benim eklerim (kayıtsız, tam paket koşuyor): YUKLEMEAUDIT_KESIN eşiği 2500 → 5000 ms (26 aya ön
+> testte 2784 ms: CI'ı boşuna düşürürdü), 13 =city Tolga anında perde (30 sn boş beyaz ekran yerine), çubuk eğrisi
+> 0,08 → 0,04 (yarıda dolmuş görünüyordu), `tests/load_time.gd` ertelenmiş (hiç ölçmüyordu), `horn_world.gd` nabızları
+> (bölüm ortası HornWorld 2,5 sn → ölçülecek). Tam paket `$S/tam128.sh` 08:59 → temizse 0.99.128 (`$S/surum128.py`,
+> `$S/qa128.md`; kopyaları `gorev/`).
 > **AÇIK İŞLER (0.99.128 adayları):** (1) 26 =nophoto Squad overlap (iki tam pakette; `chapter26.gd` BEKCI26 katmanları,
 > yedek bölük sık nizam); (2) ESYATEST yük altında gomuk=1; (3) bütün bölümlerin PACE (gerçek hız) donuk taraması
 > `tests/_denetim17/pace_tarama.sh` koşulmadı (6–8 sa; sahibine söz verildi); (4) 26/26o/35o Sultan'ın atı ön toynaklar

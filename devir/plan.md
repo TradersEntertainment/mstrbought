@@ -1,4 +1,8 @@
-# DURUM 25 Kasım ≈07:35 UTC — G19 SÜRÜYOR (session_01RAjzxKb4yV64iDSc3rLT7v → wip/yukleme19, son fabe2bf9)
+# DURUM 25 Kasım 09:00 UTC — G19 BİRLEŞTİ (288ea111) + benim eklerim (kayıtsız); TAM PAKET tam128 KOŞUYOR (bekçi bcug8l6mq)
+- Temizse: eklerimi kaydet, VERSION 0.99.128, QA (`$S/qa128.md`), ağaç docs/_* hariç parent main, main + wip/0.99.128,
+  site `$S/surum128.py --yaz`, CI. Sonra sahibine rapor (güncelleyiciyle güncelle, yüklemeleri dene).
+
+# (Eski) DURUM 25 Kasım ≈07:35 UTC — G19 SÜRÜYOR (session_01RAjzxKb4yV64iDSc3rLT7v → wip/yukleme19, son fabe2bf9)
 - Bekçi (b81uiz0c7) 2 sa sınırında durdu; işçi süreci yeniden başladı. G19 ilerliyor: nabız + kapsam + YUKLEMEAUDIT,
   bölüm ortası perde (31o eyup/aya, 24 Ayasofya, 13 h3; 26 ve 13 tolga beyaz geçişte yalnız nabız), hub öğeleri atlama,
   çok girdili önbellek, büyük önbellek yazımı arka iş parçacığında; 8y soğuk en uzun boşluk 727 ms. Şu an bölüm testleri ×2.
