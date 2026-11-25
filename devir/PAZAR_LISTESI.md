@@ -71,6 +71,16 @@
 > 0,08 → 0,04 (yarıda dolmuş görünüyordu), `tests/load_time.gd` ertelenmiş (hiç ölçmüyordu), `horn_world.gd` nabızları
 > (bölüm ortası HornWorld 2,5 sn → ölçülecek). Tam paket `$S/tam128.sh` 08:59 → temizse 0.99.128 (`$S/surum128.py`,
 > `$S/qa128.md`; kopyaları `gorev/`).
+> **25 Kasım 11:07 UTC: 0.99.128 YAYINDA (CI #344 45601474425 koşuyor).** Tam paket (288ea111 + eklerim): 455/456,
+> denetim 0 (18 satırın hepsi VISAUDIT_ADAY: 26/26o/35o at ve öküz), menüye dönüş 2/2, yükleme adayı 232 satır, en
+> uzun 2,3 sn (13 h3_ordugah, 4 parça yükte; `horn.north_shore>horn.city.plan`), KESIN 0. Tek düşüş 37o `=lose`: bot
+> çekişi yazı tura (%50), fıçı için art arda 3 iyi çekiş → ~%6 koşuda çıkış hiç olmuyor, `_duel_won` varsayılan true;
+> belirli yapıldı (54a7460b), 7/7 (4 aynı anda). Birleşik acf560ab; main 85b8f77f (parent 4c703023, docs/_* hariç),
+> wip/0.99.128; site c255bef. Bekçi `gorev/bekle_yayin.sh 0.99.128 7000` (guncelleme.json).
+> **AÇIK İŞLER (0.99.129 adayları; yeni):** (9) 37o `=lose` VISAUDIT overlap Duelist↔Soldier (0.2,-2.8,24.3): 16 koşuda
+> 1 (eski kodla); yalnız test kurgusunda (ally_cap 0, z 24'teki azaplar kalkmıyor, Cenevizli içlerinden geçiyor).
+> (10) HornWorld `_city_east` "plan" adımı yükte 1,5–2,3 sn (tek nabız); gerekirse plan içine nabız. (11) B6 uzak
+> ordugâh ertelemesi; 11 açılışı 998 ms sınırda; pencereli ilk kare 2,6–3,5 sn (gölgelendirici ısıtma yok).
 > **AÇIK İŞLER (0.99.128 adayları):** (1) 26 =nophoto Squad overlap (iki tam pakette; `chapter26.gd` BEKCI26 katmanları,
 > yedek bölük sık nizam); (2) ESYATEST yük altında gomuk=1; (3) bütün bölümlerin PACE (gerçek hız) donuk taraması
 > `tests/_denetim17/pace_tarama.sh` koşulmadı (6–8 sa; sahibine söz verildi); (4) 26/26o/35o Sultan'ın atı ön toynaklar
