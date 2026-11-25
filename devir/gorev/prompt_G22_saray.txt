@@ -1,0 +1,212 @@
+**BU GÖREV ONAYLIDIR. Onay ya da soru beklemeden HEMEN başla, sonuna kadar kendi başına çalış, bitince rapor ver. Kimseye soru sorma; takılırsan bulduğunu rapora yaz ve en iyi kararla devam et. Dal oluşturmak, her adımda kaydetmek ve yalnız kendi dalına (`wip/saray22`) göndermek önceden onaylıdır.**
+
+# G22 (Opus): Bizans meydanını böl — saray avlusu ve kançılarya ~430 m içeri, surda Giustiniani ve kapı kalır
+
+Depo: `TradersEntertainment/nothistorygame` (yerelde klonla). Taban: `wip/ist2-birlesik` = **6dec6901** (0.99.128 + G21 Lykos şeridi + harita). Kendi dalın: `wip/saray22` (tabandan aç, yalnız buraya gönder).
+
+## Neden (okuyarak doğrula)
+Oyun sahibi 43o drone karesinde Romanos Kapısı'nın hemen ardındaki Bizans meydanını gördü ve sordu: "bu şehrin yeri doğru mu, çok garip duruyor, ne alaka surlar dibinde". Kararı: **saray avlusu ve kançılarya içeri taşınsın; surda yalnız Giustiniani'nin yeri ve kapı kalsın.**
+
+Gerekçe:
+- Romanos'ta (Mesoteikhion) savunmayı İmparator ve Giustiniani yönetti; bu doğru.
+- Saray ve Logothetes kançılaryası orada değildi; sahne için toplanmışlar (GDD §9.4, `scripts/level/byz_city.gd:1-6`).
+- Aşama 1 (G21, birleşti) surun ardını 150–250 m'lik bostan/bağ/harabe şeridine çevirdi ve yeni yeri hazırladı:
+  - `SurHub.SARAY_OFS = Vector3(-400, 0, 130)` (hub yereli; `scripts/world/ist/sur_set_hub.gd:151-161`) ve `saray_v2()`.
+  - v2 dünya ≈ (−1239,6; ~6,5; −295,7); alan 84 × 70 m, eğim ≤ %3; v2'de kapıdan oraya yol (`IstSokak._saray_yolu`, `sokak.gd:645`) ve alanda ev yok.
+  - Rapor: `docs/_kanit_lykos21/rapor.md` (SARAY_OFS seçimi bölümü).
+
+## Bugünkü yapı (doğrula; ayrıntılı kod haritası aşağıda)
+- **ByzCity "walls"** (`byz_city.gd`) tek, 84 × 70 m'lik blok. Hub yereli: +x surlar/ova, −x şehrin içi, +z Haliç yönü; iç sur x 32,5 (yeni) / 34 (eski).
+- **Sabitler** (`:10-20`): START (0,0,12), GIUST_POS (26,0,−14), EMPEROR_POS (−27,0,−14), EXIT_POS (33,0,5,5), NIKO_POS (1,5,0,−27), HALL_Z0 −30, ROOM_Z0/Z1 −32,5/−40.
+- **Kurucular:**
+  - `_build_ground` 383-394, `_build_street` 523-601 (çeşme (0,−16), tezgâhlar, tabelalar 598);
+  - `_build_chancery` 1488-1581: x = 0'a gömülü (`x0/x1 = ∓3,5·ROOM_W`, `clerk_x` 1825);
+  - `_build_walls`/`_build_walls_yeni` 1594-1687, `_build_giust_yeri` 1653-1666, `_build_gate` 1694-1770;
+  - `_build_palace` 1775-1822: EMPEROR_POS'a göre;
+  - `_build_hub_people` 191-229 (Niko + kayık NIKO_POS'ta, `_build_council` 258-282, `_build_cell` 234-255);
+  - `_build_small_skyline` 746-773, `_RESERVED` 1047-1060, `_build_fill` 1142-1290, `_walls_edge` 177-180;
+  - `Dressing.auto` 99-115.
+- **Hub dünyaya yerleştirme:**
+  - Eski dünya: `World1453.REGIONS["byz_walls"]` (`world1453.gd:106-108`: `world.x = 5,5 − yerel.z`, `world.z = −36,3 + yerel.x`) ve `FAR_REGIONS` (`:118`).
+  - Eski dünya uzak kopyası: `ByzCity.far_hub` (`byz_city.gd:122-172`).
+  - Eski dünyada `SiegeField`, hub alanında kendi iç surunu ve kapısını kurmaz (`siege_field.gd:262-298`); uzak hub'ın kutu iç suru o boşluğu doldurur.
+  - v2: `SurHub.hub_v2()` (`sur_set_hub.gd:76`; köken (−1660,16; 14,09; −296,24), yaw 161,9°).
+  - v2 bağlama: `IstBaglama.build` (`baglama.gd:354-491`; `YAMA` `:46`, `TEMIZ` `:49`, `hub_alan` `:454-462`, `_temizle`/`silinecek_mi` `:535-581`).
+  - v2 şehir: `IstSehir` (`sehir.gd`: hub düzlemesi `:2044`, `hub_sehir` öğesi `:2048`, `_make_hub` `:2216-2247`, `oyun_alanlari` `:2544-2556`, `hub_xf` `:2565-2581`).
+- **Yükseklik:** SARAY'ın v2 arazisi ~6,5; hub kökeni 14,09. Yani iç mahalle hub yerelinde **y ≈ −7,6**. Arazi düzlemesi o yükseklikte olmalı.
+- **Eski dünya karşılığı** (byz_walls): (−124,5; ?; −436,3). Eski dünyada `SiegeField` tek bir ortak düz y kullanıyor (`siege_field.gd:164-188`); dikdörtgen başına yükseklik gerekecek.
+
+## Bölümler (kim neyi kullanıyor; doğrula)
+| Bölüm | Kullandığı | Bugünkü gidiş-geliş |
+|---|---|---|
+| **6 (6b; `=byz*`)** | kançılarya (kâtipler, Theodoros = oda Η), martı kovalamacası (kançılarya → surlar, PERCHES `:29-31`, tünek başına 14–16 sn sabır), Giustiniani, İmparator (saray), kapıdan çıkış, divan/mangal/kayık yan olayları, çatı tırmanışı, hücre (başarısızlıkta) | 3 yürüyüş (kovalamaca, surlar→saray 53 m, saray→kapı 63 m) |
+| **7 (7b; `=byz*`, `=tea`, `=lost`, `=form`, `=wall*`, `=fez`)** | Nihat serbest gezer/uçar. İzler: kançılarya `(−2,2,0,−26,5)` gömülü (`chapter7.gd:258`), surlar GIUST_POS+…, saray EMPEROR_POS+(3,2,0,2,5), hücre, dışarı EXIT_POS+… (`:239-262`). Rapor kapısı START+(0,0,2,6) (`:268`). Tanıklar: Niko, Theodoros, Giustiniani, İmparator. | süre eylem başına (mesafe değil) |
+| **10h** | kapıdan giriş (EXIT_POS−3), sarayda huzur (`HALL` EMPEROR_POS'un **kopyası**, `chapter10h.gd:16`), gece işleri (gedik BREACH (32,4,0,−26), Giustiniani, kançılarya önünde Niko, çıkış) | kapı→saray ve saray→START KARARMA (`:290`, `:420`); gece yürür |
+| **12b** | yalnız sur yolu; `city.emperor` düğümü sura taşınır (`chapter12b.gd`, ~22 kullanım) | 0 |
+| **13 `=city`** | START+(0,0,−4)'te doğar, 35 m ötedeki Niko'ya bakar (`chapter13.gd:220-223`) | 0 |
+| **23** | bütünüyle saray avlusu (`HALL := ByzCity.EMPEROR_POS`, `chapter23.gd:14`, 73-130) | 0 |
+| **24 (ilk yarı)** | ana caddede alay: ROUTE_A (0,0,−24) kançılarya önü → ROUTE_B (0,0,6), çeşmeyi dolanır (`chapter24.gd:15-25, 481-487`); ikinci yarı "aya" parçası | 0 |
+| 8y, 25, 26, 31o, 44b | ByzCity "walls" kullanmıyor | — |
+
+Testler `tests/run_tests.sh:113-147` (çeşitler); kare testleri `tests/_ist/tasima12_kare.gd:97`, `tasima10_kare.gd:115-122`, `tur14_bolum_kare.gd:117-124`; `tests/city_audit.gd:49-52`; `flight_check.gd`.
+
+## Hedef
+### 1. Bölünme (tek bölüm çerçevesi, iki kök düğüm)
+- **Surda kalan** (hub kökeni, bugünkü yerinde):
+  - iç sur (yeni `SurHub.kur` / eski kutu), Romanos kapısı, Giustiniani'nin iskelesi ve masası, nöbetçiler ve meşaleler;
+  - kapı önünde küçük bir nöbet/ikmal yeri (sandık, ocak, su fıçısı; tek görsel dil, kutu değil);
+  - caddenin sur ucu → G21'in iç yoluna (`oyun_bag` ucu) bağlanır.
+  - Gedik (10h BREACH) ve 12b sur yolu yerinde.
+- **İçeri giden** (SARAY_OFS'ta, hub yerelinde y ≈ −7,6; G21'in alanı):
+  - saray avlusu + İmparator + divan + mangal;
+  - kançılarya (7 oda, 7 kâtip, Nihat cameo);
+  - meydan + çeşme + tezgâhlar + tabelalar (`ΚΑΓΚΕΛΛΑΡΙΑ`, `ΠΑΛΑΤΙΟΝ`; `ΤΕΙΧΗ` surları gösterir);
+  - Niko ve kayığı, zindan hücresi (6/7), çatıları tırmanılan cadde evleri.
+  - İç düzenin kendisi bugünkü gibi (kançılarya, cadde, meydan, saray ilişkisi aynı); yalnız bütün grup taşınır.
+- **Uygulama:**
+  - ByzCity'de iç grubu ayrı bir `Node3D` kökünde kur (`saray_kok`, konum SARAY_OFS + y).
+  - Sabitleri iki gruba ayır: `SARAY_*` iç grubun yereli + dünya konumu için yardımcı (ör. `ByzCity.saray_konum(v)`).
+  - Kançılaryanın x'i sabite bağlanır.
+  - `_RESERVED`, `Dressing.auto` alanları, `_build_fill` ve `_walls_edge` her iki alan için.
+  - Tek dünya ızgarası; kök düğüm döndürülmez (hub ekseni aynı yönde).
+
+### 2. Dünya (iki dünyada)
+- **v2:**
+  - `IstSehir.oyun_alanlari()`'na ikinci alan "saray" (G21 yalnız sokak tarafında damgaladı; şimdi resmi oyun alanı).
+  - `IstBaglama`: `YAMA`/`TEMIZ` dikdörtgen listesi; SARAY'da arazi düzlemesi kendi yüksekliğinde, kenarı yumuşak.
+  - `hub_alan`/`_oyun` iki alan; `_temizle` iki alanı temizler.
+  - `hub_sehir` öğesi iki öğe olur: sur parçası + `hub_saray` (`_make_hub` ikiye).
+  - Hub bölümleri bu iki öğeyi `_temizle` ile kaldırır; uçuş bölümleri (7a, 11) ikisini de görür.
+- **Eski dünya:**
+  - `FAR_REGIONS` iki dikdörtgen. Sur parçası z −2,3'ü kesmeye DEVAM eder (yoksa SiegeField ikinci bir iç sur kurar); alan surdaki parçaya küçülür.
+  - `far_hub` iki pişirme: sur parçası (eski kutu iç sur bu görevde KALIR; Osmanlı tarafı surlarının tamamı kutu, ayrı iş) + iç mahalle.
+  - `siege_field.gd`: dikdörtgen başına düz y (`flat_rects`/`flat_y`, `:150-300`); SARAY alanı kendi arazi yüksekliğinde.
+  - Eski dünya yolu: ROAD (`city_plan.gd:51`) SARAY'ın ~86 m doğusunda. **`CityPlan.PLAZAS`/`MAIN`'e DOKUNMA** (rng kayar, harita eskir); kısa bağlantı ancak son-süzgeç gibi rng'yi kaydırmadan.
+- **Kalabalık AZALMAZ:**
+  - İç mahallede bugünkü hub halkı (`_build_life`, Dressing yürüyenleri).
+  - Surdaki parçada nöbetçiler ve işçiler.
+  - CITYCHECK 24 ve 31o (≥ 8 sivil, `tests/city_check.gd`) gevşetilmeden geçer.
+
+### 3. Bölüm akışları (içerik, replik, denge AYNI)
+- **Senaryolu gidiş-gelişler: 10h kalıbı** kararma + yerleştirme (`hud.fade_to(1)` → konumla → `fade_to(0)`).
+  - Hedef işareti öteki alanı gösterir; oyuncu isterse yolu yürür.
+  - Kararma, hedef öteki alandaysa senaryonun bugün "yürü" dediği yerde. Ör. 6b'de Giustiniani izin verince "İmparator'a git" → kararma → saray avlusu.
+  - 10h'nin iki kararması bugünkü gibi; START ve hedefler yeni yerlere.
+- **6b:**
+  - Martı kovalamacası iç meydanda: kançılaryadan çıkıp meydanın tüneklerinde; tünek sayısı ve sabır süreleri aynı (DENGE AYNI).
+  - Son tünekten sonra `D6B_T_CHASE_4` "Surlara gidiyor!" ile martı surlara uçar → kararma → martı Giustiniani'nin masasında (son tünek).
+  - z eşikleri (`chapter6.gd:144, 306, 791, 871`), otomatik test (`:1237-1261`), `byzyuru` botu (`:115-127`), `VISTAS`/`ROOF_BOUNDS` (`:19-25`), hücre (`:734-736, 1076-1084`) iç gruba göre.
+- **10h:** `D10H_L_04` "Bak, saray. Kaftanını düzelt." kapıda değil, saraya varışta (kararmadan sonra) çalar. Gece işlerinde Niko kançılarya önünde (içeride); gidiş kararmayla.
+- **7b:** iz ve tanık konumları ve rapor kapısı iç gruba göre. Uçuşta iki alan arası serbest.
+- **12b:** saray kurulmasa da `city.emperor` düğümü kurulur.
+- **13 `=city`:** iç meydanda doğar, Niko'ya bakar.
+- **23:** yalnız iç grup + gerekirse sur parçası arka planda.
+- **24 ilk yarı:** iç caddede; ROUTE_A/B iç gruba göre.
+- **Ortak kurallar:**
+  - Var olan replik metni ve sesi, denge, gizli süre, sayaç, sabır DEĞİŞMEZ. Yeni replik yok.
+  - Bir repliğin ÇALDIĞI AN yerleşim gereği değişebilir (`D10H_L_04` gibi); rapora yaz.
+  - Seslendirilmiş "Surlara gidiyor!", "Önce izin, sonra surlar, sonra İmparator", "Casus! Buraya. Önce kançılarya." anlam olarak tutarlı kalır.
+
+### 4. Uzak görünüş ve 43o
+- **43o drone** (eski dünya, iki yol; G21 raporunda açıklandı: taze süreç ve önce v2 bölümü kurulmuş süreç):
+  - Romanos'un ardında artık yalnız Giustiniani'nin yeri ve kapı.
+  - Saray mahallesi ~430 m içeride, bostan şeridinin ötesinde.
+  - Kare: `--chapter=43o --shots=<klasör>` (`c43o_05_feed_walls.png`, `chapter43o.gd:1000-1004`) ve G21'in `tests/_ist/lykos21_kare.*` sahnesi.
+- **v2 uçuşları (7a, 11):** iki parça doğru yerde ve yönde.
+
+## Kurallar (kesin)
+Türkçe çalış, Türkçe yaz. Godot 4.4.1, gl_compatibility, prosedürel GDScript.
+- **Sahibinin kuralları:** KUTU YASAĞI; HAVADA DURAN HİÇBİR ŞEY OLMAZ (gömük de yok; iç mahalle arazisine oturur; kenarlarda basamak/şev); TEK GÖRSEL DİL.
+- **Sur sözleşmesi DEĞİŞMEZ.** Her kayıttan önce aynı çıkmalı:
+  - `tests/_ist/sur_sozlesme.tscn` → `SURSOZLESME PASS kalem=13 kesim=8`
+  - `tests/_ist/sur_oyun_denetim.tscn` → `SUROYUN nokta=519 havada=0 gomuk=0 katida=0`
+  - `tests/_ist/sur_oyun_yuru.tscn` → `WALKTHRU OZET yol=7 tamam=7 takilma=0 dusme=0`
+  - `tests/_ist/esya_fizik.tscn` → `ESYATEST PASS`
+  - `tests/_ist/tasima11_halic_sonda.tscn` → `HALICSONDA OZET carp=661 karma=3854034809`
+  - `tests/_ist/tur14_marmara_sonda.tscn` → `MARMARASONDA OZET carp=1837 karma=2250736444`
+- **Eski dünyanın rng sırası kaymaz:** `CityPlan` meydan/ana yol listeleri, `WallRear.depth/in_band` aynı. WORLDCHECK (`byz_walls` çerçevesi) aynı.
+- **Yükleme:** `YUKLEMEAUDIT_KESIN` çıkmaz. Yükleme süresi önce|sonra (`res://tests/load_time.tscn -- --only=chapter24`, ayrı koşularla 23, 10h, 6) raporlanır; belirgin artış olmasın.
+- Harita (`assets/ui/map1453.png`) eski dünyada değişen bir şey olursa `godot --headless --path . res://tools/map_bake.tscn` ile yeniden pişirilir; MAPCHECK PASS.
+
+## Doğrulama (çıktılar `docs/_kanit_saray22/testler/`)
+1. Ayrıştırma PASS; sözleşme altılısı aynı.
+2. **Bölüm testleri** (`--max-fps 20`, `godot --headless --max-fps 20 --path . -- --chapter=X --autotest[=v]`, `run_tests.sh` süzgeciyle):
+   - hub bölümlerinin BÜTÜN çeşitleri ×2: 6 `=byz*`, 7 `=byz*`/`=tea`/`=lost`/`=form`/`=wall*`/`=fez`, 10h, 12b, 13 `=city`, 23 (+ `=osm`), 24;
+   - kalan dünya bölümleri ×1: 6, 7, 8y, 9, 10, 10b, 10z, 11, 13, 16, 24o, 25 (osm), 31o, 43o.
+   - Hepsinde `AUTOTEST PASS`; VISAUDIT, WALKTHRU, HELDAUDIT, ARMAUDIT, GORUNMEZZEMIN, ALETAUDIT, DONUKAUDIT, ESYAAUDIT (dusme/havada/gomuk/tikama/sinir), JOURNEY, YUKLEMEAUDIT_KESIN, SCRIPT ERROR satırı 0.
+3. **Ayrı koşular:** CITYCHECK `CITYCHECK_CH=24` ve `=31o` PASS; STREETCHECK, FLIGHTCHECK, WORLDCHECK, WALKCHECK, MAPCHECK PASS; ZFIGHT 0 (değişen bölümler); `tests/menu_return.tscn -- --chapter=26` ve `20o` PASS.
+4. **Kare testleri** (`tasima12_kare`, `tasima10_kare`, `tur14_bolum_kare`, `city_audit`) yeni konumlara göre güncel ve çalışır.
+5. **Kareler** (TAM BOY, `kare/`, önce|sonra, gündüz):
+   - 43o drone sahibinin bakışı (Romanos'a ~70 m'den, dışarıdan içeri) iki yoldan;
+   - 7a ya da 11 uçuşunda iki parça;
+   - iç mahalle göz hizasında: saray avlusu + İmparator, kançılarya kapısı, meydan + çeşme, Niko;
+   - surdaki parça: Giustiniani'nin yeri, kapı, nöbet yeri;
+   - 6b'de martı kovalamacası ve sura kararma; 10h'de saraya varış;
+   - sahibine en iyi 3 kanıt `kare/sahip_*.jpg`.
+   - Kareler DALA KAYDEDİLİR.
+
+## Kanıt → `docs/_kanit_saray22/`
+- `rapor.md`:
+  - her hedef maddesi TAMAM / KISMEN / YAPILMADI;
+  - bölüm başına değişen akış (kararma noktaları, repliğin çaldığı an);
+  - değişen dosya:satır listesi;
+  - yükleme süresi önce|sonra;
+  - "hâlâ kötü olanlar" (dürüst).
+- `durum.md`: her kayıtta güncel; iş bitince ilk satırı `# G22 durum: BİTTİ`.
+
+## Dosya sahipliği
+Aynı anda başka yardımcı yok.
+- **SEN:**
+  - `scripts/level/byz_city.gd`, `scripts/world/world1453.gd` (ya da bulunduğu yol; yalnız `FAR_REGIONS`/bölge/keep/`far` kurulumu), `scripts/level/siege_field.gd` (yalnız `flat_rects`/`flat_y`/`ground`/`city_ground` ve hub boşluğu), `scripts/world/ist/baglama.gd`;
+  - `scripts/world/ist/sehir.gd` (yalnız `_make_hub`, hub düzlemesi/öğesi, `oyun_alanlari`, `hub_xf`, dışlama listeleri);
+  - `scripts/world/ist/sur_set_hub.gd` (yalnız yardımcı ekleme; var olan satır değişmez);
+  - `scripts/world/ist/sokak.gd` (yalnız `_saray_yolu` ve saray alanı damgası, gerekiyorsa);
+  - bölümler: `chapter6.gd`, `chapter7.gd`, `chapter10h.gd`, `chapter12b.gd`, `chapter13.gd`, `chapter23.gd`, `chapter24.gd` (yalnız yerleşim ve geçişler);
+  - testler: `tests/_ist/tasima12_kare.gd`, `tasima10_kare.gd`, `tur14_bolum_kare.gd`, `tests/city_audit.gd`, `tests/flight_check.gd` (yalnız konumlar), yeni `tests/_ist/saray22_*`;
+  - `assets/ui/map1453.png` (yalnız yeniden pişirme).
+- **Kimsenin değiştirmediği:**
+  - `scripts/world/ist/geo.gd`, `hayat_yakin.gd`, `wall_rear.gd`, `city_plan.gd` (G21'in şeridi aynı kalır), `chapter43o.gd`;
+  - `project.godot`, sözleşme ve sonda testleri, `VERSION`, `.github/*`, `i18n/*`, ses dosyaları.
+
+## KESME SIRASI
+Hedef 8–12 saat.
+1. Ölç (önce): kareler, yükleme, bölüm testleri tabanı.
+2. ByzCity bölünmesi + v2 (oyun alanı, düzleme, temizleme, uzak öğeler) → 23 ve 24 (en basitler) geçer → kaydet.
+3. 10h, 12b, 13 → kaydet.
+4. 6b (kovalamaca + kararmalar) ve 7b → kaydet.
+5. Eski dünya (FAR_REGIONS, far_hub, SiegeField yükseklik) + 43o kareleri → kaydet.
+6. Testler + kareler + rapor.
+
+Her adımın sonunda bütün hub bölümleri en azından tek çeşitle koşar; bozuk ara kayıt bırakma (geçmeyen adım ayrı dalda değil, aynı dalda "SÜRÜYOR" notuyla).
+
+## Dayanıklılık ve yasaklar
+- **Kayıt:**
+  - Her adımın sonunda ve en geç 20 dakikada bir kaydet + gönder (yarım da olsa; kareler dahil).
+  - `durum.md` her kayıtta güncel.
+  - İlk 40 dakikada ara kayıt.
+  - Kayıt iletisine model adı yazma.
+- **Süreçler:**
+  - Arka plan işleri ≤ 10 dakika; aynı anda en çok 4 süreç.
+  - Bitti bildirimi gelmezse çıktı dosyasını kendin oku.
+  - Testleri çalışma ağacının bir eşinden koş (`~/is/kopya`).
+- **Önbellek:** v2 önbelleği (`user://ist_onbellek`) bütün kopyalarda ortak. Değişiklikten sonra önce TEK süreçle ısıt, sonra paralel. Soğuk: `-- --onbellek=yaz`; kapalı: `--onbellek=yok`.
+- **Kurulum:**
+  - Godot 4.4.1 linux x86_64 resmi sürümü `~/is/godot/godot` (indir).
+  - `timeout 900 ~/is/godot/godot --headless --path . --import`.
+  - Pencereli kare: `xvfb-run -a -s "-screen 0 1280x720x24" ~/is/godot/godot --path . --rendering-driver opengl3 --resolution 1280x720 …`.
+  - xvfb yoksa `sudo apt-get install -y xvfb` (sudo YALNIZ apt-get için).
+  - Bölümlerin kare kipi: `--shots=<klasör>`.
+- **Yasak araçlar ve işler:**
+  - Oturum/tetikleyici/zamanlama/bildirim/ajan başlatma araçlarını KULLANMA.
+  - PR açma. Yalnız kendi dalına gönder; geçmişi yeniden yazma, zorla gönderme yok; main'e dokunma.
+  - `pkill`/`killall` yok (yalnız `kill <pid>`).
+  - Ses üretme. Denetim susturma, eşik gevşetme yok.
+- **İzin kutusu çıkarabilecek komut yok:**
+  - `rm -rf`/`rm -r`/`mv`/`cp -r` hedefinde kabuk değişkeni kullanma (tam yolu elle yaz); silmeyi heredoc zincirine gömme.
+  - `bash -c '…'` ya da `until/while … sleep` bekleme döngüsü yazma.
+  - Geçici dosyalar yalnız `~/is/` altında.
+  - `.git/` içine ve `.gitignore`'a yazma; `git config` ve `git clean` kullanma.
+- **Kayda eklenmeyenler:** Godot'nun ürettiği `.import`/`.translation` yan dosyaları ve ilgisiz `.uid`'ler kayda girmez. Yeni `.gd` dosyalarının `.uid`'si eklenir.
+- **Dal ve disk:**
+  - Dalda duran öteki `docs/_*` klasörlerine dokunma.
+  - Disk payı sınırlı: ham kare yığınlarını iş bitince sil.

@@ -1,4 +1,7 @@
-# DURUM 25 Kasım 19:55 UTC — G21 LYKOS AÇILDI: session_01RAjzxKE9tCRLMHXwBnsvLr → `wip/lykos21` (yazı devir/gorev/prompt_G21_lykos.txt
+# DURUM 25 Kasım 22:15 UTC — G21 BİRLEŞTİ (cc8cae88 → wip/ist2-birlesik; harita yeniden pişti 6dec6901, gönderildi).
+#   Tam paket tam129 (setsid, 22:04; bekçi ba4kd8rmt) → temizse 0.99.129. G22 yazısı devir/gorev/prompt_G22_saray.txt,
+#   Fable inceliyor → düzeltmeleri ekle → G22 aç (taban 6dec6901, dal wip/saray22).
+# (Eski) DURUM 25 Kasım 19:55 UTC — G21 LYKOS AÇILDI: session_01RAjzxKE9tCRLMHXwBnsvLr → `wip/lykos21` (yazı devir/gorev/prompt_G21_lykos.txt
 #   + Fable 27 düzeltme; tahmini 6–8 sa). Nöbetçi `$S/bekle_g21.sh 7000` (b2xcm0egw; süre dolarsa yeniden kur).
 #   Teslimde: rapor + tam boy kareler (özellikle 43o drone), birleştir, doğrula, tam paket → 0.99.129; sonra G22 yazısı.
 
