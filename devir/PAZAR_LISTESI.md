@@ -60,6 +60,9 @@
 > D30_D_EMPEROR, sur tepesi), 17 (10,6 D17_N_LIFT; 8,7 D17E_H_SPY; 5,7 D17E_G_END), 38o (8,1 / 5,6 / 5,1), 35o 9,7
 > (D35O_D_01), 24o / 29o / 31o (6,1), 12 (×5 ~5,5 eşya incelemesi), 25 / 26 / 6 / 10a / 30o (4,2–5,0). → 0.99.128 G19:
 > denetime "etkin mini oyun" kuralı (denge/drone/tokmak; oyuncunun girdisi işliyor) + gerçek beklemelerin kök düzeltmesi.
+> **25 Kasım 05:25 UTC: sahibi "yükleme sorunu, Yanıt vermiyor" dedi.** Kök: bölüm dünyası `_ready`'de tek seferde; v2
+> kurucuları `LoadingScreen.pump` çağırmıyor; bölüm ortası kurulumlarda perde yok. **G19 yükleme** açıldı:
+> session_01RAjzxKb4yV64iDSc3rLT7v → `wip/yukleme19` (yazı `gorev/prompt_G19_yukleme.txt` + danışman 27 düzeltme).
 > **AÇIK İŞLER (0.99.128 adayları):** (1) 26 =nophoto Squad overlap (iki tam pakette; `chapter26.gd` BEKCI26 katmanları,
 > yedek bölük sık nizam); (2) ESYATEST yük altında gomuk=1; (3) bütün bölümlerin PACE (gerçek hız) donuk taraması
 > `tests/_denetim17/pace_tarama.sh` koşulmadı (6–8 sa; sahibine söz verildi); (4) 26/26o/35o Sultan'ın atı ön toynaklar
