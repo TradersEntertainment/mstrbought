@@ -172,3 +172,120 @@ v2 şeridi tek başına da teslim edilebilir değerde olmalı.
   - Dalda duran öteki `docs/_*` klasörlerine dokunma.
   - Disk payı sınırlı: ham kare yığınlarını iş bitince sil.
 - **Önbellek:** v2 önbelleği (`user://ist_onbellek`) `geo.gd` md5'iyle kendiliğinden geçersizleşir (`sokak.gd:459`). Ölçümlerde soğuk/ılık ayrımını yaz.
+
+## DÜZELTMELER (danışman incelemesi, kod okumasıyla; yukarıdakiyle çelişirse BU BÖLÜM geçerli)
+
+**A. Eski dünya (43o'nun gördüğü) — brifin 4. bölümü eksik yere bakıyor**
+1. 43o v2 DEĞİL, eski dünya.
+   - `IstBaglama.istek` yalnız şunlar için true: bölüm 7/11, Tolga hub bölümleri, 8y ve 31o (`baglama.gd:34-35,151-157`). 43o `hazirla` çağırmaz.
+   - Yol: `camp_day.gd:66` → `World1453.build` (`world1453.gd:249`) → `SiegeField._city()` (`siege_field.gd:592-651`).
+   - Brifteki `:184-190` `city_ground`'dur, şehir dolgusu değil.
+2. Surun ardındaki evleri koyan kod: `CityHouses.build(self, CityPlan.houses_in(-700, INF), …)` (`siege_field.gd:602`).
+   - Evsiz bandı uygulayan TEK yer: `CityPlan._house_fits` → `WallRear.in_band` (`city_plan.gd:730`).
+   - Aynı bandı kullananlar: kiliseler `siege_field.gd:623`, serviler `:637`, `sehir.gd:1117`.
+   - Bandın içini `WallRear._fill` dolduruyor (`wall_rear.gd:160-205`: `_plot`/`_orchard`/`_ruin`, 54 m'den `depth(x)`'e kadar).
+   - Yani eski dünyada bostan/bağ/harabe bandı ZATEN var (65–120 m). İş onu Romanos–Pempton arasında derinleştirmek ve dağınık ev eklemek.
+3. `siege_field.gd:619-627` şehre 60 denemeyle KUTU kilise koyuyor (`Props.box` + `cyl` + `ball`).
+   - Şeritte bunları dışla; denetimi rng çekimlerinden sonra yap ki sıra kaymasın.
+   - Yerine `WallRear._ruin` dili.
+4. RNG tuzağı — `WallRear.depth()` ve `in_band()` DEĞİŞMEZ.
+   - `depth` değişirse: `_fill`'in tek rng'si (`wall_rear.gd:71`) kayar; barikat, kızgın yağ yerleri ve sur ayrıntıları bütün sur boyunca değişir.
+   - `in_band` değişirse: `CityPlan._place_houses`'ın rng'si (`city_plan.gd:647-719`) kayar; eski dünyanın BÜTÜN evleri yer değiştirir. Etkilenen: `World1453.build`/`surround` çağıran her bölüm; 45 betik dünya kuruyor.
+   - Doğrusu:
+     - yeni `WallRear.serit_derinlik(x)` + `in_serit(x, z, pay)`;
+     - `CityPlan._build` sonunda (`_place_houses`'tan SONRA, `city_plan.gd:~388`) şeritteki evleri listeden çıkaran son-süzgeç (`_hcell` yeniden);
+     - WallRear'da mevcut her şeyden SONRA, AYRI rng'li ek geçiş.
+   - `city_plan.gd` izni bu son-süzgeci kapsar.
+   - Ek geçişte `_ok()` (`wall_rear.gd:138-149`) `CityPlan.on_street/blocked/in_house`'a bakar; son-süzgeçten sonra çağır.
+   - Sokaklar şeritte kalır (CityLife halkı yürür; kalabalık azalmaz).
+5. `CityPlan.PLAZAS`/`MAIN`'e DOKUNMA.
+   - Neden: meydan döngüsü rng'yi en başta tüketir (`city_plan.gd:651-672`), her şey kayar; pişmiş harita `assets/ui/map1453.png` (`tools/map_bake.gd:104-124`) eskir.
+   - Eski dünyada SARAY yolu ve meydanı G22'ye kalır (zaten `FAR_REGIONS`/keep ile gelecek).
+   - CityLife "lykos" pazarı ölü kod: `city_life.gd:348` yalnız CityPlan yokken çalışan `_temp_graph`'ta (`:299`); pazarlar `CityPlan.plazas()`'tan gelir (`:291-294`). TAŞIMA.
+   - Rapora not: `CityPlan.MARKETS` (40, −470) eski dünya SARAY'ına (18,5; −426) ~49 m.
+6. İki eski dünya var. `IstSehir.enabled` ve `v2` statik; yalnız `attach_v2`'de true olur (`sehir.gd:1447-1449`), HİÇ false'a dönmez.
+   - Taze süreçte (`--chapter=43o`): `enabled=false`, CityHouses evleri.
+   - Aynı süreçte önce bir v2 bölümü kurulduysa (gerçek oyunda 7/11/24 43o'dan önce): `IstSehir.attach` (`:232`) + `_doku` (`:1086`) + `IstSehir.houses` (`:813`) da çalışır. Sahibin karesi büyük olasılıkla bu yoldan.
+   - Düzeltme yok (`world1453.gd`/`baglama.gd` yasak). Yapılacak:
+     - yeni `tests/_ist/lykos21_*` sahnesinde `IstSehir.enabled = true; IstSehir.v2 = true` yapıp 43o'yu kurarak ikinci yoldan da kare al;
+     - `sehir.gd:1117`'ye `in_serit` ekle;
+     - rapora yaz.
+7. 43o karesindeki "sur dibinde şehir" öbeği uzak hub: `ByzCity.far_hub`, dünya x −16,5…53,5, z −82…+1,7 (`world1453.gd:114,276-279`). G21 ona dokunmuyor; sonrası karede öbek DURACAK. Rapora "G22'de kalkacak" yaz.
+8. Ortak işlev: iki dünyanın ortak koordinatı yok.
+   - `CityGeo.real_to_world`/`world_to_real` (`city_geo.gd:65,77`) TPS ile bükülü.
+   - İki kapı arası v2'de ~396 dünya m, eski dünyada 267 m; hub iki dünyada 1:1.
+   - Ortak olan yalnız derinlik profili: `derinlik(t)`, t = 0..1 Romanos→Pempton.
+   - Eski dünya sınırı kendi koordinatında: x ≈ −275…+105 (Pempton −230, `LAND_GATES[1]`; Romanos 0/37), z ≥ −`serit_derinlik(x)`.
+
+**B. v2**
+9. Mozaik birimi ve tür değerleri.
+   - `geo.gd` eşikleri GERÇEK metre (`:365`); `IstSokak._mah` mahalleyi 24 dünya m ızgarada örnekler (`sokak.gd:826-830`).
+   - Mozaik hücresi 60–90 DÜNYA m (≈ 170–260 gerçek m); 60–90 gerçek m tek hücre gürültüsü olur.
+   - YENİ `tur` değeri üretme: tüketiciler `match` ile (`sokak.gd:837-871,990-998`, `hayat_yakin.gd:30-32`). Var olan `tur` + `alt` + `"serit": true`.
+10. Kalabalık, bugünkü TARGET ile CITYCHECK DÜŞER.
+    - `hedef_sayi()` (`hayat_yakin.gd:598-613`) oyuncunun yeri (×2) + 45 m'deki 4 noktanın TARGET ortalaması.
+    - Bugün 24'te hedef=20, sivil 15–19. Bostan 5 / harabe 4 / seyrek 11 ile hedef ~5–10 olur.
+    - Şeritte TARGET ≥ 22 ve WEIGHT ≥ 0,55 (bugünkü `sur_dibi`).
+    - Ajan yalnız sokak noktasında, 18–85 m'de doğar (`:675-677`); bostanda sokak aralığı 110 m (`sokak.gd:997`). Hub çevre yolu ve bağlantıları kalsın.
+11. CITYCHECK her bölümde ÜÇ nokta sınar: başlangıç + 40–85 m ötede yürüyen iki ajanın yeri (`city_check.gd:201-212`). Kayıtlı noktalar:
+    - 24: (−1669, −272), (−1684, −230), (−1602, −248);
+    - 31o: başlangıç (−1684, −309) (brifteki (−1603, −331) türetilmiş üçüncü nokta), (−1646, −358).
+12. Savunma zorlaması `sokak.gd:1244-1246` doğru; `:1253`'teki `maxrow = 54.0` de şeritte kapanmalı.
+13. Boş meydan.
+    - `:1756` yalnız `fr < 0.5` dalında (sık doku boşluğu, 6 m disk).
+    - Şerit için `fr ≥ 0.5` yoluna yeni seçim: `occ = 5` damgala, `meydan` ve `zemin_ek`'e ekle.
+    - `sehir.gd:3360-3376` meydanda yalnız kuyu/çeşme çizer; çevredeki 1–3 ev / harap duvar için `oge`/`doku` kaydı gerekir.
+14. Yol, kapının iç yüzünden başlayamaz.
+    - Orası hub oyun alanı: kapıdan 75 m içeride 90 × 90 m kare, `sehir.gd:2542-2555`; sokak/ev/doku boş, `:3215-3217`.
+    - Çevre yolu `oyun_cevre` ve 70 m'lik `oyun_bag` kolları zaten var (`sokak.gd:613-632`).
+    - Yeni yol içe bakan `oyun_bag` ucundan `SurHub.saray_v2()`'ye; `_oyun_alani_yollari()`'ndan sonra, `_lanes_from`'dan önce (`:554-559`). `_gate_road` gövdesi `:937-984`.
+15. SARAY alanı.
+    - `oyun_alanlari()`'na EKLEME (yasak).
+    - `sokak.gd`'de evlerden önce (`_eser_meydanlari` yanı, `:575`) döndürülmüş dikdörtgeni damgala (`_rect_cells`, hub yaw 161,9°).
+    - `saray_v2()`'yi (ya da `sur_set_hub.gd` yolunu) `_build_imza` listesine ekle (`:459`); yoksa G22 `SARAY_OFS`'u değiştirince bayat önbellek okunur.
+    - Örnek nokta (−1293; −163) doğru; Lykos çizgisine ~58 dünya m, alanın yarı köşegeni 55 m: sınırda, ölç.
+16. Harap kilise.
+    - `IstKiliseler.catalog()`'a kayıt EKLEME (`kiliseler.gd:58-73`; kayıt şehre sabit eser olarak konur ve sokak imzasındaki `tab`'a girer).
+    - Yalnız yeni `_run` dalı + `sokak._doku` `pick`'i + `sehir.gd:3337-3342` çizim dalı.
+    - `alt` "manastir"/"mezarlik" yalnız `alan.x > 24` ve 90 m'de başka manastır yoksa kurulur (`sokak.gd:1819-1825`).
+17. SURSOZLESME dosya özeti almaz; canlı hesap ↔ donmuş tablo kıyaslar (`tests/_ist/sur_sozlesme.gd:30-36`). `sur_set_hub.gd`'ye `SARAY_OFS` + `saray_v2()` eklemek güvenli. İki sonda tek başına kurucu döker, şehre bağlı değil.
+18. Önbellek.
+    - `user://ist_onbellek` bütün kopyalarda ORTAK. Değişiklikten sonra önce TEK süreçle ısıt, sonra paralel.
+    - Soğuk: `-- --onbellek=yaz`; kapalı: `--onbellek=yok` ya da `IST_ONBELLEK=yok` (`sokak.gd:230,237-245`).
+    - `hayat_yakin.gd`, `kiliseler.gd`, `sehir.gd` imzada yok (sorun değil).
+
+**C. Testler**
+19. Yükleme: `res://tests/load_time.tscn -- --only=chapter24` (sahne, `.gd` değil; tek `--only`; 43o ayrı koşu) (`load_time.gd:7,17-23`).
+20. Ev sayısı `ISTSEHIR2`/`ISTDOKU2`'de YOK; `ISTEVLER2 ev=… doku=… meydan=…` (`sehir.gd:3383`) ve `ISTSOKAK` (`:3252`).
+21. ISTBOS'un iki sayımı farklı.
+    - `doku2_kare` kayıt sayar (oyun alanları hariç; son kayıt %0, 909 kare).
+    - `gezi bos=1` zeminden ≥ 0,3 m geometri sayar (`gezi.gd:319-321`). Eski raporlarda şehir içi %1,6–1,9, yani tabanı %0 değil.
+    - İkisini ÖNCE ölç. Şart: şeritte 0 ve tabandan kötü değil.
+    - Alçak ekin tek başına saymaz; her karede çit/ağaç/kuyu.
+22. CITYCHECK ve STREETCHECK 900 sn bekçili (`run_tests.sh:283,287`), 10 dk sınırını aşabilir.
+    - `CITYCHECK_CH=24` ve `CITYCHECK_CH=31o` ayrı koş (`city_check.gd:27-30`).
+    - FLIGHTCHECK tek başına ~306 sn (`:262-263`).
+23. Eksik testler (eski dünya değişiyor).
+    - `world_check.tscn`, `walk_check.tscn`, `map_check.tscn` (`run_tests.sh:258-274`).
+    - Ordugâh bölümlerinden 10z, 24o, 25 (osm) listede yok.
+    - `chapter6a` sahnesi yok (6'nın ordugâh yarısı `--chapter=6 --autotest`).
+    - Bölüm komutu: `godot --headless --max-fps 20 --path . -- --chapter=X --autotest[=v]` (`:73`).
+
+**D. Sıra, süre, G22 ile çakışma**
+24. Sahibin şikâyet ettiği kare eski dünya; "v2 tek başına teslim" onu değiştirmez. Yeni sıra:
+    1. Ölç.
+    2. Eski dünya şeridi (madde 4; küçük iş) + 43o karesi → kaydet.
+    3. v2 şeridi + SARAY alanı + yol BİRLİKTE. Her sokak eklemesi tek rng'yi kaydırır; "sonra" karelerini ve ISTBOS'u bir kez al → kaydet.
+    4. Kalabalık + CITYCHECK.
+    5. Testler.
+25. 3–4 saat gerçekçi değil.
+    - Listelenen bölümler ~100 koşu, ×2 = ~200 koşu (4 süreçle 1,5–2,5 saat) + FLIGHT/CITY/STREET.
+    - ×2'yi 24, 31o, 8y, 12b, 10h, 43o, 9, 7, 11 varsayılan çeşitleriyle sınırla, kalanı ×1. Toplam 6–8 saat say.
+    - Süre biterse önce kesilecekler: şeridin dışı kareleri, mezarlık/manastır türleri, harap kilisenin ikinci çeşidi.
+26. G22 için sınırlar.
+    - `siege_field.gd`'de yalnız `_city()` içi (`:592-651`); `flat_rects`/`ground`/`city_ground`/`_gates` (`:150-300`) YOK.
+    - `sehir.gd`'de yalnız `_sehir_dokusu_v2` (`:3204-3386`) ve `:1117`.
+    - Eski dünyada SARAY yerini düzleme, keep ekleme.
+27. Küçük satır düzeltmeleri.
+    - `WALLS_AT` `chapter43o.gd:34`.
+    - Drone–surlar karesi `_run_shots` içinde `c43o_05_feed_walls.png` (`:1000-1004`); komut `--chapter=43o --shots=<klasör>`.
