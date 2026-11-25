@@ -1,3 +1,128 @@
+# DURUM 25 Kasım ≈07:35 UTC — G19 SÜRÜYOR (session_01RAjzxKb4yV64iDSc3rLT7v → wip/yukleme19, son fabe2bf9)
+- Bekçi (b81uiz0c7) 2 sa sınırında durdu; işçi süreci yeniden başladı. G19 ilerliyor: nabız + kapsam + YUKLEMEAUDIT,
+  bölüm ortası perde (31o eyup/aya, 24 Ayasofya, 13 h3; 26 ve 13 tolga beyaz geçişte yalnız nabız), hub öğeleri atlama,
+  çok girdili önbellek, büyük önbellek yazımı arka iş parçacığında; 8y soğuk en uzun boşluk 727 ms. Şu an bölüm testleri ×2.
+- Sıradaki (onaydan sonra): bekçiyi yeniden kur (`setsid bash $S/bekle_g19.sh 7000`, run_in_background), başka iş yok;
+  teslimde aşağıdaki PLAN'ın "Doğrulama" adımları → 0.99.128.
+
+# PLAN (25 Kasım) — 0.99.128: "Yanıt vermiyor" bitsin, bölümler daha hızlı yüklensin
+
+## Context
+Sahibi: "oyunda genel bi yükleme sorunu var, yanıt vermiyor'a dönüyor ve zor yükleniyor bölümler". Windows bu uyarıyı, ana
+iş parçacığı ~5 sn pencere iletilerini işlemeyince verir. İki inceleme (salt okuma) kökü gösterdi:
+- **Bölüm dünyası tek seferde kuruluyor.** Bölüm `_ready`'sinde, ana iş parçacığında. Yükleme perdesi yalnız ~200 baytlık `.tscn`'yi arka planda yüklüyor (`game_state.gd:1082-1116 _change_with_loader`).
+- **Pencereyi canlı tutan tek şey `LoadingScreen.pump()`** (`ui/loading_screen.gd:120-154`, 150 ms'de bir `DisplayServer.process_events()` + çizim). Tek çağıranı `Props._place` (`level/props.gd:425`). Perde yokken hiçbir şey yapmıyor.
+- **İstanbul v2'nin ağır yolları hiç nabız atmıyor.** QA_DERSLER'de açık kayıt: `docs/QA_DERSLER.md:1193`.
+  - `IstSehir.attach_v2` (`ist/sehir.gd:1429`): `_on_pisir` 6,7–7,9 sn; `_layers2/_merge_groups`; `_hat_far_*`.
+  - `IstMahalleDoku` (`ist/mahalle_doku.gd:974`): 8 sn'ye kadar tek döngü.
+  - `IstSokak.build`: soğukta 6,8 sn.
+  - Ordugâh uzak hücreleri (`ist/ordugah_yonetici.gd:30-166`): 2,5–6,4 sn; v2'nin her bölgesinde var.
+  - Kalabalık pişirme (`ist/hayat.gd:106`): soğukta 6,3 sn.
+  - `World1453.bake` + `generate_lods` (`world1453.gd:436-540`).
+- **Yükleme perdesi olmadan kurulanlar** (bunlarda nabız da yok):
+  - Bölüm ortası yeniden kurulumlar: 31o Eyüp evresi (`chapter31o.gd:767`), 24 → Ayasofya (`chapter24.gd:378-391`), 26 → Ayasofya (`chapter26.gd:2421, 2998`), 13'ün dünyaları (`chapter13.gd:209-739`).
+  - Oyunun açılışındaki ilk bölüm (`boot.gd:17`).
+- **Kayıtlı süreler** (başsız/xvfb):
+  - 8y/23/24 ≈ 55 sn; 12b/10h ≈ 48–50 sn; 31o ≈ 39 sn.
+  - 11: soğukta 40 sn, ılıkta 20–27 sn.
+  - SurSet bölümleri 3–5 sn.
+- **Disk önbelleği her güncellemede soğuyor.** Anahtarda sürüm + betik md5'i var (`ist/sokak.gd:253`). Bölgeler arasında da birbirini siliyor olabilir (`sokak.gd:297-301`; doğrulanmadı).
+- **İsraf:** Hub bölgelerinde şehir hub'ı `_on_pisir`'de üç kez (LOD 2/1/0) kurulup sonra `_temizle` ile siliniyor (`sehir.gd:2162`, `baglama.gd:510-531`).
+
+## Yaklaşım: bir Opus yardımcı (G19, dal `wip/yukleme19`)
+Görev yazısını önce danışman (Fable) okuyacak. Ben birleştirir, doğrular ve yayınlarım. İki kesme var:
+
+**Kesme A — "Yanıt vermiyor" hiç olmasın (görüntü bit bit aynı, düşük risk)**
+1. **Genel nabız:** `LoadingScreen.pump()` bir statik nabıza dönüşür (ör. `LoadingScreen.nabiz()`).
+   - Perde olsun olmasın, ≥150 ms geçtiyse `DisplayServer.process_events()`; perde varsa ayrıca çizim (bugünkü gibi).
+   - Ağır döngülere çağrı eklenir: `IstDunya._kur` parça döngüsü, `mahalle_doku` döngüleri (8 sn'lik dahil), `IstSokak.build`, `attach_v2` adımları ve öğe/hücre döngüleri, `_on_pisir` iş başına, `World1453.bake` ve `Props.bake_static` çağrı başına, ordugâh `_pisir/_ekle`, kalabalık pişirme, `SiegeField` adımları, `Scenery.solidify`, `SurOyun.kur` adımları.
+   - Girdi, bugünkü gibi `gui_disable_input` ile kilitli kalır.
+2. **Perdesiz kurulumlara perde:**
+   - Bölüm ortası yeniden kurulumlar (31o Eyüp, 24/26 → Ayasofya, 13) kısa bir yükleme perdesiyle sarılır. `GameState._show_loader` ve `LoadingScreen` yeniden kullanılır.
+   - Açılıştaki ilk bölüm de perdeyle ya da en azından nabızla yüklenir.
+3. **Ölçüm denetimi:** nabız, iki çağrı arasındaki en uzun boşluğu tutar.
+   - Kurulum bitince `YUKLEMEAUDIT scene=… toplam_ms=… en_uzun_bosluk_ms=… kaynak=<son nabız yeri>` basar. Otomatik testte de çalışır (perde olmasa da).
+   - Önce ADAY olarak eklenir. Hedef başsızda her bölümde en uzun boşluk < 1000 ms (Windows eşiği ~5000).
+
+**Kesme B — Yükleme süresi kısalsın (görüntü ve çarpışma aynı kalacak)**
+4. **İsrafı at:**
+   - Hub bölgelerinde silinecek v2 öğeleri (hub şehri, `_temizle` kapsamı) `_on_pisir`/`_place_v2`'de baştan kurulmaz.
+   - Önerilip uygulanmamış "doku öğeleri `_on_pisir` dışı" da tartılır.
+5. **Önbelleği sağlamlaştır:**
+   - Bölgeler arası silme doğrulanır. Varsa tür başına birkaç anahtar saklanır, en eski silinir.
+   - Anahtar yalnız ilgili kurucu betiklerin md5'ini içerir; oyun sürümü ve ilgisiz betikler çıkar. Böylece güncelleme önbelleği gereksiz yere soğutmaz. Yanlış eski veri riski için kurucu sürüm sabiti de eklenir.
+6. **Uzak ordugâh hücreleri:** Açılışta yalnız yakın olanlar kurulur; uzaktakiler perde kalktıktan sonra kare bütçesiyle akar (`IstDunya` `butce_us`/`IstSehir._queue` kalıbı). Kalabalık soğuk pişirmesi de aynı kalıp.
+7. Her adım `tests/load_time.gd` (`ready` ms) ve `YUKLEMEAUDIT` ile önce/sonra, soğuk (önbellek silinmiş) ve ılık ölçülür.
+
+Kurallar: geometri, çarpışma ve sözleşme altılısı birebir aynı kalır. KUTU YASAĞI, havada duran yok, tek görsel dil, replik/denge değişmez; yasaklar standart.
+
+PACE donuk bulguları (G20) ayrı iş, sahibinin onayını bekliyor.
+
+## Doğrulama
+- `YUKLEMEAUDIT`: bütün bölümler ve bölüm ortası kurulumlar; en uzun boşluk < 1000 ms (başsız).
+- `tests/load_time.gd`: 8y, 10h, 11, 12b, 13, 23, 24, 26, 31o için soğuk/ılık önce|sonra.
+- xvfb'de 31o ve 24 yüklenirken aralıklı kare: perdedeki dönen simge ve çubuk ilerliyor olmalı.
+- Sözleşme altılısı + HALICSONDA/MARMARASONDA karmaları aynı; CITYCHECK/STREETCHECK; ZFIGHT 0.
+- Tam paket `fail=0`, menüye dönüş 2/2.
+- **0.99.128** yayınlanır. Sahibi oyun içi güncelleyiciyle (Windows'ta ilk gerçek deneme) günceller ve yüklemeleri dener.
+
+# (Eski) PLAN (24 Kasım 14:10 UTC, kap yeniden başladı) — 0.99.127 yayınını bitir, sonra 0.99.128 açık işleri
+
+## Context
+0.99.127 (ilk oyun içi güncelleyici sürümü + G17 denetimleri + G18 + kapı geçidi eteği + 20/31o görüş) main'de
+(4c703023), site notu yazıldı (ec22418). CI #343 (45408223153) 13:54'te başladı; kap yeniden başlayınca CI'ı bekleyen
+uyandırma kayboldu. Ortam yerinde: depolar, `$S/` betikleri, Godot, `/root/is/`. Sahibinin bekleyen kararı: Meshy Pro
+(görsel deneme). Açık işler `devir/PAZAR_LISTESI.md` "AÇIK İŞLER" bölümünde.
+
+## Adımlar
+1. **CI #343'ü izle** (arka planda `sleep` uyandırması; send_later yok). Testler ~15:05, yükleme ~15:20 UTC.
+   - Başarılıysa:
+     - `curl -L https://github.com/TradersEntertainment/nothistorygamedemo/releases/latest/download/guncelleme.json` 200 dönmeli; JSON'da `surum` 0.99.127, windows/linux `boyut` ve `sha256` olmalı.
+     - `releases/latest` → v0.99.127 olmalı.
+     - Sahibine Türkçe kısa rapor: 0.99.127'yi bir kez elle indir; 0.99.128'den itibaren oyun kendini günceller.
+   - Düşerse:
+     - Günlüğü indir (`get_job_logs` → `logs_url` → curl), satırı bul.
+     - Yerelde CI koşuluyla (`--max-fps 20`) yeniden üret, kökünden düzelt.
+     - Yayın ağacını yeniden kur (docs/_* hariç, parent main). Main'e gönder; VERSION değişmediyse `.github/release-mirrors.txt`'e `#` satırı ekle (etiket gönderimi 403).
+2. **Devir:** PAZAR_LISTESI + plan; mstrbought kaydet/gönder.
+3. **0.99.128 hazırlığı (sahibinin onayı olmadan yardımcı açılmaz; kota):**
+   - Makine zamanıyla bütün bölümlerin PACE donuk taraması: `tests/_denetim17/pace_tarama.sh`, setsid, 6–8 sa. Sahibine söz verildi.
+   - Meshy Pro alınırsa: anahtar `request_credential` ile (host api.meshy.ai). 8y kapı önü + ordugâh için 8–10 model, Forward+ denemesi, ayrı dal. Her üretimden önce kredi tahmini.
+
+## Doğrulama
+CI #343 başarılı; açık depoda v0.99.127, kurulum/zip/ham ikililer ve `guncelleme.json` var; site changelog 0.99.127.
+
+# (Eski) DURUM 24 Kasım 13:55 UTC — 0.99.127 CI #343 KOŞUYOR
+- main 4c703023, site ec22418. CI biterse: indirmeler + `guncelleme.json` açık depoda mı; sahibine rapor.
+- Açık işler PAZAR_LISTESI'nde (0.99.128 adayları). Sahibinin kararı bekleniyor: Meshy Pro (görsel deneme).
+
+# DURUM 24 Kasım 11:40 UTC — CI #342 paketliyor (testler geçti); 0.99.127 adayı tam pakette
+- Birleşik 3d747148: G16 + G17 + G18 + etek (0e9989f6) + 20. Tam paket `$S/tam127.sh` (setsid) → `$S/tam127_ozet.txt`.
+- #342 biterse: site/indirme doğrula, sahibine rapor. Tam paket temizse 0.99.127 (VERSION, QA `$S/qa126.md`+`qa127.md`,
+  surum127.py, release.yml değişti: ilk güncelleyici sürümü → guncelleme.json yayında mı kontrol).
+
+# DURUM 24 Kasım 10:20 UTC — CI #342 (0.99.126, 3. deneme) KOŞUYOR; G17 + G18 AÇIK
+- #341 de 20'de düştü (D20_G_DONE). Düzeltme her iki replikte; 20 FPS'de 8/8. main d8d34273, CI #342 45373873762.
+- Uyanınca: #342 sonucu; başarılıysa sahibine rapor (indirmeler); G17/G18 teslimleri.
+
+# DURUM 24 Kasım 09:00 UTC — CI #341 KOŞUYOR; G17 + G18 AÇIK
+- 0.99.126 yeniden: main 503b14e8 (6ec065b6 = cd7f4532 + chapter20 düzeltmesi; + mirrors açıklama satırı), CI #341 45359520591.
+- G18 (göz kontrolü bulguları; yazı `devir/gorev/prompt_G18_goz.txt` + danışman DÜZELTMELER): session_01RAjzxKy6HZWoDH7rF8FX1J → `wip/goz18`.
+- G17 sürüyor (`wip/denetim17`). Bekçi `bekle_teslim.sh 4500` (bq7nvj489).
+- Uyanınca: CI #341 sonucu (başarılıysa indirmeler; değilse günlük `/root/is/ci`), teslimleri incele, birleştir, tam paket, 0.99.127.
+
+# DURUM 24 Kasım 08:50 UTC — CI #341 (0.99.126 yeniden) KOŞUYOR; göz kontrolü son bölümlerde
+- #340 testte düştü (20 VISAUDIT, seyrek). Düzeltme + mirrors açıklama satırı → main 503b14e8, CI #341 (45359520591).
+- Göz kontrolü bulguları `devir/GOZ_KONTROLU_BULGULAR.md` (1: hub kapı geçidi arazi yırtığı, 7 bölüm; 5/6: kutu binalar).
+- Sıradaki: #341 sonucu → sahibine rapor; G17 teslimi; bulgular için 0.99.127 görevi (G18) ya da kendim.
+
+# DURUM 24 Kasım 06:40 UTC — 0.99.126 YAYINDA; G16 BİRLEŞTİ; G17 SÜRÜYOR; GÖZ KONTROLÜ KOŞUYOR
+- 0.99.126: main 7f3814ce, wip/0.99.126, site a456e3d, CI #340 (45341370406) koşuyor. Tam paket temizdi.
+- G16 güncelleyici kabul, `wip/ist2-birlesik` = e956ba36 (parse PASS 369, GUNCELLEMECHECK PASS, 8y PASS).
+- Göz kontrolü: `tests/_ist/bakis_kare.gd` (yeni dosya, kayıtsız) → `$S/bakis.sh` (bzwwfkvm4) → /root/is/bakis/<bölüm>/,
+  özet /root/is/bakis/ozet.txt. Bitince: kareleri tam boy incele, bulguları listele, düzelt ya da G17/0.99.127'ye aktar.
+- G17 (`wip/denetim17`) teslimde: rapor + kareler, birleştir, tam paket, 0.99.127 (güncelleyicinin ilk sürümü).
+
 # DURUM 24 Kasım 04:55 UTC — 0.99.126 TAM PAKET (2.) KOŞUYOR; G16 + G17 YARDIMCILAR AÇIK
 - tam126 (ilk): 456/456; 26 nophoto VISAUDIT tek seferlik (3/3 temiz), FLIGHTCHECK 300 sn bekçisine takıldı (eski kodla da
   306 sn → bekçi 600, f957694c). Sahibi 8y oynadı (0.99.125): görünmez kapı rampası (`pis()` tek ağı siliyordu), havada keçiler
