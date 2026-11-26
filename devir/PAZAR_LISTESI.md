@@ -95,7 +95,15 @@
 > eski dünya kara surları hâlâ SiegeField kutu.
 > Kalan (yeni açık iş 12): 36b karşı uç sırasında savunucular ≤ 0,15 sn 0,12–0,29 m yanından geçiyor (eskiden de; denetim
 > 3 ardışık ister).
-> **AÇIK İŞLER (0.99.129 adayları; yeni):** (9) 37o `=lose` VISAUDIT overlap Duelist↔Soldier (0.2,-2.8,24.3): 16 koşuda
+> **26 Kasım 10:40 UTC — 0.99.129 tam paketi koşuyor:** G21 (Lykos bostan) + G22 (saray/kançılarya ~400 m içeri) +
+> G22b (eski meydan yerinin dolgusu: yol, evler, bostan, bağ, harabe, nöbet yeri) + 31o `clear_line` + 26 sürekli bekçi +
+> 22o hendek şeridi. Birleşik `wip/ist2-birlesik` = 6fe9d426. Sahibine kareler `kareler/0_99_129/`.
+> **AÇIK İŞLER (0.99.130 adayları; yeni):** (13) Bölüm 7 uçuşunda uzak arazi katmanı hub düzlemesini örtüyor: surun dibi
+> uzaktan yeşil (`dunya.gd` kaba ızgara; G22b raporu "hâlâ kötü"). (14) Akış sırası: bir bölgeye ilk girişte sur yolu
+> merdivenleri surun kendisinden birkaç saniye önce geliyor (23 bostan bakışı, ~30 sn'de düzeliyor). (15) İç mahalle
+> köşeleri havadan seyrek (toprak halka). (16) Eski dünyada iç mahalleye yol yok. (17) Faz 3 / G23: eski dünyanın kara
+> surları hâlâ SiegeField kutu modeli (sahibine sorulacak).
+> **AÇIK İŞLER (0.99.129 adayları; eski):** (9) 37o `=lose` VISAUDIT overlap Duelist↔Soldier (0.2,-2.8,24.3): 16 koşuda
 > 1 (eski kodla); yalnız test kurgusunda (ally_cap 0, z 24'teki azaplar kalkmıyor, Cenevizli içlerinden geçiyor).
 > (10) HornWorld `_city_east` "plan" adımı yükte 1,5–2,3 sn (tek nabız); gerekirse plan içine nabız. (11) B6 uzak
 > ordugâh ertelemesi; 11 açılışı 998 ms sınırda; pencereli ilk kare 2,6–3,5 sn (gölgelendirici ısıtma yok).
