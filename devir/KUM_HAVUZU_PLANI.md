@@ -80,13 +80,9 @@ Yardımcı düzeni:
 - Pazar sabahı S0'ı ben yaparım (yardımcısız, düşük kota).
 - S1 ve S2 yardımcıları kota yenilenince açılır (Pazar akşamı).
 
-## Sahibinden kararlar (Pazar'dan önce; vermezse öneriyle başlarım)
+## Sahibinin kararları (26 Kasım, AskUserQuestion)
 
-1. Kum havuzu oyuncuya açık bir kip mi, yalnız bizim içerik aracımız mı? **Öneri:** ikisi birden.
-   Oyuncuya ana menüden açık, biz de yeni senaryoları onunla kurarız.
-2. İlk büyük savaş senaryosu: **Öneri: Fatih olarak 1453 kuşatması.** Surlar, toplar, ordugâh, harita hazır.
-   Diğer seçenek açık alanda meydan savaşı.
-3. Ordu yönetimi tarzı: **Öneri: gerçek zamanlı + duraklatıp emir verme.** Diğer seçenekler: tam gerçek zamanlı (Total War
-   gibi) ya da sıra tabanlı.
-4. Görsellik: katalog prosedürel kalemle mi kalsın, yoksa model (Meshy/sanatçı) de mi taşısın? **Öneri:** katalog ikisini de
-   taşıyacak biçimde kurulur, başta prosedürel.
+1. Kum havuzu: **ikisi birden.** Oyuncuya ana menüden açık; biz de yeni senaryoları onunla kurarız.
+2. İlk büyük savaş: **Fatih olarak 1453 kuşatması.**
+3. Ordu yönetimi: **gerçek zamanlı + duraklatıp emir verme.**
+4. Görsellik: **önce prosedürel; katalog model (Meshy/sanatçı) desteğine hazır kurulur.**
