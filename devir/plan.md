@@ -1,4 +1,56 @@
-# DURUM 26 Kasım 02:45 UTC — KAP YENİDEN BAŞLADI; G22 AÇIK; 0.99.129 tam paketi yarım kaldı
+# DURUM 26 Kasım 05:50 UTC — G22 TESLİM EDİLDİ ama v2'de surun ardı BOŞ ÇAYIR; kap yine yeniden başladı
+
+## Context
+- **G22 teslim** `wip/saray22` 37ae2b7d (taban 618521d7). Testleri temiz (hub ×2 76/76, sözleşme altılısı aynı, ZFIGHT 0, yükleme süresi artmadı).
+- Tam boy kareler:
+  - İyi: saray avlusu + İmparator içeride (`sahip_2`); 43o eski dünyada sur ardı bostan/çadır (`sahip_1`).
+  - **Kötü:** v2'de eski meydanın yeri (hub düzlemesi r 48) koca bir boş çayır (`v2_23/01_caddeden_sur`, `v2_6/04`, `05_tepeden`, `sahip_3`). Sahibinin kararı "boş çayır yok"; olduğu gibi yayınlanamaz.
+  - Raporun öteki zayıfları: iç mahalle v2 oyun alanı eksen hizalı, köşelerde ~10 m boş toprak üçgeni; sur parçası döşemesi keskin kenarlı taş dikdörtgen; eski dünyada mahalleye yol yok.
+- **tam129** (G22'siz, f6adcdb1): kap 03:08 sonrası yeniden başladı, özet yazılmadı. Parça günlükleri: 457 PASS, 0 FAIL, ama **2 denetim satırı**:
+  - `VISAUDIT overlap chapter26 Squad|Duelist (-15.6,0,5.5)`
+  - `VISAUDIT float chapter22o Person (-6.5,-8.1,34.1)`: ayak −8,1; altındaki çarpıştırıcı `Toprak_KuleDolguSet_Carp` −8,68; 0,58 m havada.
+  - İkisi de yeni ve seyrek. G21/G22 dosyalarına dokunmuyorlar; kök bulunmalı.
+- f6adcdb1 (31o `clear_line`) yerelde kayıtlı, **gönderilmedi**. Kap yeniden başladı: arka plan bekçileri yok; depolar, Godot ve `$S` yerinde.
+
+## Adımlar
+1. **f6adcdb1'i gönder** (`wip/ist2-birlesik`).
+2. **G22b: sur ardını doldur.** G22 oturumuna (session_01RAjzxKhqXDAz1Nxq4oRyN8, boşta, bağlamı dolu) SendMessage ile kısa ek görev. Önce Fable okur, DÜZELTMELER eklenir. İş:
+   - v2'de eski hub alanını (sur parçası döşemesinin ~15 m ötesinden itibaren) G21 şerit diliyle doldur:
+     - bostan, bağ, meyve bahçesi, dağınık köy evi, harap kilise, kuyulu küçük meydan;
+     - kapıdan saray yoluna (`IstSokak._saray_yolu`) giden gerçek bir yol, iki yanı bahçe ve ev;
+     - hub düzlemesi (zemin yüksekliği) aynı kalır, yalnız üstü dolar.
+   - Senaryo yerleri boş kalır: 6/7/10h/13/23/24'te sur parçasındaki bütün kişi ve tünek konumları + oyuncu yolları. Bölüm testleri bunu kanıtlar.
+   - İç mahalle oyun alanı hub açısıyla dönük dikdörtgen olsun; köşe üçgenleri kalmasın.
+   - Döşeme kenarı yumuşasın: bordür taşı, toprak geçişi, eşya. KUTU YASAĞI.
+   - Eski dünyada mahalleye toprak yol: CityPlan'a dokunmadan, SiegeField/WallRear süslemesiyle. Küçükse yapılır, değilse rapora yazılır.
+   - Kanıt: önce/sonra tam boy kareler (`v2_23/01`, `05_tepeden`, `v2_6/04`, uzak7/03-04, sahip_3, 43o drone).
+   - Testler: hub bölümleri ×2, CITYCHECK 24/31o, STREETCHECK, ISTBOS %0, ZFIGHT, WALKCHECK/FLIGHTCHECK/MAPCHECK, sözleşme altılısı, yükleme süresi, menü dönüşü.
+   - Standart yasaklar: oturum/zamanlayıcı/ajan araçları, pkill, ses, PR, main, liste dışı dosya, denetim susturma.
+   - Bekçi: `$S/bekle_g22.sh` (rapor BİTTİ'yi bekler; "G22b" satırı için kalıp güncellenir), run_in_background.
+3. **Bu arada ben: iki denetim satırının kökü** (f6adcdb1 üstünde, `--max-fps 20`, 4 paralel):
+   - 26 (bütün çeşitler) ×4: Squad ile Duelist'in aynı yere düşmesi. Doğuş/yerleşim koşulu bulunup düzeltilir.
+   - 22o (bütün çeşitler) ×4: kule dolgusu çarpıştırıcısının üstünde 0,58 m havada duran asker. Zemin örneklemesi (Person/zemin bulma) ile dolgu yüksekliği karşılaştırılır, düzeltilir.
+   - Her düzeltmeden sonra ilgili çeşitler ×2 temiz.
+4. **Birleştir:** `wip/saray22` (+G22b) → `wip/ist2-birlesik`; parse PASS; hedefli koşular (6, 7, 10h, 12b, 13, 23, 24, 31o, 26, 22o).
+5. **Tam paket** `$S/tam129.sh` (setsid + `bekle_bitti.sh`). Kap yeniden başlarsa biten parçalar okunur, eksik parça yeniden koşulur.
+6. **0.99.129 yayını** (G21 + G22 + G22b + 31o + iki denetim düzeltmesi):
+   - VERSION; `qa129.md`'ye G22 dersleri (iki kök, düzleme alanının boş kalması, dönük oyun alanı, denetim kökleri);
+   - ağaç `docs/_*` hariç, parent main 2a951cc6; main + `wip/0.99.129`;
+   - `surum129.py` metni: saray ve kançılarya içeride; "sonraki sürüm" cümlesi çıkar; `--yaz`, site gönder;
+   - CI; `bekle_yayin.sh 0.99.129`.
+7. **Sahibine Türkçe rapor:**
+   - kareler `kareler/0_99_129/` ve SendUserFile;
+   - bilinen zayıflar; ElevenLabs anahtarı hatırlatması;
+   - Faz 3 sorusu (eski dünya kutu kara surları, G23).
+   - Devir: `PAZAR_LISTESI`, `plan.md`; mstrbought kaydet/gönder.
+
+## Doğrulama
+- G22b kareleri tam boy: sur ardında boş çayır yok, yol var, senaryo yerleri açık.
+- 26 ve 22o çeşitleri ×4 denetim 0.
+- Tam paket: fail 0, `^VISAUDIT ` 0, menü dönüşü 2/2.
+- CI başarılı; `guncelleme.json` 0.99.129; site notu doğru.
+
+# (Eski) DURUM 26 Kasım 02:45 UTC — KAP YENİDEN BAŞLADI; G22 AÇIK; 0.99.129 tam paketi yarım kaldı
 
 ## Context
 - 0.99.129 adayı (G21 Lykos şeridi + harita) `wip/ist2-birlesik` 618521d7'de (kod 6dec6901 + G22 görev yazısı kaydı).
