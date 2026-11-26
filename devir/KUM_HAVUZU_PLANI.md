@@ -1,6 +1,6 @@
 # KUM HAVUZU PLANI — varlık dünyası, serbest kurma, büyük savaş, bütün bölümler sabit haritada
 
-Hazırlandı 26 Kasım 2026; Fable (üst akıl) iki kez inceledi (iki tur), düzeltmeler işlendi. Başlangıç: **Pazar 29 Kasım 08:00 (TR)**.
+Hazırlandı 26 Kasım 2026; Fable (üst akıl) iki kez inceledi (iki tur), düzeltmeler işlendi. Başlangıç: **Pazar 29 Kasım 20:00 (TR)** (sahibi 26 Kasım: "20:00de"; kota yenilenmesiyle aynı saat).
 
 ## Hedef (sahibinin isteği)
 
@@ -110,8 +110,8 @@ Hazırlandı 26 Kasım 2026; Fable (üst akıl) iki kez inceledi (iki tur), düz
 
 | Sıra | İş | Sahibi neyi tıklar | Tahmin |
 |---|---|---|---|
-| **D0** (Pazar 08:00–20:00, ben, yardımcısız) | Dört sınıflı varlık envanteri; bölüm × dünya matrisi (63 dosya, L0/L1/L2 adayı); 1000 asker başarım sondası (tam `Person` / Crowd MultiMesh / poz değiştiren MultiMesh) | Gizli "yarat" menüsünde ölçüm sahnesi: kendi makinende FPS, çizim, üçgen | 1 gün |
-| **D1** (Pazar 20:00 →, yardımcı A) | Mini editör: düz ova, ~15 varlık + adlı nokta + tetik hacmi; `.kum` v1 | "Kum Havuzu (deneme)": koy, döndür, sil, F5/F9 kaydet-yükle | 2–3 gün |
+| **D0** (Pazar 20:00, ben; kota yenilenince) | Dört sınıflı varlık envanteri; bölüm × dünya matrisi (63 dosya, L0/L1/L2 adayı); 1000 asker başarım sondası (tam `Person` / Crowd MultiMesh / poz değiştiren MultiMesh) | Gizli "yarat" menüsünde ölçüm sahnesi: kendi makinende FPS, çizim, üçgen | 1 gün |
+| **D1** (D0 biter bitmez, yardımcı A) | Mini editör: düz ova, ~15 varlık + adlı nokta + tetik hacmi; `.kum` v1 | "Kum Havuzu (deneme)": koy, döndür, sil, F5/F9 kaydet-yükle | 2–3 gün |
 | **D2** (paralel, yardımcı B) | Birlik çekirdeği: veri odaklı 100'e 100, MultiMesh, tıkla-emir, duraklat | Ovada iki ordu, bölük seç, git/saldır | 3–4 gün |
 | **D3** | D1 + D2: editörde birlik koy, "Oynat" | Kendi kurduğun savaşı oynat | 2–3 gün |
 | **D4** | Fatih dilimi: v2 Mesoteikhion kesimi, 3–4 bölük, top bataryası, gedik aşaması, tek hedef; `.kum` + betikle yazılan ilk bölüm | Fatih olarak gedikten gir | 4–6 gün |
@@ -165,7 +165,7 @@ Hazırlandı 26 Kasım 2026; Fable (üst akıl) iki kez inceledi (iki tur), düz
 ## Kota
 
 - Haftalık kota uyarı düzeyinde; yenilenme Pazar 29 Kasım 20:00 (TR).
-- D0'ı ben yaparım (yardımcısız). D1 ve D2 yardımcıları kota yenilenince açılır.
+- Başlangıç Pazar 20:00 (TR), kota yenilenmesiyle aynı saat. D0'ı ben yaparım; D1 ve D2 yardımcıları D0'ın envanteri ve başarım sondası bitince açılır.
 - Tahminler gerçekçi tutuldu (birlik ve Fatih dilimi iki katı sayıldı); bölüm taşıma aylar ölçeğinde ve tarihsiz.
 
 ## Sahibine sorulacak açık kararlar (D0'da)

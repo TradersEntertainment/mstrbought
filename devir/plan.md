@@ -1,4 +1,4 @@
-# DURUM 26 Kasım 19:05 UTC — 0.99.130 tam paketi KOŞUYOR (yalnız bekçisi düştü); kum havuzu Pazar 08:00 TR
+# DURUM 26 Kasım 19:05 UTC — 0.99.130 tam paketi KOŞUYOR (yalnız bekçisi düştü); kum havuzu Pazar 20:00 TR
 
 ## Context
 - 0.99.129 yayında (CI #347 başarılı, guncelleme.json 0.99.129).
@@ -17,7 +17,7 @@
    - site `surum130.py --yaz`, gönder; CI ve `bekle_yayin.sh 0.99.130`.
    Denetim satırı çıkarsa: sondayla kök, düzelt, hedefli koşu, paketi yeniden.
 3. Sahibine Türkçe rapor: 0.99.130 yayında, ne değişti, bilinen zayıflar; deniz surları (Marmara/Haliç) yeni kaleme geçirilsin mi sorusu.
-4. Pazar 08:00 TR: kum havuzu D0 (envanter, bölüm × dünya matrisi, 1000 asker başarım sondası); kota yenilenince D1/D2 yardımcıları ve G-model (Blender örnekleri, indirim yasak).
+4. Pazar 20:00 TR (sahibi: "20:00de"): kum havuzu D0 (envanter, bölüm × dünya matrisi, 1000 asker başarım sondası); kota yenilenince D1/D2 yardımcıları ve G-model (Blender örnekleri, indirim yasak).
 
 ## Doğrulama
 - tam130: 4 parça çıkış 0, FAIL 0, DENETIM 0, MENURETURN 2.
