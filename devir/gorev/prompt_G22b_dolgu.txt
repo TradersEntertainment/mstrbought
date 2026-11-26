@@ -1,0 +1,89 @@
+G22b — SUR ARDI DOLGUSU (G22'nin devamı; aynı dal wip/saray22, taban 37ae2b7d)
+
+Teslimini inceledim; saray avlusu ve kançılarya içeride güzel, testlerin temiz. Ama tam boy karelerde yayını durduran bir
+sorun var, ve sahibinin kararına aykırı:
+
+SORUN
+- v2'de eski meydanın yeri (hub düzlemesi, r 48) koca bir BOŞ ÇAYIR kaldı. Kanıt kareleri:
+  - kare/v2_23/01_caddeden_sur.jpg: oyuncu caddeden sura bakıyor; sur ile oyuncu arası 60+ m çıplak çimen;
+  - kare/v2_6/04_caddeden_sur.jpg: 6'nın ilk bakışı ("Konstantinopolis. İçerideyim."), aynı çıplak çimen;
+  - kare/v2_23/05_tepeden.jpg: döşemenin ardında koca yeşil leke;
+  - kare/sahip_3_v2_ucus_iki_parca.jpg: uçuşta surun dibinde boş daire.
+- Sahibinin kararı (AskUserQuestion, aynen): "Lykos şeridi bostan: surun ardında ~150–250 m bostan, bağ, harap kilise,
+  dağınık ev, boş meydan. BOŞ ÇAYIR YOK; şehrin kalanı dolu kalır."
+- Kendi raporunda "Hâlâ kötü" diye yazdığın öteki maddeler de bu turda kapanacak (aşağıda 3–5).
+
+İŞ (sırayla)
+1. v2'de eski hub alanını G21 şerit diliyle doldur. Hub düzlemesinin zemin yüksekliği aynı kalır; yalnız üstü dolar.
+   - İçerik: bostan sıraları, bağ (kazık + asma), meyve bahçesi, dağınık köy evleri (2–6 ev), bir harap kilise ya da
+     şapel kalıntısı, kuyulu küçük bir meydan. G21'deki parçaları (kiliseler_harap.gd, IstSokak şerit hücreleri,
+     WallRear._serit_fill kalıbı) yeniden kullan; yeni görsel dil icat etme.
+   - Kapıdan (Romanos, sur parçası) içeri, saray yoluna (IstSokak._saray_yolu) bağlanan GERÇEK bir yol olsun. Yol 6–8 m
+     toprak/taş; iki yanında bahçe duvarı, çit, ev, ağaç. v2_23/01 ve v2_6/04 bakışında oyuncu kapıya giden bir yolun
+     üstünde durmalı; sur ile oyuncu arasında boş çimen kalmamalı.
+   - Sur parçası döşemesinin dış kenarından ~12–15 m içeriye kadar açık bırakılabilir (nöbet yeri, ikmal). Bu açıklık
+     toprak, araba izi, sandık, ocak, çadır, kazık ile "kullanılan alan" görünmeli; çimen tarlası değil.
+2. SENARYO YERLERİ BOŞ KALIR. 6 (byz* çeşitleri, 6b tünekleri dahil FICI_POS), 7/7b, 10h, 12b, 13, 23, 24'te sur
+   parçasındaki her kişi, tünek, iz, kararma sonrası konum ve oyuncunun otomatik test yolu; ayrıca oyuncunun kapıdan yola
+   ve saraya yürüyüş hattı. Dolgu bunların 3 m yakınına girmez. Yerleşimi ÖNCE bu konumların listesini çıkarıp ona göre yap
+   (liste rapora yazılır). Çarpıştırıcılı her yeni nesne için oyuncunun hub'dan saraya yürüyüşü (WALKCHECK ya da kendi
+   yürüyüş sondan) geçmeli.
+3. İç mahallenin v2 oyun alanı (`_rect_xf`) hub açısıyla (161,9°) DÖNÜK dikdörtgen olsun; köşelerdeki ~10 m'lik boş
+   toprak üçgenleri kalmasın (uzak7/03). Çevre yolu sınırı buna göre.
+4. Sur parçası döşemesinin keskin kenarı yumuşasın: bordür taşı sırası, toprak geçişi, kenara eşya. KUTU YASAĞI.
+5. Eski dünyada iç mahalleye toprak yol: CityPlan'a DOKUNMADAN, SiegeField/WallRear süslemesiyle (ayrı rng, son süzgeç
+   kalıbı). 1 saatten uzun sürecekse yapma, rapora yaz.
+
+KURALLAR (G22 yazısındakiler aynen geçerli)
+- KUTU YASAĞI. HAVADA DURAN HİÇBİR ŞEY OLMAZ (her nesne IstGeo.h / zemin ışınıyla oturur; gömük de yok). TEK GÖRSEL DİL.
+- Denge, sabır, gizli süreler, replik metni/sesi değişmez; yeni replik yok. Kalabalık azaltılmaz (CITYCHECK 24/31o en az
+  bugünkü kadar).
+- Şehrin geri kalanı bit bit aynı kalmalı: dolgu AYRI rng ile, mevcut rng sıralarından sonra kurulur. Ev sayısı ve
+  STREETCHECK değerleri dolgu bölgesi dışında aynı olmalı (fark yalnız dolgu bölgesinden gelmeli, rapora yaz).
+- Yasaklar: oturum/zamanlayıcı/bildirim/ajan araçları (send_later, create_trigger, create_session, Agent dahil); pkill ve
+  killall (yalnız `kill <pid>`); ses üretimi; PR; main dalına dokunmak; aşağıdaki liste dışı dosya düzenlemek; denetimi
+  susturmak ya da eşik gevşetmek; izin istemi doğuran komutlar; `.git/` ya da `.gitignore` yazmak; `git config`;
+  `git clean`; rm/mv/cp -r hedefinde kabuk değişkeni.
+- Dokunabileceğin dosyalar: G22'de dokunduğun dosyalar (byz_city.gd, world1453.gd, siege_field.gd, baglama.gd, sehir.gd,
+  bölüm dosyaları) + G21'in dosyaları (geo.gd, sokak.gd, wall_rear.gd, kiliseler_harap.gd, hayat_yakin.gd) + tests/_ist/
+  altında kendi kare/sonda betiklerin + docs/_kanit_saray22/. Başkası gerekirse önce rapora gerekçe yaz.
+
+KANIT (docs/_kanit_saray22/g22b/)
+- ÖNCE (37ae2b7d) / SONRA tam boy kareler, aynı kamera: v2_23/01, v2_6/04, v2_23/05 tepeden, uzak7/03, uzak7/04,
+  sahip_3 uçuşu, 43o drone (iki yol: eski dünya ve v2 statikleri açık), yolun üstünde göz hizası (1,7 m) kapıya ve saraya
+  bakış, dolgunun içinden 0,5–3 m yakın 4 kare (bostan, bağ, ev, harabe). Kareleri KENDİN tam boy aç ve bak; havada,
+  gömük, iç içe, kutu varsa düzelt.
+- Testler (--max-fps 20):
+  - hub bölümleri bütün çeşitleriyle ×2: 6 byz*, 7 byz*, 10h, 12b, 13=city, 23, 24;
+  - CITYCHECK 24 ve 31o; STREETCHECK; ISTBOS %0 (gezi bos=1); ZFIGHT 0; WALKCHECK, FLIGHTCHECK, WORLDCHECK, MAPCHECK;
+  - sözleşme altılısı birebir (SURSOZLESME 13/8, SUROYUN 519/0/0/0, WALKTHRU 7/7, ESYATEST, HALICSONDA 661,
+    MARMARASONDA 1837);
+  - yükleme süresi 24/23/10h/6 (G22 değerlerinden fazla artmamalı; artarsa nedenini yaz);
+  - menu_return 26 ve 20o; harita map1453.png yeniden pişir, `compare -metric AE` farkını yaz.
+- Rapor: docs/_kanit_saray22/g22b/rapor.md (ne yaptın, senaryo yerleri listesi, sayılar, "hâlâ kötü" dürüst).
+- Bittiğinde docs/_kanit_saray22/durum.md'nin İLK satırını tam şu yap: "G22b BİTTİ <saat UTC> <commit>" ve dala gönder.
+  Ara ilerlemede ilk satıra "G22b SÜRÜYOR ..." yaz (bekçim yalnız "G22b BİTTİ"yi bekliyor).
+
+Tahmini süre 2–4 saat. Plan onayı sorma; başla ve bitir.
+
+DÜZELTMELER (danışman incelemesi; yukarıdakiyle çelişirse BUNLAR geçerli)
+1. Kök neden: boşluk oyun alanından değil, `hub_sehir` öğesinin taban damgasından: öğe r 50, `gercek_olcu`suz (sehir.gd:2053); IstSokak._taban_kayitlardan ona `_stamp_disc(c, r+4)` ile 54 m occ=3 dairesi basar (sokak.gd:731-734; yedek sehir.gd:3309-3312). Oyun alanı yalnız SUR_RECT.grow(2)+2 m (sehir.gd:2636, sokak.gd:746-750). İşe bu daireyi ölçerek başla.
+2. Daireyi baştan küçültme: hub_sehir r'si/damgası değişirse occ değişir, tek rng (sokak.gd:536-537) Mese'den _ogeler'e (:538-609) kayar, bütün şehir değişir; öğe r'si önbellek imzasında (sokak.gd:448). Dolgu `_ogeler(rng)`'den SONRA (sokak.gd:609), önbellek yazılmadan önce (:219), kendi RandomNumberGenerator'ıyla, yalnız bu dairedeki occ=3 hücrelere yazan AYRI bir geçiş olsun.
+3. Yol için `_add_parcali` kullanılamaz (yalnız occ 0/1'den geçer, sokak.gd:689). `_saray_yolu` kapıdan değil, hub kenarından 70 m ötedeki `uc`'tan başlıyor (sokak.gd:665-668). Kapı–`uc` arası parça 2. maddedeki son geçişte `_add_street` ile eklensin, hücreleri 1 yapılsın. IstHayatYakin._ok_cell yalnız 0/1'de yürütür (hayat_yakin.gd:318-320).
+4. İŞ maddesi 3 (dönük dikdörtgen) İPTAL: oyun_alanlari() Rect2 döndürür, çok tüketicisi var (sokak.gd:450 imza, :623, :652, :746, :1594, sehir.gd:1475, :3314, cati.gd:429, baglama.gd:469-478); döndürmek şehri kaydırır. IstBaglama._rect_xf (baglama.gd:513) kamp/8y/31o'da da kullanılıyor: DOKUNMA. Köşe üçgenleri 2. maddedeki son geçişle doldurulsun; alan tanımı aynı kalsın.
+5. Determinizm ölçütü: streets, houses, doku, oge, avlu, meydan listelerinin taban uzunluğuna kadarki öneki 37ae2b7d ile birebir aynı (yeni kayıtlar yalnız SONA). Karma sondası yaz, ÖNCE/SONRA önek karmasını rapora koy.
+6. Kalabalık: IstHayatYakin._kur_ag bütün sokak.streets/houses üzerinden ağ kurar, tek tohum 1453771 (hayat_yakin.gd:165, :199-246); sona eklenen sokak ajan yerleşimini değiştirebilir. CITYCHECK 24/31o ÖNCE/SONRA yan yana; azalma varsa dur, nedenini bul.
+7. Bölümde ve uçuşta arazi farklı: uçuşta düzleme hx·(0,0,−10) merkezli r 48, geçiş 10, y −0,12 (sehir.gd:2042-2044); hub bölümlerinde byz_walls yaması r 62/260, y −0,05, keep çevresi 4 m −0,35 (baglama.gd:46, :401, :414). Bordür ve yerel x 14–18'e konan her şey bölümde havada kalabilir: havada/gömük denetimi hem gezide hem bölüm içinde (23 ve 6).
+8. Bölümde dolgu silinmez (_temizle yalnız IstSehir.items'ı kaldırır, baglama.gd:602-617). Sınırlar: SUR_RECT x 18…38 (byz_city.gd:61), TEMIZ_BOL x 14…48 (baglama.gd:50), Dressing sur alanı x 18,5'ten (byz_city.gd:285-290), sokak ağzı Rect2(BOLME_X, −18.5, 6, 8.5). Dolgu hub-yerel x < 14'te kalsın; ağız hattı açık.
+9. Harap kiliseyi IstSehir öğesi (_v2_item) yapma (silinecek_mi bölümde siler, uçuşta kalır; imza değişir). Doku kaydı yolunu kullan: {"tur": "harap_kilise", …} (sokak.gd:1850); 19×25 m yer, 100 m kuralı (_harap_kilise_yok, sokak.gd:1992): yakında varsa şapel kalıntısı/harabe adası.
+10. Yollar: byz_city.gd ve siege_field.gd scripts/level/ altında, wall_rear.gd scripts/world/ altında. kiliseler_harap.gd'nin class_name'i yok (IstKiliseler._run preload eder). WallRear._serit_fill (wall_rear.gd:703, tohum 1453532) ESKİ dünya kalıbı; v2 karşılığı IstSokak._serit_meydan, _yer_ara, IstGeo._serit_ada (sokak.gd:2001, :1975, geo.gd:500).
+11. İzinli dosyalara mahalle_doku.gd ve ayrinti_sokak.gd eklendi (bostan, bağ, çit, zemin dokusu orada). Yalnız var olan tur/alt değerlerini kullan (geo.gd:496-497); yeni tür şartsa rapora gerekçe.
+12. Önbellek: sokak.gd, evler.gd, geo.gd md5'i imzada (sokak.gd:460-462); mahalle_doku imzası occ/rid içerir (mahalle_doku.gd:167). Yükleme ölçümünden önce tek süreçle ısıt; soğuk ve sıcak ayrı yaz. Yeni kayıtlar _OB_ALANLAR'a girmeli (sokak.gd:465), yoksa önbellekten okuyan koşuda dolgu kaybolur. Sınama: aynı kare soğuk ve sıcak koşuda çekilip karşılaştırılır.
+13. Uzak katman: hub_sehir tek katmanlı r 50; dolgu onun parçası değil, uzak görünüşü doku/ev uzak kütlesinden gelir. 150 m, 400 m, 1 km'den üç kare: yakın–uzak geçişinde dolgu kaybolmamalı.
+14. Dokunma: IstGeo.duzle(…, 48.0, …, 10.0), SurHub.SARAY_OFS, ByzCity.SUR_RECT/IC_RECT/BOLME_X/FICI_POS (byz_city.gd:63), HUB_SIVA/_make_hub/_hub_bolunmus_kur kurucu sırası (sehir.gd:2287-2308).
+15. 3 m kuralı v2 çerçevesinde: bölüm sabitleri hub ya da iç grup yerelinde, IC_MERKEZ bölümlerinde kök −ofs ötelenir (byz_city.gd:53-57); SurHub.hub_v2() ile dünyaya çevir. Listeye EXIT_POS, GIUST_POS, 7b "walls"/"outside" izleri, 10h gece Niko ve oyuncu yeri, kararma sonrası "fıçıya ~11 m" noktası, _dress_bolunmus reserved dikdörtgenleri (byz_city.gd:288-289) girsin.
+16. Çarpışma penceresi: v2 arazi çarpışması 320 m'lik pencerede, alan_gecis yeniler (byz_city.gd:131-136). Kapı → uc → sokak ağzı hattında yürüyüş sondası (tests/_ist/): takılma 0, düşme 0, en dar geçit ≥ 2,5 m.
+17. Eski yollar: --eski-dunya hub yolu (7/7), --saray-eski ve --eskisur en az birer çeşitle. Dolgu uzak_yeni() yanlışken ve --saray-eski'de (sehir.gd:2051, :2635) KURULMAMALI; koşul kodda açık yazılsın.
+18. Eski dünya: 43o drone karesinde eski hub yeri çayırsa İŞ 5 ile birlikte _serit_fill kalıbıyla, ayrı rng ile kapat. WORLDCHECK regions=13 ve map1453.png AE farkı yazılsın.
+19. Sayısal kabul: (a) v2_23/01 ve v2_6/04'te sur ile kamera arasında hiçbir yönde > 12 m kesintisiz çıplak çimen yok; (b) dolgu dairesinde 10 m'lik karelerin boş oranını yazan sonda, hedef ≤ %10 (nöbet açıklığı hariç); (c) ISTBOS %0; (d) uc–kapı arasında occ=1 sürekliliği sondayla doğrulanır.
+20. Ek denetimler: PARSECHECK, VISAUDIT, ESYAAUDIT (havada/gömük/tıkama), GORUNMEZZEMIN, YUKLEMEAUDIT_KESIN, "SCRIPT ERROR" 0. G22'nin 14 dünya bölümü (6, 7, 8y, 9, 10, 10b, 10z, 11, 13, 16, 24o, 25 osm, 31o, 43o) birer kez. 23 ve 6 açılış karesinde dolgu öncesi/sonrası üçgen ve çizim çağrısı sayısı rapora.
