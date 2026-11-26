@@ -1,4 +1,4 @@
-# DURUM 26 Kasım 16:30 UTC — 0.99.129 YAYINDA. G23 BİTTİ ve birleşti (wip/ist2-birlesik 961e01a5); tam paket tam130 koşuyor (bekçi bekle_bitti) → temizse 0.99.130 (surum130.py, qa130.md, kareler/0_99_130)
+# DURUM 26 Kasım 18:35 UTC — 0.99.130 adayı 19d2e926 (G23 + 27 Dressing düzeltmesi); tam paket tam130 yeniden koşuyor (bekçi). Kum havuzu planı devir/KUM_HAVUZU_PLANI.md (Pazar 08:00 TR başlangıç)
 
 # (Önceki) DURUM 26 Kasım 05:50 UTC — G22 TESLİM EDİLDİ ama v2de surun ardı BOŞ ÇAYIR; kap yine yeniden başladı
 
