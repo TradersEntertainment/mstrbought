@@ -110,3 +110,92 @@ YASAKLAR
 - İzin istemi doğuran komutlar: rm/mv/cp -r hedefinde kabuk değişkeni; heredoc zincirinde silme; `bash -c`; until/while
   -sleep bekleme döngüsü; geçici dosyalar yalnız `~/is/` altında; `.git/` ya da `.gitignore`'a yazmak; `git config`;
   `git clean`.
+
+KARARLAR (yöneticinin; danışman incelemesinden sonra)
+K1. Kesit: iç surun ŞEHİR yüzü bugünkü uzak hub ile aynı yerde sabit (z ≈ −4,0; SurHub hizası), dy = 0. Sözleşme ölçüleri iç
+    sur, peribolos ve dış sur için aynen. Teras ve hendek seçmeli enle (kalemin `o` seçeneği, varsayılan davranış aynı)
+    daraltılır; hendeğin dış yakası z 36'yı GEÇMEZ (ova ve ölü bölge z 36'dan başlıyor, kesilmez). Eski dünyada ova
+    kaydırması (`ova_ofs`) YASAK.
+K2. Kapılar: 7 kapının hepsi bugünkü gibi AÇIK ve yürünür kalır (oynanış aynı). Hendekte bugünkü gibi dolgu geçit. Açıklık
+    en az 7 m (seçmeli). `Landmarks1453._golden_gate` kutusu, altin_kapi yeni kalemle kurulunca kalkar (çifte yapı olmaz).
+K3. Kapsam: eski dünyayı (World1453 + SiegeField `world = true`) kuran bütün bölümler. LandWalls (`--eskisur`, arena,
+    ana menü arkası) KAPSAM DIŞI; `land_walls.gd` geometrisi ve sabitleri değişmez.
+K4. lod 2 (kalemin kutu uzak ayrıntısı) yalnız oynanabilir bir kamera konumundan > 300 m'de serbest. 43o drone alçak
+    uçuşunda ve lod geçiş mesafesinde sıçrama olmadığını kareyle göster.
+K5. Lykos'taki dış sur kesiği (x 1…19, WallRear barikatı): seçmeli gedik eniyle tek açıklık; barikat yeni dış sur
+    yüzüne oturur.
+K6. `--eskisur` çıplak ya da bölüm listedeyse sur uzantısı da kutu kalır (karışık dil olmasın); `--eski-dunya` tek başına
+    yeni kalem.
+
+DÜZELTMELER (danışman incelemesi; yukarıdakiyle çelişirse KARARLAR, sonra BUNLAR geçerli)
+1. Satır numaraları: "hub boşluğu ~262–298" yanlış (orası `_gate_spans` 271-290, `_gates` 293). Hub boşluğunu `_inner_spans`
+   (392-409) ve `_keep_covers_inner` (325-329) açar; kaynağı FAR_REGIONS'ın keep'e eklenmesi (world1453.gd:121, 265-279).
+2. `_horn_end` `world = true` iken çağrılmaz (siege_field.gd:121-129). Kuzey ucu `HornWorld._blachernae` kurar (horn_world.gd:
+   856-888: x −702…−578 levhası, FarBlachernae, kutu Haliç inişi); 30/30o'da `Blachernae._join_tower` (blachernae.gd:88-89).
+   `horn_world.gd` ve `blachernae.gd` yalnız ek yeri için izinli dosyalara eklendi.
+3. LandWalls eski dünyada kurulmaz: `fill_center = region != "landwalls"` (world1453.gd:251); ortayı da `_wall_extension` kurar
+   (a0 = 0, siege_field.gd:420). Garrison, Assault, `SurSet.eski()` ve world_check.gd:50-51 LandWalls sabitlerine bağlı.
+4. Bölüm envanteri: 27 Galata'dır (karelerden çıkar). Varsayılanda v2: 7a/7b, 11, hub 6b/10h/12b/13 şehir/23/24, 8y, 31o.
+   Eski dünya CampDay: 6a, 9, 10, 10b, 10z, 13 (ordugâh), 16, 24o, 25, 43o. Aynı SiegeField'i kuran öteki bölümler de
+   kapsamda: 30/30o (sur ucu x −580 oynanış alanında, göz hizası), byz_aya (25, 26, 44b; byz_city.gd:179), 39o, 2,
+   17/19/19o/29/29o, 27/10g, 17o, 18/18b, 38o, 31o Eyüp evresi (chapter31o.gd:769). Envanterde kodla doğrula. Teste ve
+   karelere en az 30, 30o, 18, 26, 39o ekle.
+5. Kesit ölçüleri için bkz. K1 (surlar.gd:53-78: T 5, PW 15, OT 2,6, teras 10, hendek 20×6; SurSet hizası zo0→14,
+   sur_set.gd:51; SurHub hizası şehir yüzü z −3,8, sur_set_hub.gd:20,62-65). Ova arazisi z 36'da başlar, 25 m ızgara
+   (siege_field.gd:254).
+6. v2 arazi bağımlılığı: `IstSurlar.dis_dy` dy kaydı yoksa `IstGeo.h` okur (surlar.gd:395-409; sur_oturtma.gd:39-44);
+   `sur_zemin.set_` eteği `IstGeo.h` ile keser (sur_zemin.gd:37-60). Eski dünyada dy `OTURTMA.dy_kayit`e yazılmalı (örnek
+   sur_oyun.gd:686-691), eteğe `SiegeField.surf` seçmeli çağrıyla verilmeli. Statikler (`dy_kayit`, `IstSehir.v2`,
+   `IstGeo.kaydir`, `ZEMIN.xf_var`) bölümler arası sızar: "önce v2 bölümü, sonra eski dünya" için ağ özeti (hash) eşitliği
+   testi.
+7. Düz dilim kurucusu: `IstSurlar._run(host, L, k, lod, tohum, o)` yerel +x'te düz kurar (surlar.gd:412, 1220); SurOyun yan
+   dilimleri lod 0, uzak katman yan başına 2×110 m lod 2 (sur_oyun.gd:564-600). v2 görünüşü ve `sur_doku` gölgelendiricisi
+   yalnız atası "SurOyun_*" adlıysa uygulanır (surlar.gd:414-425, 442-448): eski dünya kökü böyle adlandırılır ya da seçmeli
+   bayrak; yoksa sur eski "ashlar" ile çizilir (iki kalem olur).
+8. Kapı eşlemesi (koddaki sıradan çıkarım, doğrula): `LAND_GATES` 7 kapı (world1453.gd:127): −460 kharisios, −230 pempton,
+   37 romanos, 170 rhegion, 340 pege, 520 ksylokerkos, 650 altin_kapi (surlar.gd:1288-1300). Dünyada Romanos x 37 (world1453.gd:103
+   yorumu eski). Sözleşmede altin_kapi ve ksylokerkos kapalı, açıklıklar 3,6–6,4 m; eski dünyada hepsi açık (K2):
+   kapı kalemine seçmeli açık/en. `Landmarks1453._golden_gate` (landmarks1453.gd:510-516) için K2.
+9. Hub birleşmesi: FAR_REGIONS'ın ilk dikdörtgeni dünya x −16,5…53,5, z −18,3…1,7. `far_hub` (`sur_yeni = false`) kutu iç sur,
+   altı kutu kule ve süslü kapıyı FarHub/FarHubLo'ya pişirir, çarpışmayı FarHubBody'ye kopyalar (byz_city.gd:355-427,
+   2004-2060). `far_hub` kutu sur parçalarını atlar (iskele ve nöbet yeri kalır), iç suru SiegeField kesintisiz kurar,
+   FarHubBody'den sur şekilleri düşer. `_inner_spans` hub dikdörtgenini bölümün kendi keep'inden ayırmalı (30/30o,
+   `--eskisur=6`).
+10. Sur üstüne oturanlar yeni yüksekliklere (12,12 / 8,62) ve kule x'lerine göre yeniden oturur (x'ler ve rng çekim sırası
+    aynı):
+    - SiegeField: savunanlar y 8 / z 14,9 ve y 12 / z −1,6 (512-545), dişler (441-452), nöbet ateşleri (548-559),
+      sancaklar ve `victory()` (477, 1287).
+    - WallRear: `WALK_Y 8`, `WALK_Z 14,9`, kule ızgarası 51,5+55k, `_wall_details`, `_oil_posts` (wall_rear.gd:852-935).
+    - DroneDefense z 420/401 ışınları (drone_defense.gd:94-97); 43o `WALLS_AT` (chapter43o.gd:34).
+    `wall_rear.gd` izni "sur üstü oturtma" olarak genişletildi.
+11. Rng: `_wall_extension` alanın tek `rng`'sinden (tohum 1453407, siege_field.gd:109) çeker: kule boyu (458; kapı/keep
+    elemesinden ÖNCE), sancak (474-476), yan başına 9 yara (492-503), savunanlar (517-528), ateşler (553-556). Sonraki `_city`,
+    `_no_mans_land`, `_troops`, `_camp` aynı akışı kullanır. Eski döngü "kuru çekim" olarak kalır (`_free`, `_in_stockade`,
+    `WallRear.busy` dalları dâhil). Test: `_wall_extension` sonrası `rng.state` ile ordugâh/bölük konum özeti önce = sonra
+    (camp, landwalls, blachernae, byz_aya).
+12. Çarpışma: WorldWalk görünen ağı üçgenle katılaştırır ama ShaderMaterial'i atlar (world_walk.gd:153-174); `sur_doku`
+    ShaderMaterial üretir (sur_doku.gd:498-502); lod 2'de gövde yok (surlar.gd:181-187). Yeni görseller `no_walk`;
+    LOD'dan bağımsız tek sade çarpışma (sur, kule, hendek yakaları ve dibi, kapı geçidi, rampalar) bütün hat boyunca. Yeni
+    sonda: hat boyunca 10 m'de bir ışın, 7 kapıdan iki yönde yürüyüş, hendekten çıkış (bugün ~80 m'de bir rampa,
+    siege_field.gd:333-348). WALKCHECK'in 150 m ızgarası bunu yakalamaz (walk_check.gd:40-66).
+13. Başarım: eski hat ≈ 1280 m (x −580…700); hepsi lod 0 olursa +4–5 sn. Varsayılan: lod 2, `World1453.bake` ile parça
+    parça pişmiş (world1453.gd:448; far_hub'ın 300 m hi/lo kalıbı byz_city.gd:389-398); lod 0 yalnız oynanış alanında ya da
+    oyuncuya 300 m içinde. Eşik: load_time 9/10/43o/25/30 için ≤ +%10 ya da ≤ +0,8 sn; çizim çağrısı ve üçgen sayısı önce/
+    sonra yazılır, açılış karelerinde çizim çağrısı artışı ≤ %15. Sonradan akışla kurulan dilim çarpışma almaz (WorldWalk
+    bir kez toplar, world_walk.gd:73-80).
+14. Harita: `tools/map_bake.gd` surları sabitlerden çizer (z 28 en 14, z 15, z −2,3; satır 154-165). Hendek ya da sur z'si
+    değişirse (K1 ile değişecek) `tools/map_bake.gd` de güncellenir (izinli), harita yeniden pişirilir, AE farkı yazılır.
+15. Lykos barikatı: bkz. K5 (wall_rear.gd:10; siege_field.gd:373-389; `GEDIK_W` 8, surlar.gd:41). Mesoteikhion kesiminin
+    yerleşimi (gedik, poterna, merdiven x'leri) taşınmaz; genel `SurDilimi`, yaralar kalemin kendi hasar diliyle.
+16. ZFIGHT adayları: yeni kalemin levhaları y −0,12 / −0,02 (surlar.gd:485-490); şehir arazisinin z −3'teki kenarı
+    (siege_field.gd:259), Blakherna levhası (üstü y 0, x −702…−578, z −9…37; horn_world.gd:860), kapı dolgu geçidi
+    (siege_field.gd:320). Eski zemin kutuları (424-426) yalnız yeni levhanın örttüğü yerde kalkar.
+17. Bayraklar: bkz. K6 (sur_set.gd:67-78; sur_set_hub.gd:25; byz_city.gd:176-177; baglama.gd:105-110). `tests/walk_check.gd:15`
+    ("landwalls", orta boş) çalışmaya devam etmeli.
+18. "Bit bit aynı" ölçütü: 20, 26, 26o, 36b, 22o, 8y, 23, 24, 31o için sahne ağ özeti (MeshInstance3D sayısı + köşe toplamı
+    hash'i) ve var olan sonda satırları önce = sonra; `SURSET`/`SURHUB`/`ISTBAGLAMA` satırlarında yalnız ms farkı.
+19. KUTU YASAĞI ile lod 2: bkz. K4 (`_s` lod ≥ 2 → `Props.box` + "ashlar_far", surlar.gd:185-187; 43o sınırı bütün şehir,
+    chapter43o.gd:38).
+20. Kabul: uçlarda ve hub birleşmesinde boşluk ve bindirme ≤ 5 cm, ZFIGHT 0. FLIGHTCHECK'e "sur ve kulelerin içinden
+    geçilmez" ışını ekle (CampDay panoraması `far_scenery`, camp_day.gd:985-989). Kanıta 30/30o göz hizası ve 18 köprüden
+    bakış ekle.
