@@ -1,4 +1,4 @@
-# DURUM 26 Kasım 13:20 UTC — 0.99.129 main c1f150cf (CI #347 koşuyor; bekçi bekle_yayin.sh). G23 AÇIK: session_01RAjzxKxAiz9b5u8EAeVXuv → wip/sur23 (yazı devir/gorev/prompt_G23_eskisur.txt); bekçi bekle_g23.sh
+# DURUM 26 Kasım 14:05 UTC — 0.99.129 YAYINDA (CI #347 başarılı; releases/latest v0.99.129, guncelleme.json 0.99.129). G23 AÇIK: session_01RAjzxKxAiz9b5u8EAeVXuv → wip/sur23; bekçi bekle_g23.sh
 
 # (Önceki) DURUM 26 Kasım 05:50 UTC — G22 TESLİM EDİLDİ ama v2de surun ardı BOŞ ÇAYIR; kap yine yeniden başladı
 
