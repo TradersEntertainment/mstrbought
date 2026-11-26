@@ -1,6 +1,29 @@
-# DURUM 26 Kasım 18:35 UTC — 0.99.130 adayı 19d2e926 (G23 + 27 Dressing düzeltmesi); tam paket tam130 yeniden koşuyor (bekçi). Kum havuzu planı devir/KUM_HAVUZU_PLANI.md (Pazar 08:00 TR başlangıç)
+# DURUM 26 Kasım 19:05 UTC — 0.99.130 tam paketi KOŞUYOR (yalnız bekçisi düştü); kum havuzu Pazar 08:00 TR
 
-# (Önceki) DURUM 26 Kasım 05:50 UTC — G22 TESLİM EDİLDİ ama v2de surun ardı BOŞ ÇAYIR; kap yine yeniden başladı
+## Context
+- 0.99.129 yayında (CI #347 başarılı, guncelleme.json 0.99.129).
+- 0.99.130 adayı `wip/ist2-birlesik` 19d2e926:
+  - G23: eski dünyanın kara surları yeni kalemle (kabul, kareler `kareler/0_99_130/`);
+  - `Dressing._genis_zemin`: 27 Galata bahçe duvarı tepesi yürüyüş noktası olmaz. İlk tam pakette 27'nin yedi çeşidinde VISAUDIT float vardı; 17 hedefli koşu temiz.
+- tam130 (yeniden) 18:30'da başladı ve süreçleri hâlâ çalışıyor (22 süreç, makine yeniden başlamadı: uptime 12:56). Parçalar ~53/114, fail 0, denetim 0. Yalnız bekçi görevi (bcez7y0g1) oturum yeniden başlayınca kayboldu.
+- Sürüm notu `surum130.py` (Galata satırı eklendi), QA `qa130.md` (G23 dersleri + "yardımcının 'önceden de vardı' demesi kanıt değildir"), kareler hazır.
+- Kum havuzu planı `devir/KUM_HAVUZU_PLANI.md` v2 (Fable iki tur, sahibinin kararları: oyuncuya açık + araç, 1453 Fatih, gerçek zamanlı + duraklat, önce prosedürel; bütün bölümler sabit haritada; GÖRSEL İNDİRİM YASAK). Başlangıç Pazar 29 Kasım 08:00 TR. Kota yenilenmesi Pazar 20:00 TR.
+
+## Adımlar
+1. Bekçiyi yeniden kur: `$S/bekle_bitti.sh $S/tam130_ozet.txt 7000` (run_in_background). Süreçler ölürse biten parçaların sonuçları okunur, eksik parça yeniden koşulur.
+2. Temizse (fail 0, `^VISAUDIT ` 0, menüye dönüş 2/2) **0.99.130**:
+   - VERSION; `qa130.md` → `docs/QA_DERSLER.md`; kayıt ve gönderim (wip/ist2-birlesik);
+   - yayın ağacı `docs/_*` hariç, parent main c1f150cf; main + `wip/0.99.130`;
+   - site `surum130.py --yaz`, gönder; CI ve `bekle_yayin.sh 0.99.130`.
+   Denetim satırı çıkarsa: sondayla kök, düzelt, hedefli koşu, paketi yeniden.
+3. Sahibine Türkçe rapor: 0.99.130 yayında, ne değişti, bilinen zayıflar; deniz surları (Marmara/Haliç) yeni kaleme geçirilsin mi sorusu.
+4. Pazar 08:00 TR: kum havuzu D0 (envanter, bölüm × dünya matrisi, 1000 asker başarım sondası); kota yenilenince D1/D2 yardımcıları ve G-model (Blender örnekleri, indirim yasak).
+
+## Doğrulama
+- tam130: 4 parça çıkış 0, FAIL 0, DENETIM 0, MENURETURN 2.
+- CI başarılı; releases/latest v0.99.130; guncelleme.json 0.99.130; site changelog 0.99.130.
+
+# (Eski) DURUM 26 Kasım 05:50 UTC — G22 TESLİM EDİLDİ ama v2'de surun ardı BOŞ ÇAYIR; kap yine yeniden başladı
 
 ## Context
 - **G22 teslim** `wip/saray22` 37ae2b7d (taban 618521d7). Testleri temiz (hub ×2 76/76, sözleşme altılısı aynı, ZFIGHT 0, yükleme süresi artmadı).
