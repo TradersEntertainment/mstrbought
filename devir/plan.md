@@ -1,4 +1,4 @@
-# DURUM 26 Kasım 20:55 UTC — 0.99.130 main ea58ea74 (CI Release #348 45893821990 koşuyor; bekçi bekle_yayin.sh), site bb14360, birleşik 5d120649. Kum havuzu Pazar 20:00 TR
+# DURUM 26 Kasım 22:20 UTC — 0.99.130 YAYINDA (CI #348 başarılı; releases/latest v0.99.130, guncelleme.json 0.99.130). Kum havuzu Pazar 29 Kasım 20:00 TR (D0: envanter, bölüm × dünya matrisi, 1000 asker sondası)
 
 ## Context
 - 0.99.129 yayında (CI #347 başarılı, guncelleme.json 0.99.129).
