@@ -1,4 +1,4 @@
-# DURUM 26 Kasım 19:05 UTC — 0.99.130 tam paketi KOŞUYOR (yalnız bekçisi düştü); kum havuzu Pazar 20:00 TR
+# DURUM 26 Kasım 20:55 UTC — 0.99.130 main ea58ea74 (CI Release #348 45893821990 koşuyor; bekçi bekle_yayin.sh), site bb14360, birleşik 5d120649. Kum havuzu Pazar 20:00 TR
 
 ## Context
 - 0.99.129 yayında (CI #347 başarılı, guncelleme.json 0.99.129).
