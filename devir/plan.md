@@ -1,4 +1,6 @@
-# DURUM 26 Kasım 05:50 UTC — G22 TESLİM EDİLDİ ama v2'de surun ardı BOŞ ÇAYIR; kap yine yeniden başladı
+# DURUM 26 Kasım 12:55 UTC — 0.99.129 YAYINDA (main c1f150cf, CI #347 koşuyor, site 798fcdd); bekçi bekle_yayin.sh 0.99.129
+
+# (Önceki) DURUM 26 Kasım 05:50 UTC — G22 TESLİM EDİLDİ ama v2de surun ardı BOŞ ÇAYIR; kap yine yeniden başladı
 
 ## Context
 - **G22 teslim** `wip/saray22` 37ae2b7d (taban 618521d7). Testleri temiz (hub ×2 76/76, sözleşme altılısı aynı, ZFIGHT 0, yükleme süresi artmadı).

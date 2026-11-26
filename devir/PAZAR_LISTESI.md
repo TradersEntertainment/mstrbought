@@ -95,6 +95,8 @@
 > eski dünya kara surları hâlâ SiegeField kutu.
 > Kalan (yeni açık iş 12): 36b karşı uç sırasında savunucular ≤ 0,15 sn 0,12–0,29 m yanından geçiyor (eskiden de; denetim
 > 3 ardışık ister).
+> **26 Kasım 12:55 UTC — 0.99.129 main c1f150cf (CI Release #347 45823466771 koşuyor), site 798fcdd.** Tam paket temiz
+> (6fe9d426: 4 parça çıkış 0, FAIL 0, denetim 0, menüye dönüş 2/2). Birleşik dd0f6dd1. Önceki not:
 > **26 Kasım 10:40 UTC — 0.99.129 tam paketi koşuyor:** G21 (Lykos bostan) + G22 (saray/kançılarya ~400 m içeri) +
 > G22b (eski meydan yerinin dolgusu: yol, evler, bostan, bağ, harabe, nöbet yeri) + 31o `clear_line` + 26 sürekli bekçi +
 > 22o hendek şeridi. Birleşik `wip/ist2-birlesik` = 6fe9d426. Sahibine kareler `kareler/0_99_129/`.
