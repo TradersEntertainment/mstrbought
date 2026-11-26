@@ -1,4 +1,42 @@
-# DURUM 25 Kasım 22:15 UTC — G21 BİRLEŞTİ (cc8cae88 → wip/ist2-birlesik; harita yeniden pişti 6dec6901, gönderildi).
+# DURUM 26 Kasım 02:45 UTC — KAP YENİDEN BAŞLADI; G22 AÇIK; 0.99.129 tam paketi yarım kaldı
+
+## Context
+- 0.99.129 adayı (G21 Lykos şeridi + harita) `wip/ist2-birlesik` 618521d7'de (kod 6dec6901 + G22 görev yazısı kaydı).
+- Tam paket tam129 (22:04) makine yeniden başlamadan önce:
+  - 3/4 parça bitti: 456'nın 456'sı AUTOTEST PASS; parça 2 ve 3 fail = 0.
+  - Parça 1'de bir denetim satırı paketi düşürdü: `VISAUDIT personhidden key=D31O_AZ_03` (31o `=late`). Bir Person (`Chapter31o>Node3D>Person`, (−11,8; −70,8)) konuşan azabın önünde.
+    - Önceden var olan seyrek kusur: bir eski tam pakette de çıkmış.
+    - 0.99.127'de `Unclip.clear_line` eklenmişti (`chapter31o.gd:1354-1356`), yine de çıkıyor.
+    - G21 şeritteki kalabalığı artırdığı için sıklaşmış olabilir.
+  - Parça 0 son kontrollerde (MENURETURN PASS sonrası) kesildi.
+- **G22 SARAY İÇERİ açıldı:** session_01RAjzxKhqXDAz1Nxq4oRyN8 → `wip/saray22`. Yazı `docs/_ajan/gorev/G22_saray.md` (+ Fable 26 düzeltme). Faz A–D, 16–24 sa; her faz `durum.md`'de `## Faz X: TAMAM`.
+  - Bekçi yok (yeniden başlama hepsini sildi).
+
+## Adımlar (sırayla)
+1. **Ortam:** Godot `$S/godot/godot` yerinde, depolar yerinde (doğrulandı). Arka plan bekçilerini yeniden kur:
+   - G22 bekçisi: `$S/bekle_g21.sh` kalıbıyla `bekle_g22.sh`; `wip/saray22:docs/_kanit_saray22/durum.md` BİTTİ ya da "Faz A: TAMAM".
+2. **31o personhidden kökü:**
+   - `--chapter=31o --autotest=late` ve öteki çeşitler, `--max-fps 20`, 4 aynı anda × 2 tur, tam günlük. Hangi Person (CityLife/IstHayatYakin yürüyeni mi, sahne kişisi mi), ne zaman araya giriyor.
+   - Kökten düzelt. Seçenekler:
+     - `Unclip.clear_line` yürüyenleri de kapsasın;
+     - replik boyunca hattı tutsun;
+     - kalabalık doğuşu konuşma çevresini dışlasın.
+   - Sonra 31o bütün çeşitleri ×2 temiz.
+3. **Tam paketi yeniden koş:** `$S/tam129.sh` (ısıtma + 4 parça; `VISAUDIT ` boşluklu sayım), setsid + bekçi.
+   - Temizse **0.99.129**:
+     - VERSION ve QA (`qa129.md`: G21 dersleri, harita, 37o/36b/ESYATEST/38o dersleri zaten 0.99.128'de);
+     - ağaç `docs/_*` hariç, parent main 2a951cc6; main + `wip/0.99.129`;
+     - site notu `surum129.py` (Lykos şeridi bostan/bağ/harap kilise; harita güncel; meydanın taşınması sonraki sürümde);
+     - CI, `guncelleme.json` 0.99.129.
+4. **G22 teslimlerinde:** Faz A geldiğinde 43o karelerini tam boy incele. İstenirse Faz A ayrı yayın (0.99.130); kalanlar sonra.
+5. Sahibine Türkçe kısa rapor: 0.99.129 yayında, ne değişti, G22 durumu; ElevenLabs anahtarı hatırlatması.
+
+## Doğrulama
+- 31o `=late` ve bütün çeşitler ×2 (20 FPS) VISAUDIT 0.
+- Tam paket: fail = 0, gerçek denetim 0, menüye dönüş 2/2.
+- CI başarılı; `guncelleme.json` 0.99.129.
+
+# (Eski) DURUM 25 Kasım 22:15 UTC — G21 BİRLEŞTİ (cc8cae88 → wip/ist2-birlesik; harita yeniden pişti 6dec6901, gönderildi).
 #   Tam paket tam129 (setsid, 22:04; bekçi ba4kd8rmt) → temizse 0.99.129. G22 yazısı devir/gorev/prompt_G22_saray.txt,
 #   Fable inceliyor → düzeltmeleri ekle → G22 aç (taban 6dec6901, dal wip/saray22).
 # (Eski) DURUM 25 Kasım 19:55 UTC — G21 LYKOS AÇILDI: session_01RAjzxKE9tCRLMHXwBnsvLr → `wip/lykos21` (yazı devir/gorev/prompt_G21_lykos.txt
