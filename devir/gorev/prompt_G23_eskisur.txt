@@ -1,0 +1,112 @@
+G23 — ESKİ DÜNYANIN KARA SURLARI YENİ KALEMLE (Faz 3; sahibinin onayıyla)
+
+Depo TradersEntertainment/nothistorygame. Taban `wip/ist2-birlesik` (dd0f6dd1 = 0.99.129). Dal `wip/sur23`; yalnız bu
+dala gönder. Türkçe çalış, Türkçe yaz. Godot 4.4.1, gl_compatibility, prosedürel GDScript. Plan onayı sorma; başla ve
+bitir. Tahmini 6–10 saat.
+
+ÖNCE OKU
+- `docs/SUR_SOZLESME.md` (yeni sur kalemi ve dondurulmuş ölçüler), `docs/QA_DERSLER.md`'nin son 300 satırı.
+- `scripts/level/siege_field.gd` (özellikle `_wall_extension` 412–567, `_gates`, `_inner_spans`, `_keep_covers_inner`,
+  hub boşluğu ~262–298, `_horn_end`), `scripts/level/land_walls.gd`, `scripts/world/world1453.gd` (FAR_REGIONS, bölgeler,
+  `byz_walls` dönüşümü), `scripts/level/byz_city.gd` (`far_hub`, eski kipte `_build_walls`), `scripts/world/wall_rear.gd`.
+- Yeni kalem: `scripts/world/ist/surlar.gd`, `surlar_ayrinti.gd`, `surlar_kapi.gd`, `sur_kule.gd`, `sur_doku.gd`,
+  `sur_gorunus.gd`, `sur_oyun.gd` (`kur`: oyun dilimi + yan dilimler + uzak katman), `sur_oyun_ag.gd`, `sur_set.gd`,
+  `sur_set_sahne.gd` (yeni setin SiegeField ovasını `SurSet.ova_ofs` ile nasıl hizaladığı).
+
+SORUN
+- Yeni surda oynanan bölümler (SurSetSahne) ve İstanbul v2 bölümleri surları yeni kalemle çiziyor: tuğla hatıllı taş, gerçek
+  kule biçimleri, mazgallar, sur yolu, hendek kıyıları.
+- Eski dünyayı (World1453 + SiegeField, `world = true`) kuran bölümlerde kara surlarının tamamı hâlâ kutu: düz kutu iç ve
+  dış sur, kutu kuleler, kutu hendek (`SiegeField._wall_extension`, `LandWalls`'ın orta kesiti, `ByzCity.far_hub`'ın eski
+  kipteki kutu iç suru).
+- Bunlar başta Osmanlı tarafının ordugâh bölümleri: 6a, 9, 10, 10b, 10z, 13 ordugâh, 16, 24o, 25, 43o. Kanıt: 43o drone
+  karesi `kareler/0_99_129/1_43o_drone_romanos_once_ust_sonra_alt.jpg` (mstrbought deposunda; nothistorygame'de aynı kare
+  `docs/_kanit_saray22/kare/sahip_1_43o_drone70_romanos_once_ust_sonra_alt.jpg`). Önde kutu surlar.
+- Sahibinin kuralı: TEK GÖRSEL DİL. Aynı sur, oyunun her yerinde aynı kalemle görünmeli.
+
+İŞ
+1. Envanter (ilk 1 saat; `docs/_kanit_sur23/plan.md`):
+   - Eski dünyada kara surunu kuran BÜTÜN yollar ve onları kullanan bütün bölüm/çeşitler. Liste kodla çıkarılır, tahmin
+     değil (grep + kısa sonda: her bölümde kurulan kutu sur düğümleri).
+   - Hangi bölümlerde sur kameraya ne kadar yakın görünüyor (göz hizası mı, ordugâhtan 300 m+ mı, drone mu).
+   - Yaklaşım (aşağıdaki ilkelerle) ve yürüyebilen/çarpışan parçaların listesi (kapılar, sur yolu, hendek geçitleri).
+   - plan.md'yi kaydedip gönder, BEKLEMEDEN devam et.
+2. Eski dünyanın kara surunu yeni kalemle kur.
+   - İlkeler:
+     - Eski dünyanın sur hattı düz (LandWalls ekseni: x sur boyunca, +z ova; iç sur z −2,3, dış sur z 14–16, hendek
+       z 20–36). Ordugâh, siper, bataryalar, kapılar (`World1453.LAND_GATES`), şehir (CityPlan, WallRear) bu eksene
+       göre kurulu. EKSEN DEĞİŞMEZ; yeni kalem bu düz hatta, aynı z'lerde kurulur.
+     - Sözleşmedeki kesit ölçüleri (yükseklikler, kalınlıklar, kule aralıkları) kullanılır. Yeni setin SiegeField
+       hizalaması (`SurSet.cerceve`, `SurSet.ova_ofs`) yol gösterir: yeni sette kesim ile ova zaten uyumlu.
+     - Kapılar yeni kalemin kapısıyla (surlar_kapi), kuleler yeni kalemin kulesiyle.
+     - Uçlar: kuzeyde `wall_x_min` (Blakherna/Haliç'e bağlanış, `_horn_end`), güneyde EXT (Marmara) açıkta kalmaz.
+     - Hub (sur parçası, ByzCity) ile birleşme yeri boşluksuz ve üst üste binmeden.
+   - Uzaklık katmanları: göz hizasında ve drone'da görünen kesim tam ayrıntı; uzak kesimler düşük ayrıntılı, pişmiş ve az
+     çizim çağrılı (yeni kalemin lod 2'si ya da kendi pişmiş uzak ağın). Çizim çağrısı ve üçgen önce/sonra rapora.
+   - Çarpışma: bugün yürünen/çarpışan yerler aynı kalır (kapı geçitleri, hendek, sur önü). Oyuncunun eriştiği yerlerde
+     görünen ile çarpışan aynı olmalı.
+3. Kutu modeller yalnız yeni kalemin kurulduğu yerde kalkar. `--eskisur` gibi eski yollar varsa çalışmaya devam eder
+   (bayrakla eski kutu kurulabilir). Eski kutu kodunu silme; yeni yol varsayılan olsun.
+4. Harita: eski dünyanın görünüşü değiştiyse `res://tools/map_bake.tscn` ile yeniden pişir; `compare -metric AE` farkını
+   yaz; MAPCHECK PASS.
+
+DEĞİŞMEZLER (her kayıttan önce)
+- Sur sözleşmesi altılısı birebir:
+  - `tests/_ist/sur_sozlesme.tscn` → `SURSOZLESME PASS kalem=13 kesim=8`
+  - `tests/_ist/sur_oyun_denetim.tscn` → `SUROYUN nokta=519 havada=0 gomuk=0 katida=0`
+  - `tests/_ist/sur_oyun_yuru.tscn` → `WALKTHRU OZET yol=7 tamam=7 takilma=0 dusme=0`
+  - `tests/_ist/esya_fizik.tscn` → `ESYATEST PASS`
+  - `tests/_ist/tasima11_halic_sonda.tscn` → `HALICSONDA OZET carp=661 karma=3854034809`
+  - `tests/_ist/tur14_marmara_sonda.tscn` → `MARMARASONDA OZET carp=1837 karma=2250736444`
+- Yeni sette oynanan bölümler (SurSetSahne) ve v2 bölümleri bit bit aynı: değişiklik yalnız eski dünya yolunda. Ortak
+  dosyaya (surlar.gd vb.) dokunursan seçmeli bayrakla, varsayılan davranış aynı.
+- Eski dünyanın rng sıraları kaymaz: CityPlan meydan/ana yol listeleri, WallRear `depth/in_band`, SiegeField'in ordugâh,
+  siper, bölük dizilişi aynı (kutu sur kaldırılırken rng çağrıları da kalkıyorsa sırayı koru: çek-sonra-at).
+- WORLDCHECK aynı (regions=13); oynanış konumları (kapılar, toplar, siper, ordugâh, bölüm kişileri) aynı.
+- Yükleme süresi (load_time: 9, 10, 43o, 25) belirgin artmasın; YUKLEMEAUDIT_KESIN 0.
+- Denge, sabır, gizli süreler, replik metni/sesi değişmez; yeni replik yok; kalabalık azaltılmaz.
+- KUTU YASAĞI. HAVADA DURAN HİÇBİR ŞEY OLMAZ (gömük de yok). TEK GÖRSEL DİL.
+
+KANIT (`docs/_kanit_sur23/`)
+- ÖNCE (dd0f6dd1) / SONRA tam boy kareler, aynı araç ve kamerayla:
+  - 43o drone (sahibinin bakışı; iki yoldan: taze süreç ve önce bir v2 bölümü kurulmuş süreç), Sultan'ın VIEW1–3 anı;
+  - 9 ve 27'de ordugâhtan surlara; 10, 10b, 10z, 16, 24o, 25'in açılış bakışları; 6a;
+  - ölü bölgeden göz hizasında (1,7 m) sura, 50 m ve 150 m'den; kapı (Romanos ve en az bir başka kapı) yakından;
+  - iki uç (Blakherna/Haliç bağlanışı ve Marmara ucu), hub birleşme yeri, 1 km'den uzak bakış.
+- Kareleri KENDİN tam boy aç ve bak. Havada, gömük, iç içe, kutu, titreşen yüz (z-fighting) varsa düzelt. Akışlı içerik
+  varsa (v2 bölümleri) çekimden önce akışın bitmesini bekle.
+- Sahibe 4 yan yana kare: `kare/sahip_*_once_ust_sonra_alt.jpg`.
+- Testler (`--max-fps 20`):
+  - eski dünya bölümleri bütün çeşitleriyle ×2: 6 (eski dünya çeşitleri), 9, 10, 10b, 10z, 13 (ordugâh çeşitleri), 16,
+    24o, 25, 43o (ve envanterde çıkan öteki bölümler);
+  - sözleşme altılısı; WORLDCHECK, MAPCHECK, WALKCHECK, FLIGHTCHECK; ZFIGHT 0 (değişen bölümler);
+  - VISAUDIT, WALKTHRU, HELDAUDIT, ARMAUDIT, GORUNMEZZEMIN, ALETAUDIT, DONUKAUDIT, ESYAAUDIT (dusme/havada/gomuk/tikama/
+    sinir), JOURNEY, YUKLEMEAUDIT_KESIN, "SCRIPT ERROR" satırı 0;
+  - yeni sette oynanan bölümlerden örnek ×1 (20, 26, 26o, 36b, 22o) ve v2'den (8y, 23, 24, 31o) ×1: bit bit aynı
+    olduklarını göstermek için;
+  - menu_return 26 ve 20o.
+- Rapor: `docs/_kanit_sur23/rapor.md`. Ne yaptın, envanter, sayılar (çizim/üçgen/yükleme önce|sonra), dürüst "hâlâ kötü".
+- DURUM SATIRI: `docs/_kanit_sur23/durum.md`'nin İLK satırı ilerlemede "G23 SÜRÜYOR <saat UTC> <kısa not>", bitince
+  tam olarak "G23 BİTTİ <saat UTC> <commit>". İlk 40 dakikada bir ara kayıt gönder.
+
+ÇALIŞMA DÜZENİ
+- Kurulum: Godot 4.4.1 linux x86_64 resmi sürümü `~/is/godot/godot` (indir); `timeout 900 ~/is/godot/godot --headless --path . --import`.
+  Pencereli kare: `xvfb-run -a -s "-screen 0 1280x720x24" ~/is/godot/godot --path . --rendering-driver opengl3 --resolution 1280x720 …`;
+  xvfb yoksa `sudo apt-get install -y xvfb` (sudo YALNIZ apt-get için). Var olan kare araçları: `tests/_ist/tasima12_kare.*`,
+  `tests/_ist/lykos21_kare.*`, `tests/_ist/g22b_kare.*`; bölümlerde `--shots=<klasör>`.
+- Süreçler: arka plan işleri ≤ 10 dk; aynı anda en çok 4 süreç; bitti bildirimi gelmezse çıktıyı kendin oku. v2 önbelleği
+  ortak: değişiklikten sonra önce TEK süreçle ısıt, sonra paralel.
+- Kayda eklenmeyenler: Godot'nun ürettiği `.import`/`.translation` ve ilgisiz `.uid`'ler. Yeni `.gd`'lerin `.uid`'si eklenir.
+- Kayıt iletisine model adı yazma. Dalda duran öteki `docs/_*` klasörlerine dokunma. Ham kare yığınlarını iş bitince sil.
+
+YASAKLAR
+- Oturum/tetikleyici/zamanlama/bildirim/ajan başlatma araçları (send_later, create_trigger, create_session, Agent dahil).
+- `pkill`/`killall` (yalnız `kill <pid>`). Ses üretmek. PR açmak. main'e ya da başka dala dokunmak; geçmişi yeniden yazmak,
+  zorla göndermek. Denetimi susturmak, eşik gevşetmek. Liste dışı dosya: dokunabileceklerin envanterde gerekçesiyle yazılı
+  olanlar (beklenenler: siege_field.gd, land_walls.gd, world1453.gd, byz_city.gd yalnız far_hub/eski kip sur kısmı,
+  wall_rear.gd yalnız sur birleşmesi, gerekirse surlar*.gd/sur_kule.gd/sur_oyun*.gd yalnız seçmeli bayrakla, yeni
+  `scripts/world/ist/eski_sur.gd` gibi dosyalar, `tests/_ist/` altında kendi araçların, `assets/ui/map1453.png`).
+  `project.godot`, VERSION, `.github/*`, `i18n/*`, ses dosyaları, sözleşme dosyaları YASAK.
+- İzin istemi doğuran komutlar: rm/mv/cp -r hedefinde kabuk değişkeni; heredoc zincirinde silme; `bash -c`; until/while
+  -sleep bekleme döngüsü; geçici dosyalar yalnız `~/is/` altında; `.git/` ya da `.gitignore`'a yazmak; `git config`;
+  `git clean`.
