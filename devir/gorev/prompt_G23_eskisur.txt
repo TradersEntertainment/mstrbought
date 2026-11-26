@@ -167,7 +167,7 @@ DÜZELTMELER (danışman incelemesi; yukarıdakiyle çelişirse KARARLAR, sonra 
       sancaklar ve `victory()` (477, 1287).
     - WallRear: `WALK_Y 8`, `WALK_Z 14,9`, kule ızgarası 51,5+55k, `_wall_details`, `_oil_posts` (wall_rear.gd:852-935).
     - DroneDefense z 420/401 ışınları (drone_defense.gd:94-97); 43o `WALLS_AT` (chapter43o.gd:34).
-    `wall_rear.gd` izni "sur üstü oturtma" olarak genişletildi.
+    `wall_rear.gd` izni "sur üstü oturtma" olarak genişletildi. İzinli dosyalara ayrıca `horn_world.gd` ve `blachernae.gd` (yalnız ek yeri), `landmarks1453.gd` (yalnız `_golden_gate`), `drone_defense.gd` ve `chapter43o.gd` (yalnız sur yüksekliği/konumu sabitleri), `tools/map_bake.gd` eklendi.
 11. Rng: `_wall_extension` alanın tek `rng`'sinden (tohum 1453407, siege_field.gd:109) çeker: kule boyu (458; kapı/keep
     elemesinden ÖNCE), sancak (474-476), yan başına 9 yara (492-503), savunanlar (517-528), ateşler (553-556). Sonraki `_city`,
     `_no_mans_land`, `_troops`, `_camp` aynı akışı kullanır. Eski döngü "kuru çekim" olarak kalır (`_free`, `_in_stockade`,
