@@ -1,4 +1,4 @@
-# DURUM 26 Kasım 14:05 UTC — 0.99.129 YAYINDA (CI #347 başarılı; releases/latest v0.99.129, guncelleme.json 0.99.129). G23 AÇIK: session_01RAjzxKxAiz9b5u8EAeVXuv → wip/sur23; bekçi bekle_g23.sh
+# DURUM 26 Kasım 16:30 UTC — 0.99.129 YAYINDA. G23 BİTTİ ve birleşti (wip/ist2-birlesik 961e01a5); tam paket tam130 koşuyor (bekçi bekle_bitti) → temizse 0.99.130 (surum130.py, qa130.md, kareler/0_99_130)
 
 # (Önceki) DURUM 26 Kasım 05:50 UTC — G22 TESLİM EDİLDİ ama v2de surun ardı BOŞ ÇAYIR; kap yine yeniden başladı
 
