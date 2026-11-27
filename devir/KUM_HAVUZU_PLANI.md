@@ -175,3 +175,115 @@ Hazırlandı 26 Kasım 2026; Fable (üst akıl) iki kez inceledi (iki tur), düz
 3. İlk pilot taşıma bölümü? (Öneri: 28o.)
 4. Kum havuzu ana menüye D3'ten sonra mı çıksın? (Öneri: evet.)
 5. Model örnekleri için ilk beş parça: kule, ev, çadır, top, asker mi?
+
+## EK: YAPAY ZEKÂLI ASKERLER VE DOĞAL DAVRANIŞ: YAPILACAKLAR (27 Kasım; sahibinin sorusu)
+
+### Context
+- 0.99.130 yayında (CI #348 başarılı; guncelleme.json 0.99.130).
+- Sahibi sordu: "Kum havuzunun çalışması için neler yapılması gerekecek? Yapay zekâlı askerler, doğal davranışlar; hepsine çalışmak gerekecek."
+- Bu bölüm, `devir/KUM_HAVUZU_PLANI.md`'deki aşamaların (D0–D7) içini askerler ve canlılık açısından açar. Başlangıç Pazar 29 Kasım 20:00 TR.
+- Bugün elimizde olanlar (kodla):
+  - Davranışlar bölüme bağlı küçük döngüler:
+    - `reserve_loop` (147 satır): bakınma, ok yağmurunda kalkan altı, çavuş bağırır;
+    - `archer_loop` (87): yay germe, ok bırakma;
+    - `spear_loop` (199): siperden bakma, merdivendekini dürtme;
+    - `Rout` (211): dağınık geri çekilme;
+    - `Walker` (376) ve `RectNav` (102): yürüyüş ve dolanma;
+    - `IstHayatYakin` (1672): oyuncunun çevresinde yaşayan şehir.
+  - Kitle görselleri: `Crowd` (donmuş kopya + MultiMesh), `PoseCrew` (uzakta poz değiştiren asker), `NightArmy` (dört karelik koşu).
+  - Ordu ve dövüş: `Assault` (1695 satır), `WaveRunner` (312), `Duelist` + `Melee` (oyuncu merkezli).
+  - `Rig`'de ~23 hazır poz/iş: aim, carry, cheer, chop, crouch, dead, dig, eat, hammer, lie, point, push, sit, sleep, sweep, wave…
+- Eksik olan: emir alan, kendi karar veren, birbiriyle savaşan bir ordu katmanı. Bugünkü askerler sahnelenmiş; serbest kum havuzunda kendi başlarına hiçbir şey yapamıyorlar.
+
+### Yapılacaklar (katmanlar)
+
+### 1. Benzetim çekirdeği (her şeyin altı)
+- Asker kaydı veri dizilerinde (sahne düğümü değil):
+  - konum, hız, yön, taraf, birlik;
+  - rol: mızraklı, okçu, tüfekçi, topçu, süvari, işçi, sancaktar, çavuş;
+  - can, moral, yorgunluk, durum, hedef.
+- Sabit adım: kararlar 10 Hz, konum her kare ara değerle. Tohumlu rastgele (aynı kayıt → aynı savaş).
+- Uzamsal ızgara: komşu ve düşman araması, iç içe girmeyi önleme (bugünkü `Unclip` ızgara fikri).
+
+### 2. Hareket ve yol bulma
+- Akış alanı (flow field): birlik hedefine giden yol haritası. Maliyet haritası sahnedeki çarpışmalardan çıkar: sur, hendek, kapı, gedik, merdiven.
+- Düzen tutma: saf, kare, dağınık, kama.
+  - Askerler düzendeki yerine doğru gider, komşusundan ayrışır.
+  - Dönüşte ve engelde düzen bozulup yeniden kurulur.
+- Sur geçişleri: `SurOyun`'un yol, dayama ve doğma noktaları. Merdiven (`Ladder`), kule (`SiegeTower`), gedik.
+
+### 3. Karar (askerin ve birliğin beyni)
+- Birlik durumları: bekle, ilerle, saldır, siper al, tut, geri çekil, bozgun, toplan.
+  - Geçişler fayda puanıyla (utility AI): tehdit, moral, kayıp, emir.
+- Asker:
+  - hedef seçer (en yakın, en zayıf, emir hedefi);
+  - temasa girer, menzildekine atar;
+  - moralini komşularından ve sancaktan alır.
+- Komuta:
+  - Fatih olarak oyuncunun emirleri;
+  - karşı tarafın basit generali: gediği tut, sur yolunu savun, karşı hücum, ihtiyatı sür.
+
+### 4. Savaş çözücüleri (bugünküler oyuncu merkezli, yenileri gerekir)
+- Yakın dövüş: temas hattında istatistiksel çözüm (saldırı, savunma, yorgunluk, moral). Görünüşü vuruş pozları + toz/kıvılcım.
+  - Oyuncu göz hizasında savaşırsa en yakın birkaç asker `Duelist` olur.
+- Ok ve tüfek: balistik ok/kurşun yağmuru (bugünkü ok ağı), siper ve kalkan etkisi.
+- Top:
+  - doldur–ateş döngüsü, balistik gülle;
+  - sur hasarı = gedik yuvasında aşama (kara surunun 4 aşaması), ahşap perde ve siper kırılması.
+- Kuşatma araçları: merdiven dayama, tırmanma, kuleden atlama, kızgın yağ ve taş (bugünkü parçalar).
+
+### 5. Doğal davranış (canlılık)
+- Boşta: bakınma, sohbet, silah ve kalkan düzeltme, oturma, ateş başı, nöbet değişimi.
+  - `reserve_loop`/`archer_loop`/`spear_loop` genelleşip her role takılır.
+- Tepkiler:
+  - ok yağmurunda kalkan altına çömelme;
+  - yakına gülle düşünce irkilme ve yere atılma;
+  - arkadaşı düşünce dönüp bakma;
+  - zaferde sevinç; bozgunda dağınık kaçış (`Rout`).
+- Yaralı ve ölü: düşme, yerde yatma, yaralı taşıma, ceset sınırı ve görüş dışında silinme (bugünkü kural).
+- Ordugâh ve lojistik: su/barut/taş taşıyan, kazan başı, at sırası, yürüyen devriye (`carry`, `dig`, `hammer` işleri).
+- Ses: savaş narası, davul (`drum_beat`), çarpışma, top efekti. Mevcut efektlerle; yeni seslendirme sahibinin onayıyla.
+
+### 6. Görünüş ve başarım (1000+ asker)
+- Üç kat:
+  - yakında tam `Person` + `Rig` (poz ve iş veriden);
+  - ortada poz başına MultiMesh (`PoseCrew` yöntemi; koşu `NightArmy`'nin dört karesi);
+  - uzakta `Crowd` donmuş kopya.
+- Katlar arası geçiş sıçramasız: aynı yer, eşlenen poz. Orta ve uzak kat gölgesiz ve dış hatsız; hücreli MultiMesh.
+- Bütçe Pazar sondasıyla belirlenir; hedef 1000+ asker, 30+ FPS, sahibinin makinesinde.
+
+### 7. Komuta arayüzü (Fatih)
+- Seçim: tıkla ya da kutu çiz; birlik kartları.
+- Emir: sağ tık git/saldır; düzen menüsü; Boşluk = duraklat; zaman hızı.
+- Mini harita.
+- Kamera: RTS (yukarıdan) + istenince Fatih'in gözü (otağdan, atla).
+
+### 8. Test ve denetim
+- Ekransız savaş testleri:
+  - 100'e 100 ve 500'e 500;
+  - süre sınırı, asker sayısı korunumu, NaN yok, takılan birlik yok;
+  - aynı tohum → aynı sonuç.
+- Mevcut denetimler orta katmana da: havada/gömük (VISAUDIT), iç içe (overlap), surdan geçme (WALKTHRU), donuk bekleme (DONUKAUDIT).
+- Başarım kapısı (`perf_run.sh`).
+- "Doğallık" kanıtı: göz hizası ve tepeden kısa kare dizileri sahibine (görsel indirim yasak kuralıyla).
+
+### Sıra (KUM_HAVUZU_PLANI'ndaki aşamalara oturuş)
+
+| Aşama | Askerler için ne gelir | Sahibi ne görür |
+|---|---|---|
+| D0 (Pazar 20:00, ben) | 1000 asker başarım sondası (tam / donmuş / poz değiştiren), mevcut davranış envanteri | Kendi makinende üç kipte FPS |
+| D2 (yardımcı B) | 1 + 2 + 3'ün çekirdeği: veri kaydı, akış alanı, düzen, birlik durumları, yakın dövüş çözücüsü, MultiMesh orta kat; tıkla-emir, duraklat | Ovada 100'e 100, bölük seç, git/saldır |
+| D3 | D1 editörüyle birleşir: birlik koy, Oynat. Tepkilerin ilk takımı (kalkan altı, irkilme, düşme, bozgun) | Kendi kurduğun savaşı oynat |
+| D4 | Kuşatma: ok ve top çözücüleri, sur hasarı (gedik aşamaları), merdiven/gedik geçişi, karşı general | Fatih olarak gedikten gir |
+| D5–D6 | Boşta davranışlar ve ordugâh lojistiği, ses, 1000+ asker ve LOD geçişleri, ikinci kat tepkiler (yaralı taşıma, sancak, moral zinciri) | Büyük, canlı bir kuşatma |
+| sürekli | Denetimler, savaş testleri, kare dizileri | Her sürümde önce/sonra |
+
+### Gerçekçi süre
+- Oynanabilir ilk savaş (D2 + D3): 1–1,5 hafta.
+- Fatih kuşatma dilimi (D4): +1 hafta.
+- Canlılık ve 1000+ asker (D5–D6): +1–2 hafta.
+- Doğal davranış işi bitmeyen bir cila; her turda sahibinin karelerine göre artar.
+
+### Doğrulama
+- D0 sondası sahibinin makinesinde ölçülür.
+- Her aşama: ekransız savaş testleri yeşil, denetimler 0, başarım kapısı geçer, tam paket yeşil (hikâye bölümleri bozulmaz), sahibine kare dizisi.
