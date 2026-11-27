@@ -2,7 +2,8 @@
 import json, os, re, subprocess, sys
 S = "/tmp/claude-0/-home-user-mstrbought/30127caa-76dd-5459-81fb-4bbd5156d7e0/scratchpad"
 KAYIT = [(S + "/fragman2/kayit/p_aksiyon_a.avi", S + "/fragman2/kayit/p_aksiyon_a.log"),
-         (S + "/fragman2/kayit/p_aksiyon_b.avi", S + "/fragman2/kayit/p_aksiyon_b.log")]
+         (S + "/fragman2/kayit/p_aksiyon_b.avi", S + "/fragman2/kayit/p_aksiyon_b.log"),
+         (S + "/fragman2/kayit/p_aksiyon_c.avi", S + "/fragman2/kayit/p_aksiyon_c.log")]
 KIMLIK = ["ok_yagmuru", "ladder_arrows", "pole", "wall_duel", "tower_gunner", "cannon", "duel", "matchlock", "wounded",
           "giust_carry", "kizak_kayis", "sahi_hey", "fren_ipi", "dokum", "rowing", "fici", "havlu_ok2", "flight", "arena"]
 D = S + "/fragman_sayfa"
@@ -29,11 +30,15 @@ for AVI, LOG in KAYIT:
             if m.group(1) == "in": ins[k] = f
             elif k in ins and ids.get(k) in KIMLIK:
                 segs.append((KIMLIK.index(ids[k]), ins.pop(k), f, AVI))
-segs.sort()
+son = {}
+for item in segs:
+    son[item[0]] = item          # sonraki kayıt öncekinin yerini alır
+segs = sorted(son.values())
 yeni = []
 kartlar = []
 for n, a, b, AVI in segs:
-    ad = "s%02d_%s" % (n, KIMLIK[n])
+    harf = AVI.split("p_aksiyon_")[1][0]
+    ad = "s%02d_%s" % (n, KIMLIK[n]) + ("" if harf in "ab" else "_" + harf)
     mp4, jpg = "on/%s.mp4" % ad, "on/%s.jpg" % ad
     t0, dur = a / 30.0 + 0.034, (b - a) / 30.0 - 0.034
     if not os.path.exists(os.path.join(D, mp4)):

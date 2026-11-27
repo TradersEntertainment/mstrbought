@@ -281,3 +281,15 @@ Görsel (görsel programa, G/H/K ile birlikte):
   - `buro_reel` artık pencereyi bekliyor. Her replik ham kayıtta ölçüldü (`devir/gorev/ses_denet.py`; 27/27 sesli).
   - Not: STORY/STORY2'deki eski `buro_atisma` adımları hâlâ aynı açığa sahip (t 0,4'te `_fg_seq`).
 - Genel fragman: `set=story_aksiyon` (19 sınanmış oynanış çekimi). Ön kayıt sürüyor; sonra seçim, 1080p, kurgu (`battle_ottoman`).
+
+## N. Aksiyon cilası (27 Kasım, sahibinin fragman ön kaydı notları) — oyun deposu wip/ist2-birlesik b18c6834
+- Elde eşya: savaş bölümlerinde el boş (Items.EMPTY_HAND: 20, 20o, 26, 26o, 28o, 29, 29o, 30, 30o, 36b, 37o, arena);
+  top başında çanta eşyası cebe girer (CannonCrew); 2'de kumanda kalır (kırmızı düğme repliği).
+- Tüfekçiden kaçış: Player.dive (Boşluk + A/D, nişan sırasında), bot da kullanır; düelloda yok (UI_GUNNER_WARN_DUEL).
+- 30o merdiven: yan yatık omuzda (basamaklar dik), iki el alt dikmede (hold_both), bot surlara bakar.
+- 30 sur düellosu: rakip görünen açık yerde doğar (_duel_spot). 20 tüfek: mazgal açıklığı + tahta atış basamağı.
+- 30o kule tepesi düz beyaz kutular yalnız eski sette. 26 taşıyıcı: Person "geri_yuru" (gövde gidiş yönüyle çekişmez).
+- HUD.bark: beklerken sahne değişirse bırakır. HareketHis iniş yayı alt adımlı (büyük deltada NaN; kamera taşıyordu).
+- Fragman: telefon yalnız uygun çekimlerde; kişilerden ayrışma; tüfekçi kule tepesinde, tüfek nişanda; 30 düello çekimi.
+- Bilinen: 26 taşıma poternada kapı kanadının dibinden geçiyor (fragmandan çıkarıldı); ok yağmurunda askerlere çok yakın.
+- Yapılacak: tam paket → 0.99.131 (sürüm notu: aksiyon cilası). Genel fragman 1080p kayıtta.

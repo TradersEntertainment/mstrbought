@@ -1,11 +1,11 @@
 {
  "0": [
   "seçildi",
-  "Kalkan başın üstünde, ok demetiyle kalabalığın içinden gediğe koşu. Açılış için iyi."
+  "Yeni kayıt: kamera askerlerin içinden geçmiyor, oyundaki gibi itiliyor; yine de yanlarından çok yakın geçiyor."
  ],
  "1": [
-  "zayıf",
-  "Merdiven taşınıyor ama bu pencerede ok yağmuru görünmüyor; ordunun önünde düz yürüyüş gibi."
+  "bakılıyor",
+  "Yeni kayıt: surlara bakarak yürünüyor, iki el merdiveni kavrıyor. Merdiven göze çok yakın; basamaklar bu çözünürlükte seçilmiyor."
  ],
  "2": [
   "zayıf",
@@ -13,11 +13,11 @@
  ],
  "3": [
   "seçildi",
-  "Surda düello: tekme, karşılama, bitiriş. Düello göstergeleri ve tuş ipuçları ekranda."
+  "Yeni kayıt: surda düello, savaşta elde eşya yok."
  ],
  "4": [
-  "seçildi",
-  "Kuledeki tüfekçinin namlu ateşi, \"Yer değiştir ya da siper al!\", sonra yere serme."
+  "bakılıyor",
+  "Yeni kayıt: el boş, yeni uyarı \"Yana atıl (Boşluk + A/D)\", kule tepesinde beyaz kutular yok. Pencere merdivende açılıyor; son kayıtta kule tepesindeki nişana alınacak."
  ],
  "5": [
   "uzatılacak",
