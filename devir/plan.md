@@ -1,4 +1,37 @@
-# KUM HAVUZU — YAPAY ZEKÂLI ASKERLER VE DOĞAL DAVRANIŞ: YAPILACAKLAR (27 Kasım; sahibinin sorusu)
+# FRAGMAN PARÇASI: NAPOLYON–HİTLER ATIŞMASI (27 Kasım; sahibi: "hitler ve napolyon atışmasının fragmanını yapmış mıydın, buradan atsana")
+
+## Context
+- Sahne Bölüm 3'te, Zaman Bürosu bekleme salonunda geçiyor.
+- Replikler hazır ve seslendirilmiş (`assets/audio/voice/tr/`):
+  - Napolyon `BUR_FG_NAP_3`: "Rusya'ya kışın girilmez. Söyledim mi? Söyledim. Yazdım mı? Yazdım. Moskova'dan yürüyerek döndüm; ayaklarımla yazdım!"
+  - Hitler `BUR_FG_HIT_R`: "Ben... okumadım." Sırtında "REDDEDİLDİ. Lütfen beslemeyin." kâğıdı var.
+  - Napolyon `BUR_FG_NAP_4`: "Belli."
+- Bu atışma "Fragman 2"nin (hikâye fragmanı) bir çekimiydi: `tools/trailer/montage.gd` STORY klip 8 `buro_atisma2`, Hitler kesmesi (−6,6; −6,9), fov 40. Kayıt `docs/_ajan/fragman/liste.md`'de "EKSİK" diye kaldı.
+- Bitmiş bir video yok:
+  - Fragman 2'nin `fragman_tr.mp4` (56,8 sn) ve `fragman_tr_v2.mp4` dosyaları kap sıfırlanınca gitti;
+  - sitedeki `video/fragman.mp4` (100 sn) 0.99.105 dönemindendir.
+- Yani gönderilecek dosya önce kaydedilmeli.
+
+## Adımlar
+1. `docs/_ajan/fragman/kaydet.sh` kalıbıyla kayıt:
+   - komut: `SET=story2 TMO=1800 kaydet.sh buro_atisma2 1920x1080 only=8`;
+   - Godot `--write-movie`, 30 fps, xvfb; Türkçe ses ve altyazı;
+   - dizinler `$S/fragman2/kayit/` (yeniden oluşturulur).
+2. Kayıttan sonra:
+   - kareleri tam boy incele: Napolyon kadrajı, Hitler kesmesi, sırttaki kâğıt okunuyor mu;
+   - kötüyse konum/fov düzelt, yeniden kaydet.
+3. ffmpeg ile mp4:
+   - H.264 + AAC, ~12–15 sn;
+   - başta "Zaman Bürosu" üst yazısı (klipte var), sonda kısa siyah;
+   - ses seviyesi −14 LUFS civarı (Fragman 2 ölçüsü).
+4. `kareler/fragman/napolyon_hitler_buro.mp4` olarak kaydet, SendUserFile ile gönder. Mstrbought'a kaydet ve gönder.
+5. İstenirse İngilizce sürüm (aynı klip, dil EN): ayrı kayıt.
+
+## Doğrulama
+- mp4 oynuyor (ffprobe süre/ses akışı); üç replik tam duyuluyor.
+- Kareler tam boy bakıldı: kesik baş yok, kâğıt okunur, havada/iç içe yok.
+
+# (Eski) KUM HAVUZU — YAPAY ZEKÂLI ASKERLER VE DOĞAL DAVRANIŞ: YAPILACAKLAR (27 Kasım; sahibinin sorusu)
 
 ## Context
 - 0.99.130 yayında (CI #348 başarılı; guncelleme.json 0.99.130).

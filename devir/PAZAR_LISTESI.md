@@ -269,3 +269,15 @@ Görsel (görsel programa, G/H/K ile birlikte):
 - Ordugâh boş ("hiç asker kimse yok"), birimler kötü; çadırlar ve kapılar "aşırı kötü" → sahibi: "Blender MCP kullanırız";
   toplar vb. de Blender'da üretilecek. Not: bu, sanatçı + Blender hattının (I.1) ilk listesi: çadır (Osmanlı otağı ve asker
   çadırı), kapı (sur kapısı kanadı, çadır kapısı), top, pazar tezgâhı, asker birimleri.
+
+## M. Fragmanlar (27 Kasım)
+- Sahibi: "Napolyon–Hitler atışmasının fragmanını at", "Zaman Bürosu'ndaki bütün komik anlar", "genel fragman: en heyecanlı anlar".
+- Gönderildi:
+  - Napolyon–Hitler (11 sn);
+  - Zaman Bürosu derlemesi (1:55, 11 an).
+  - Araç: `tools/trailer/montage.gd` `set=story_buro` (`BURO_REEL`), kurgu `story_cut.py --music bureau.ogg`. Oyun deposu e24440c7.
+- Hata ve kökü: ilk gönderilen Napolyon–Hitler parçasında Napolyon'un Rusya repliği sessizdi.
+  - Replik pencere açılmadan başlıyordu; pencere açılırken "önceki sahnenin sesi" diye susturuluyordu.
+  - `buro_reel` artık pencereyi bekliyor. Her replik ham kayıtta ölçüldü (`devir/gorev/ses_denet.py`; 27/27 sesli).
+  - Not: STORY/STORY2'deki eski `buro_atisma` adımları hâlâ aynı açığa sahip (t 0,4'te `_fg_seq`).
+- Genel fragman: `set=story_aksiyon` (19 sınanmış oynanış çekimi). Ön kayıt sürüyor; sonra seçim, 1080p, kurgu (`battle_ottoman`).
