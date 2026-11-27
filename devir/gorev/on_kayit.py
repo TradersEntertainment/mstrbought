@@ -44,7 +44,7 @@ for n, a, b, AVI in segs:
             os.path.join(D, jpg)], check=True)
         yeni += [mp4, jpg]
     nt = NOT.get(str(n), ["bakılıyor", ""])
-    sinif = {"seçildi": "yeni", "zayıf": "eski", "bakılıyor": "bekle"}.get(nt[0], "bekle")
+    sinif = {"seçildi": "yeni", "zayıf": "eski", "bakılıyor": "bekle", "yedek": "bekle", "uzatılacak": "bekle"}.get(nt[0], "bekle")
     kartlar.append(f'''      <article class="dosya kucuk">
         <div class="cerceve"><video controls preload="none" playsinline poster="{jpg}" src="{mp4}"></video></div>
         <div class="bas"><h3>{ADLAR[n][0]}</h3><span class="etiket {sinif}">{nt[0]}</span></div>
