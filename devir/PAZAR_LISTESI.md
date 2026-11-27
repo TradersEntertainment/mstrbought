@@ -297,4 +297,5 @@ Görsel (görsel programa, G/H/K ile birlikte):
 - HUD.bark: beklerken sahne değişirse bırakır. HareketHis iniş yayı alt adımlı (büyük deltada NaN; kamera taşıyordu).
 - Fragman: telefon yalnız uygun çekimlerde; kişilerden ayrışma; tüfekçi kule tepesinde, tüfek nişanda; 30 düello çekimi.
 - Bilinen: 26 taşıma poternada kapı kanadının dibinden geçiyor (fragmandan çıkarıldı); ok yağmurunda askerlere çok yakın.
-- Yapılacak: tam paket → 0.99.131 (sürüm notu: aksiyon cilası). Genel fragman gönderildi (M).
+- 0.99.131 YAYINDA (27 Kasım ~16:50 UTC): tam paket 456/456, denetim 0, menü dönüşü 2/2. main 9ef13a48 (parent ea58ea74),
+  wip/0.99.131, birleşik f0a89112, site 8e7580a. CI release.yml koşuyor (bekçi bekle_yayin.sh 0.99.131).
