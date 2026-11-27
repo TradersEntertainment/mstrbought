@@ -280,7 +280,12 @@ Görsel (görsel programa, G/H/K ile birlikte):
   - Replik pencere açılmadan başlıyordu; pencere açılırken "önceki sahnenin sesi" diye susturuluyordu.
   - `buro_reel` artık pencereyi bekliyor. Her replik ham kayıtta ölçüldü (`devir/gorev/ses_denet.py`; 27/27 sesli).
   - Not: STORY/STORY2'deki eski `buro_atisma` adımları hâlâ aynı açığa sahip (t 0,4'te `_fg_seq`).
-- Genel fragman: `set=story_aksiyon` (19 sınanmış oynanış çekimi). Ön kayıt sürüyor; sonra seçim, 1080p, kurgu (`battle_ottoman`).
+- Genel fragman GÖNDERİLDİ (1:10, 1080p, 12 an, `battle_ottoman`, −15 LUFS); sayfada en üstte (artifact 7FFsSLc1heoRuRkVsZhikm v9, 720p).
+  - Kayıt: `SET=story_aksiyon kaydet.sh aksiyon_1080 1920x1080 only=0,3,4,5,10,11,12,15,16,17,18,19` (~99 dk) + tüfekçi yeniden çekimi
+    `only=4` (tg_1080, 7 dk). Kurgu: `devir/gorev/kurgu_genel.sh` (kesim noktaları içinde).
+  - Tüfekçi: fragmanda bot önce namluya bakar, ≤0,6 sn sonra atılır (Gunner._bot_dodge, yalnız flags.trailer; ac6790f2).
+  - Bilinen: düello HUD'unun iki satırlık tuş ipucu düello çekimlerinde görünüyor; top çekiminde TOP görev listesi sağda.
+    İstenirse story_aksiyon'da gizlenir ve 3 düello çekimi yeniden kaydedilir (~40 dk).
 
 ## N. Aksiyon cilası (27 Kasım, sahibinin fragman ön kaydı notları) — oyun deposu wip/ist2-birlesik b18c6834
 - Elde eşya: savaş bölümlerinde el boş (Items.EMPTY_HAND: 20, 20o, 26, 26o, 28o, 29, 29o, 30, 30o, 36b, 37o, arena);
@@ -292,4 +297,4 @@ Görsel (görsel programa, G/H/K ile birlikte):
 - HUD.bark: beklerken sahne değişirse bırakır. HareketHis iniş yayı alt adımlı (büyük deltada NaN; kamera taşıyordu).
 - Fragman: telefon yalnız uygun çekimlerde; kişilerden ayrışma; tüfekçi kule tepesinde, tüfek nişanda; 30 düello çekimi.
 - Bilinen: 26 taşıma poternada kapı kanadının dibinden geçiyor (fragmandan çıkarıldı); ok yağmurunda askerlere çok yakın.
-- Yapılacak: tam paket → 0.99.131 (sürüm notu: aksiyon cilası). Genel fragman 1080p kayıtta.
+- Yapılacak: tam paket → 0.99.131 (sürüm notu: aksiyon cilası). Genel fragman gönderildi (M).
